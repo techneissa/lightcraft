@@ -7,6 +7,7 @@ use lightcraft_develop::BrushStroke;
 use lightcraft_pipeline::Plan;
 use lightcraft_pipeline::finish::{MASK_TERMS, effect_terms_with};
 use lightcraft_pipeline::geometry::Frame;
+use lightcraft_pipeline::masks::grid::{PosGrid, Ramp};
 use lightcraft_pipeline::masks::{
     AlphaKeys, BRUSH_ENTRIES, Mattes, alpha_key, brush_base, brush_chain, brush_dabs, note_evaluation, note_filtered, note_stroke,
 };
@@ -210,6 +211,30 @@ fn guided_cross(cx: &mut Cx<'_>, guide: &Buf, p: &Buf, w: usize, h: usize, sigma
     q
 }
 
+/// How far the `shape` kernel's grid positions may be from the CPU's (long-edge units): a few `f32` roundings of
+/// values up to about 2.
+const GRID_F32: f64 = 5e-7;
+
+/// Finish a gradient's `shape` parameters `p` (kinds 0 and 1, filled up to their own): without a warp (`grid` `None`)
+/// its positions are the affine's; through one they come from the position grid, its points in `aux`. `false` when
+/// the grid's positions in `f32` are not close enough for `ramp` (a very sharp gradient): the CPU evaluates it.
+fn gradient(p: &mut Vec<u32>, aux: &mut Vec<f32>, grid: Option<&PosGrid>, ramp: &Ramp) -> bool {
+    // (P[18] says whether there is a grid; P[19..25] find a pixel's cell in it)
+    p.resize(18, 0);
+    let Some(g) = grid else {
+        p.extend([0; 7]);
+        return true;
+    };
+    if !g.fits(ramp, GRID_F32) {
+        return false;
+    }
+    let (pts, table) = g.gpu_table();
+    p.push(1);
+    p.extend(table);
+    *aux = pts;
+    true
+}
+
 /// Evaluate the masks (`lightcraft_pipeline::masks::evaluate`): their alpha planes (concatenated,
 /// followed by the blurred chromaticity when local Moiré / Noise need it) and their adjustment
 /// terms. Shapes without a kernel (Sky, Subject, …) run on the CPU.
@@ -270,11 +295,12 @@ pub(crate) fn masks(
             continue;
         }
         note_evaluation();
-        // its coordinates on the photo before the warp (`masks::evaluate_one`): through a lens or
-        // perspective warp the kernels' affine positions don't hold, so its shapes run on the CPU
+        // its coordinates on the photo before the warp (`masks::evaluate_one`): through a lens or perspective warp
+        // the gradients read their positions from the frame's position grid (`masks::grid`)
         let mframe = plan.frame.for_mask(m.on_photo);
         let frame = &*mframe;
-        let warped = frame.mask_warp().is_some();
+        let gradients = m.components.iter().any(|c| matches!(c.shape, MaskShape::Linear { .. } | MaskShape::Radial { .. }));
+        let grid = gradients.then(|| lightcraft_pipeline::masks::grid::pos_grid(frame, w, h)).flatten();
         let mut first = true;
         for comp in &m.components {
             // Invert Mask turns the base part around (see `lightcraft_pipeline::masks::evaluate_one`)
@@ -292,19 +318,18 @@ pub(crate) fn masks(
             let mut aux: Vec<f32> = Vec::new();
             let mut own: Option<Buf> = None;
             let kind = match &comp.shape {
-                MaskShape::Linear { .. } | MaskShape::Radial { .. } if warped => None,
                 MaskShape::Linear { start, end } => {
                     let (a, b) = (frame.norm_to_long(*start), frame.norm_to_long(*end));
                     let d = b - a;
                     p.extend(f32s(&[a.x, a.y, d.x, d.y, d.dot(d).max(1e-12)]));
-                    Some(0)
+                    gradient(&mut p, &mut aux, grid.as_deref(), &Ramp::linear(a, d)).then_some(0)
                 }
                 MaskShape::Radial { center, rx, ry, angle, feather, invert } => {
                     let c = frame.norm_to_long(*center);
                     let (sn, co) = (-angle.to_radians()).sin_cos();
                     p.extend(f32s(&[c.x, c.y, co, sn, rx.max(1e-6), ry.max(1e-6), (*feather / 100.0).clamp(0.0, 1.0)]));
                     p.push(*invert as u32);
-                    Some(1)
+                    gradient(&mut p, &mut aux, grid.as_deref(), &Ramp::radial(c, *rx, *ry, *angle, *feather / 100.0)).then_some(1)
                 }
                 MaskShape::LuminanceRange { lo, hi, lo_feather, hi_feather } => {
                     p.extend(f32s(&[*lo, *hi, lo_feather.max(1e-3), hi_feather.max(1e-3)]));
@@ -353,6 +378,16 @@ pub(crate) fn masks(
                         ev,
                         plan.mattes.as_deref(),
                     );
+                    if inverted {
+                        v.data.iter_mut().for_each(|x| *x = 1.0 - *x);
+                    }
+                    Some(cx.gpu.upload(&v.data))
+                }
+                None if matches!(comp.shape, MaskShape::Linear { .. } | MaskShape::Radial { .. }) => {
+                    // a gradient too sharp for the grid's positions in `f32` (`gradient`): on the CPU, which reads no
+                    // pixel of the image for it
+                    let (img, l) = (Rgb32f::new(0, 0), lightcraft_raster::Plane::new(0, 0));
+                    let mut v = lightcraft_pipeline::masks::shape_alpha(&comp.shape, frame, w, h, &img, &l, ev, plan.mattes.as_deref());
                     if inverted {
                         v.data.iter_mut().for_each(|x| *x = 1.0 - *x);
                     }

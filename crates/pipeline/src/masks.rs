@@ -16,6 +16,7 @@ use crate::geometry::Frame;
 
 mod alpha;
 mod brush;
+pub mod grid;
 mod key;
 mod people;
 mod planes;
@@ -313,14 +314,19 @@ pub fn evaluate_alpha_guided(
     MaskAlpha::from_plane(alpha)
 }
 
-/// Per-pixel positions in long-edge units for output pixel centres.
-fn for_each_pos(frame: &Frame, w: usize, h: usize, out: &mut Plane, f: impl Fn(Point, usize) -> f32 + Sync + Send) {
+/// `f` of each output pixel centre's mask position in long-edge units, for a gradient following `ramp`. Through a
+/// warp the positions come from the frame's [`grid::PosGrid`], close enough that its alpha moves by at most
+/// [`grid::ALPHA_TOL`].
+fn for_each_pos(frame: &Frame, w: usize, h: usize, out: &mut Plane, ramp: &grid::Ramp, f: impl Fn(Point) -> f32 + Sync + Send) {
+    if let Some(g) = grid::pos_grid(frame, w, h) {
+        return g.fill(out, ramp, f);
+    }
     let m = frame.out_to_mask(w, h);
     let (ow, oh, l) = (frame.ow, frame.oh, frame.ow.max(frame.oh));
     for_rows(&mut out.data, w, |y, row| {
         for (x, v) in row.iter_mut().enumerate() {
             let n = m.apply(Point::new(x as f64 + 0.5, y as f64 + 0.5));
-            *v = f(Point::new(n.x * ow / l, n.y * oh / l), y * w + x);
+            *v = f(Point::new(n.x * ow / l, n.y * oh / l));
         }
     });
 }
@@ -375,7 +381,7 @@ fn shape_alpha_in(
             let (a, b) = (to_long(*start), to_long(*end));
             let d = b - a;
             let len2 = d.dot(d).max(1e-12);
-            for_each_pos(frame, w, h, &mut out, |p, _| {
+            for_each_pos(frame, w, h, &mut out, &grid::Ramp::linear(a, d), |p| {
                 let t = ((p - a).dot(d) / len2) as f32;
                 1.0 - smooth(0.0, 1.0, t)
             });
@@ -386,7 +392,7 @@ fn shape_alpha_in(
             let f = (*feather / 100.0).clamp(0.0, 1.0) as f32;
             let (rx, ry) = (rx.max(1e-6), ry.max(1e-6));
             let inv = *invert;
-            for_each_pos(frame, w, h, &mut out, |p, _| {
+            for_each_pos(frame, w, h, &mut out, &grid::Ramp::radial(c, rx, ry, *angle, *feather / 100.0), |p| {
                 let d = p - c;
                 let (x, y) = (d.x * co - d.y * s, d.x * s + d.y * co);
                 let r = ((x / rx).powi(2) + (y / ry).powi(2)).sqrt() as f32;
@@ -994,6 +1000,8 @@ fn guided_cross_fast(guide: &Plane, p: &mut Plane, sigma: f32, eps: f32, weight:
 mod tests;
 #[cfg(test)]
 mod tests_cache;
+#[cfg(test)]
+mod tests_grid;
 #[cfg(test)]
 mod tests_matting;
 #[cfg(test)]
