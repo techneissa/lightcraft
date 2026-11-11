@@ -3781,5 +3781,6 @@
   "Loading background picture": "Chargement de l’image d’arrière-plan",
   "Reading depth map": "Lecture de la carte de profondeur",
   "Preparing the full-size view": "Préparation de la vue en taille réelle",
-  "Reading the full-size photo": "Lecture de la photo en pleine taille"
+  "Reading the full-size photo": "Lecture de la photo en pleine taille",
+  "Preparing photos in the background": "Préparation des photos en arrière-plan"
 }

@@ -173,7 +173,7 @@ fn start(app: &mut LightcraftApp, job: FullDecodeJob) {
         }
     };
     // (no ✕ and nothing to ask about when quitting: the app stops it itself, see `frame`)
-    match crate::tasks::spawn(app, LABEL, Some("decode"), move || job.run(&worker), done) {
+    match crate::tasks::spawn_background(app, LABEL, "decode", move || job.run(&worker), done) {
         Ok(()) => {
             app.full_decode.running = Some(Run { photo, state });
             app.full_decode.started += 1;

@@ -239,7 +239,7 @@ fn start(s: &mut Session, list: Vec<(PhotoId, String)>, pace: Pace) -> std::resu
             }
         })
         .map_err(|e| format!("could not start reading focus points: {e}"))?;
-    let guard = s.activity.start("focus", "Reading focus points", Cancel::Flag(cancel.clone()));
+    let guard = s.activity.start_background("focus", "Reading focus points", Cancel::Flag(cancel.clone()));
     guard.progress(0, total);
     let now = Instant::now();
     s.focus_scan.job = Some(Job {

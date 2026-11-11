@@ -626,7 +626,7 @@ mod imp {
             return 0;
         }
         s.faces.peak = s.faces.peak.max(pending);
-        let task = s.faces.task.get_or_insert_with(|| s.activity.start("faces", "Finding faces", crate::activity::Cancel::No));
+        let task = s.faces.task.get_or_insert_with(|| s.activity.start_background("faces", "Finding faces", crate::activity::Cancel::No));
         task.progress(s.faces.peak.saturating_sub(pending), s.faces.peak);
         s.faces.peak
     }

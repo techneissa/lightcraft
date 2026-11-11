@@ -2520,5 +2520,6 @@
   "Loading background picture": "Wczytywanie obrazu tła",
   "Reading depth map": "Odczyt mapy głębi",
   "Preparing the full-size view": "Przygotowywanie widoku w pełnym rozmiarze",
-  "Reading the full-size photo": "Wczytywanie zdjęcia w pełnym rozmiarze"
+  "Reading the full-size photo": "Wczytywanie zdjęcia w pełnym rozmiarze",
+  "Preparing photos in the background": "Przygotowywanie zdjęć w tle"
 }

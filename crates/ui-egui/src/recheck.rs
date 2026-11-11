@@ -40,7 +40,7 @@ pub fn tick(app: &mut LightcraftApp) {
             Err(e) => log::warn!("recheck of preview-only raws: {e}"),
         }
     };
-    if let Err(e) = crate::tasks::spawn(app, LABEL, Some("recheck"), work, done) {
+    if let Err(e) = crate::tasks::spawn_background(app, LABEL, "recheck", work, done) {
         log::warn!("{e}");
     }
 }

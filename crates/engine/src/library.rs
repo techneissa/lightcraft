@@ -483,7 +483,7 @@ impl Session {
                 return;
             }
             let stop = std::sync::Arc::new(AtomicBool::new(false));
-            let task = self.activity.start("cache", "Tidying the thumbnail cache", crate::activity::Cancel::Flag(stop.clone()));
+            let task = self.activity.start_background("cache", "Tidying the thumbnail cache", crate::activity::Cancel::Flag(stop.clone()));
             let spawned = std::thread::Builder::new().name("lc-thumbs-tidy".into()).spawn(move || {
                 // the row stays while this runs (it is dropped with the closure, however that ends)
                 let _row = task;

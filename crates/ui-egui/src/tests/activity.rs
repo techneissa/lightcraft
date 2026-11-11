@@ -113,6 +113,7 @@ fn count_text_by_unit() {
         parent: None,
         batch: false,
         failed: 0,
+        background: false,
         eta_ms: None,
     };
     assert_eq!(count_text(&t), "3 of 25");
@@ -643,4 +644,26 @@ fn immediate_library_commands_and_auto_sync_show_completion() {
     h.app.ui.toast = None;
     assert!(h.app.run("library.compact", json!({})).is_err());
     assert!(h.app.ui.toast.is_none());
+}
+
+/// Issue #198: work the app starts by itself to prepare photos is a ring in the top bar, not a row in the stack, and
+/// the ring is gone when it ends; a task a person started keeps its row.
+#[test]
+fn background_work_shows_as_the_ring_and_takes_no_row() {
+    let mut h = demo();
+    let prep = h.app.session.activity.start_background("previews", "Preparing photos in the background", Cancel::Yes);
+    prep.progress(24, 60);
+    let export = h.app.session.activity.start("export", "Exporting", Cancel::Yes);
+    wait_visible(&mut h);
+    assert!(has(&h, "icon:activityRing"), "the ring shows");
+    assert!(!has(&h, &format!("activity:row:{}", prep.id())), "no row for background work");
+    assert!(has(&h, &format!("activity:row:{}", export.id())), "a task a person started keeps its row");
+    let inspect = h.request("ui.inspect", json!({}), T);
+    let tasks = inspect["result"]["activity"].as_array().expect("activity");
+    assert_eq!(tasks.len(), 2, "ui.inspect reports every task");
+    assert_eq!(tasks.iter().filter(|t| t["background"] == true).count(), 1);
+    drop((prep, export));
+    h.step();
+    h.step();
+    assert!(!has(&h, "icon:activityRing"), "no ring once nothing runs");
 }

@@ -55,6 +55,20 @@ pub fn spawn<T: Send + 'static>(
     start(app, label, guard, work, done)
 }
 
+/// [`spawn`] for work the app starts by itself to get photos ready (reading a photo's original ahead, checking raw
+/// files when a library opens): its row is background (`Activity::start_background`), so it shows in the top bar's
+/// ring and not in the activity stack.
+pub fn spawn_background<T: Send + 'static>(
+    app: &mut LightcraftApp,
+    label: &str,
+    kind: &'static str,
+    work: impl FnOnce() -> T + Send + 'static,
+    done: impl FnOnce(&mut LightcraftApp, &egui::Context, T) + Send + 'static,
+) -> Result<(), String> {
+    let guard = app.session.activity.start_background(kind, label, lightcraft_engine::activity::Cancel::No);
+    start(app, label, Some(guard), work, done)
+}
+
 /// [`spawn`] for a task with progress that can stop: its row (`kind`, `label`) adopts `cancel`,
 /// the flag `work` checks, so the row's ✕ and `activity.cancel` stop it; `work` reports progress
 /// through the handle it is given.

@@ -1,4 +1,5 @@
-//! The activity stack (issue #345): every long-running task in one place, floating in the top-left corner under the
+//! The activity stack (issue #345): every long-running task a person started in one place (the work the app starts
+//! by itself to prepare photos is the ring in the top bar instead, `activity_ring`), floating in the top-left corner under the
 //! top bar while something runs — a row each with its name, a progress bar, what it is working on, and ✕ for the ones
 //! that can be cancelled. The tasks come from the engine's registry ([`lightcraft_engine::activity`]); ✕ runs
 //! `activity.cancel` like any other frontend would.
@@ -103,7 +104,8 @@ fn detail_line(t: &TaskInfo) -> String {
 /// Draw the stack (called every frame, after the panels and dialogs).
 pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
     announce_finished(app, ctx);
-    let all = app.session.activity.list();
+    // (background work shows as the ring in the top bar, `activity_ring`)
+    let all: Vec<TaskInfo> = app.session.activity.list().into_iter().filter(|t| !t.background).collect();
     if all.is_empty() {
         app.activity_expanded = false;
         app.activity_open.clear();

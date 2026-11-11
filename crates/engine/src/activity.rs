@@ -132,6 +132,9 @@ pub struct TaskInfo {
     pub batch: bool,
     /// Items that failed so far (counted in `done` too).
     pub failed: u64,
+    /// The app started this by itself to get photos ready ([`Activity::start_background`]): the desktop app shows
+    /// it as the ring in the top bar rather than as a row in the activity stack.
+    pub background: bool,
     /// Time left (ms), estimated from the measured time per item; none until an item is done, or while the total
     /// isn't known.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -157,6 +160,7 @@ struct Entry {
     gate: Mutex<()>,
     parent: Option<u64>,
     batch: bool,
+    background: bool,
     failed: AtomicU64,
     reasons: Mutex<Vec<String>>,
     /// When the first item was done, and how many were done then: the time per item is measured from there,
@@ -287,6 +291,7 @@ impl Entry {
             parent: self.parent,
             batch: self.batch,
             failed: self.failed.load(Ordering::Relaxed),
+            background: self.background,
             eta_ms: if self.batch && unit == Unit::Count { self.eta_ms(done, total) } else { None },
         }
     }
@@ -296,23 +301,30 @@ impl Activity {
     /// Register a task; it is listed until the returned guard is dropped. `label` is English (the frontend
     /// translates it).
     pub fn start(&self, kind: &'static str, label: &str, cancel: Cancel) -> TaskGuard {
-        self.register(kind, label, cancel, None, false)
+        self.register(kind, label, cancel, None, false, false)
+    }
+
+    /// Register a task the app starts by itself to get photos ready (previews, faces, the full-size view…), not one a
+    /// person asked for. It is listed like any other (`activity.list` marks it `background`), but the desktop app
+    /// shows it as the ring in the top bar and not as a row in the activity stack.
+    pub fn start_background(&self, kind: &'static str, label: &str, cancel: Cancel) -> TaskGuard {
+        self.register(kind, label, cancel, None, false, true)
     }
 
     /// Register a batch: one row for a job over many photos, counting them ([`TaskGuard::item_done`],
     /// [`TaskGuard::item_failed`]) with the time left, and leaving a [`BatchSummary`] when it ends.
     pub fn start_batch(&self, kind: &'static str, label: &str, cancel: Cancel) -> TaskGuard {
-        self.register(kind, label, cancel, None, true)
+        self.register(kind, label, cancel, None, true, false)
     }
 
-    /// Register a row under row `parent` (one photo of a batch). A `parent` that has ended meanwhile makes it a row
-    /// of its own.
+    /// Register a row under row `parent` (one photo of a batch), background when its parent is. A `parent` that has
+    /// ended meanwhile makes it a row of its own.
     pub fn start_child(&self, parent: u64, kind: &'static str, label: &str, cancel: Cancel) -> TaskGuard {
-        let parent = lock(&self.inner.tasks).iter().any(|e| e.id == parent).then_some(parent);
-        self.register(kind, label, cancel, parent, false)
+        let found = lock(&self.inner.tasks).iter().find(|e| e.id == parent).map(|e| e.background);
+        self.register(kind, label, cancel, found.map(|_| parent), false, found.unwrap_or(false))
     }
 
-    fn register(&self, kind: &'static str, label: &str, cancel: Cancel, parent: Option<u64>, batch: bool) -> TaskGuard {
+    fn register(&self, kind: &'static str, label: &str, cancel: Cancel, parent: Option<u64>, batch: bool, background: bool) -> TaskGuard {
         let id = self.inner.next.fetch_add(1, Ordering::Relaxed).saturating_add(1);
         let cancel = match cancel {
             Cancel::No => None,
@@ -333,6 +345,7 @@ impl Activity {
             gate: Mutex::new(()),
             parent,
             batch,
+            background,
             failed: AtomicU64::new(0),
             reasons: Mutex::new(Vec::new()),
             first: Mutex::new(None),
@@ -441,7 +454,7 @@ impl TaskGuard {
             Some(flag) => Cancel::Flag(flag.clone()),
             None => Cancel::No,
         };
-        self.activity.register(kind, label, cancel, Some(self.entry.id), false)
+        self.activity.register(kind, label, cancel, Some(self.entry.id), false, self.entry.background)
     }
 
     /// For progress from another thread; it does not keep the row.
@@ -705,6 +718,19 @@ mod tests {
         }
         assert_eq!(a.finished().len(), MAX_FINISHED);
         assert_eq!(a.finished()[0].reasons[0].chars().count(), MAX_TEXT);
+    }
+
+    #[test]
+    fn a_background_task_is_flagged_and_a_task_a_person_started_is_not() {
+        let a = Activity::default();
+        let _prep = a.start_background("previews", "Preparing photos in the background", Cancel::Yes);
+        let _export = a.start("export", "Exporting", Cancel::Yes);
+        let flags: Vec<(&str, bool)> = a.list().iter().map(|t| (t.kind, t.background)).collect();
+        assert_eq!(flags, vec![("previews", true), ("export", false)]);
+        // a photo of a background batch is background too
+        let parent = a.list()[0].id;
+        let _kid = a.start_child(parent, "previews", "Preparing photos in the background", Cancel::No);
+        assert!(a.list()[2].background && a.list()[2].parent == Some(parent));
     }
 
     #[test]
