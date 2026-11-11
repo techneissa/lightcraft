@@ -8,7 +8,9 @@ API: `available()`, `compile(package, dest)` (an `.mlpackage` to a compiled `.ml
 compiled, units)` (compiles when the copy is missing or was made from another package, keyed by its `Manifest.json`
 in `<compiled>.key`, and again once when a cached copy fails to load),
 `Model::load(compiled, ComputeUnits)`, `Model::predict(input, shape, data, output)` on `f32` tensors. Every failure
-is an `Error`, never a panic.
+is an `Error`, never a panic. `Model::load_function` and `load_package_function` load one function of a model with
+several (`MLModelConfiguration.functionName`, macOS 15 or later: `setFunctionName:` is checked with
+`respondsToSelector:` first, and its absence is a load error); the functions of one package share its weights.
 
 **Objective-C exceptions are not caught.** Catching them needs `objc2`'s `exception` feature, which compiles an
 Objective-C helper with `cc`, and LightCraft is pure Rust (CLAUDE.md). Core ML is never given a reason to throw:

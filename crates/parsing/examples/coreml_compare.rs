@@ -85,7 +85,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let hints = yunet(&img).unwrap_or_default();
     println!("{}: {}×{}, {} faces (YuNet)", input, img.width, img.height, hints.len());
 
-    let all = |r: Runtime| Runtimes { face: r, body: r, mesh: r };
+    let all = Runtimes::all;
     let (a, ..) = timed(&models, all(Runtime::Candle), &img, &hints)?;
     timed(&models, Runtimes { mesh: Runtime::Candle, ..all(Runtime::CoreMl) }, &img, &hints)?;
     let (b, ..) = timed(&models, all(Runtime::CoreMl), &img, &hints)?;

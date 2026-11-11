@@ -356,3 +356,31 @@ fn a_runtime_change_does_not_wait_for_a_set_that_is_loading() {
     assert!(matches!(run.join().unwrap(), Outcome::Failed(_)));
     assert!(!p.set_runtime("not-a-parser", crate::model_runtime::Runtime::Candle));
 }
+
+/// A Sapiens2 parse is filed under the engine that made it, and a wide photo's under the smaller whole-photo pass Core
+/// ML gives it (#216): neither engine's parse is served for the other. Candle's key is the one parses had before.
+#[test]
+fn a_sapiens2_parse_on_core_ml_is_filed_apart_from_candles() {
+    use crate::model_runtime::Runtime;
+    let (p, _dir, _) = parsing("parts-engine-key");
+    p.set_runner(Some(fake_runner()));
+    p.set_model_set(ModelSet::Sapiens2).unwrap();
+    let wide = RgbImage::new(400, 100, vec![90; 400 * 100 * 3]).unwrap();
+    let filed = |img: &RgbImage| p.parse_as(p.choice(), img.clone(), Vec::new(), true).0;
+    let folder = lightcraft_parsing::models::BODY_SAPIENS2.folder;
+    assert!(p.set_runtime(folder, Runtime::Candle));
+    let candle = (filed(&picture(3)), filed(&wide));
+    assert_eq!(candle.0.version, ModelSet::Sapiens2.version());
+    assert_eq!(candle.0.key, cache::key(&picture(3), &[], &ModelSet::Sapiens2.version()));
+    assert!(p.set_runtime(folder, Runtime::CoreMl));
+    let coreml = (filed(&picture(3)), filed(&wide));
+    assert_eq!(coreml.0.version, format!("{}+coreml", ModelSet::Sapiens2.version()));
+    assert_ne!(coreml.0.key, candle.0.key);
+    // the wide photo's whole-photo pass is made smaller on Core ML: its key says so, a 3:2 photo's does not
+    assert_eq!(coreml.1.key, cache::key(&wide, &[], &format!("{}-fit", coreml.1.version)));
+    assert_eq!(coreml.0.key, cache::key(&picture(3), &[], &coreml.0.version));
+    assert_ne!(coreml.1.key, candle.1.key);
+    // the other sets have no Sapiens2: their version stays
+    p.set_model_set(ModelSet::Segformer).unwrap();
+    assert_eq!(filed(&picture(3)).version, ModelSet::Segformer.version());
+}

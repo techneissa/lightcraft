@@ -11,11 +11,15 @@ pub(crate) fn available() -> bool {
     false
 }
 
+pub(crate) fn functions_available() -> bool {
+    false
+}
+
 pub(crate) fn compile(_package: &Path) -> Result<PathBuf> {
     Err(Error::Unavailable)
 }
 
-pub(crate) fn load(_compiled: &Path, _units: ComputeUnits) -> Result<(Handle, Vec<String>, Vec<String>)> {
+pub(crate) fn load(_compiled: &Path, _units: ComputeUnits, _function: Option<&str>) -> Result<(Handle, Vec<String>, Vec<String>)> {
     Err(Error::Unavailable)
 }
 

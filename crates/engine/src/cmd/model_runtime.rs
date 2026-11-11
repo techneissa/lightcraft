@@ -169,10 +169,20 @@ mod tests {
         assert_eq!(listed["models"][2]["model"], "human-parsing-segformer-b3");
         assert_eq!(listed["models"][2]["coremlInstalled"], false);
         assert_eq!(listed["models"][3]["model"], "facemesh-v2");
+        assert_eq!(listed["models"][4]["model"], "human-parsing-segformer-b2");
+        assert_eq!(listed["models"][5]["model"], "body-parsing-sapiens2-0.4b");
         s.execute("models.runtime", &json!({"model": "human-parsing-segformer-b3", "runtime": "candle"})).unwrap();
         s.execute("models.runtime", &json!({"model": "face-parsing-segformer-b0", "runtime": "coreml"})).unwrap();
         s.execute("models.runtime", &json!({"model": "facemesh-v2", "runtime": "candle"})).unwrap();
-        assert_eq!(s.parsing.runtimes(), lightcraft_parsing::Runtimes { face: Runtime::CoreMl, body: Runtime::Candle, mesh: Runtime::Candle });
+        s.execute("models.runtime", &json!({"model": "body-parsing-sapiens2-0.4b", "runtime": "candle"})).unwrap();
+        let want = lightcraft_parsing::Runtimes {
+            face: Runtime::CoreMl,
+            body: Runtime::Candle,
+            mesh: Runtime::Candle,
+            parts: Runtime::Candle,
+            ..lightcraft_parsing::Runtimes::default()
+        };
+        assert_eq!(s.parsing.runtimes(), want);
         assert_eq!(s.learn.runtime(), Runtime::Candle);
         reopened.open(Some(file.clone()));
         assert_eq!(reopened.get("human-parsing-segformer-b3"), Runtime::Candle);

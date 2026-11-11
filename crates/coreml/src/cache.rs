@@ -81,23 +81,33 @@ fn compile_keyed(package: &Path, compiled: &Path, key: &str) -> Result<()> {
 /// another package, and compiled again once when a cached copy fails to load. Without the package, the compiled copy
 /// alone is loaded.
 pub fn load_package(package: &Path, compiled: &Path, units: ComputeUnits) -> Result<Model> {
+    load_package_function(package, compiled, units, None)
+}
+
+/// [`load_package`] for `function` of a model with several ([`Model::load_function`]).
+pub fn load_package_function(package: &Path, compiled: &Path, units: ComputeUnits, function: Option<&str>) -> Result<Model> {
     if !crate::available() {
         return Err(Error::Unavailable);
     }
+    // before any compiling: on macOS 14 the load would fail after it, and the next launch would compile again
+    if function.is_some() && !crate::functions_available() {
+        return Err(Error::Load("this macOS can't load one function of a model (macOS 15 or later)".into()));
+    }
+    let load = || Model::load_function(compiled, units, function);
     if !package.exists() {
-        return if compiled.is_dir() { Model::load(compiled, units) } else { Err(Error::Missing(package.to_path_buf())) };
+        return if compiled.is_dir() { load() } else { Err(Error::Missing(package.to_path_buf())) };
     }
     let key = package_key(package)?;
     let cached = compiled.is_dir() && std::fs::read_to_string(key_path(compiled)).is_ok_and(|k| k == key);
     if !cached {
         compile_keyed(package, compiled, &key)?;
-        return Model::load(compiled, units);
+        return load();
     }
-    match Model::load(compiled, units) {
+    match load() {
         Err(Error::Load(why)) => {
             log::warn!("coreml: the compiled copy of {} does not load ({why}); compiling it again", package.display());
             compile_keyed(package, compiled, &key)?;
-            Model::load(compiled, units)
+            load()
         }
         other => other,
     }

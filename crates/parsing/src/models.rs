@@ -105,7 +105,7 @@ pub const BODY_SEGFORMER_B2: ModelFile = ModelFile {
     size: 109_493_236,
     sha256: "8f86fd90c567afd4370b3cc3a7e81ed767a632b2832a738331af660acc0c4c68",
     url: "https://huggingface.co/mattmdjaga/segformer_b2_clothes/resolve/584abc1e1d260e23c0fc627c5217a09b2b461046/model.safetensors",
-    licence: "MIT per the model card (fine-tuned from NVIDIA MiT-b2, NVIDIA Source Code Licence: non-commercial)",
+    licence: "other per the model card: the NVIDIA Source Code Licence for SegFormer (non-commercial; fine-tuned from NVIDIA MiT-b2)",
 };
 
 pub const FACE_MESH: ModelFile = ModelFile {
