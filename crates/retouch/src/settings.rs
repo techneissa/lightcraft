@@ -27,7 +27,7 @@ pub struct FeatureInfo {
     pub reach: f64,
     /// The masks a Refine Add stroke widens ([`Feature::ADD_PARTS`]); empty: the panel offers no Add.
     pub add_parts: &'static [crate::Part],
-    /// Where it works on some faces ([`Feature::area`]): the map the Portrait tab's ⌥-drag shows.
+    /// Where it can work on some faces ([`Feature::area`]).
     pub area: for<'a> fn(&crate::Scene<'a>, &[usize]) -> Option<lightcraft_raster::Plane>,
 }
 

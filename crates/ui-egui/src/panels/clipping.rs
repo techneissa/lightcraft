@@ -93,21 +93,22 @@ pub fn alt_overlay(app: &crate::LightcraftApp) -> Option<lightcraft_pipeline::Ov
     match app.ui.right {
         RightPanel::Edit => Overlay::for_control(control),
         RightPanel::Masking => mask_slider_overlay(control),
-        // a Portrait slider (`retouch.*`) shows its feature's area; dragging the histogram on this tab moves a Light
+        // a Portrait slider (`retouch.*`) shows what it changes; dragging the histogram on this tab moves a Light
         // control (`light.*`), which keeps the clipping and greyscale views it has on the Edit tab
-        RightPanel::Portrait => retouch_area_overlay(control, app.ui.dragging_face).or_else(|| Overlay::for_control(control)),
+        RightPanel::Portrait => retouch_effect_overlay(control, app.ui.dragging_face).or_else(|| Overlay::for_control(control)),
         _ => None,
     }
 }
 
-/// The map of where the feature of Portrait control `id` (`retouch.<feature>.<field>`) works, on face `face` (`None`:
-/// every face).
-fn retouch_area_overlay(id: &str, face: Option<usize>) -> Option<lightcraft_pipeline::Overlay> {
+/// The map of what Portrait control `id` (`retouch.<feature>.<field>`) changes, on face `face` (`None`: the settings
+/// for every face).
+fn retouch_effect_overlay(id: &str, face: Option<usize>) -> Option<lightcraft_pipeline::Overlay> {
     use lightcraft_pipeline::Overlay;
     let key = lightcraft_develop::retouch::feature_of(id)?.key;
     let feature = lightcraft_develop::retouch::FEATURES.iter().position(|f| f.key == key)?;
+    let control = (lightcraft_develop::retouch::FEATURES.get(feature)?.specs)().iter().position(|s| s.id == id)?;
     let face = face.map_or(Overlay::ALL_FACES, |i| i.min(usize::from(Overlay::ALL_FACES) - 1) as u8);
-    Some(Overlay::RetouchArea { feature: u8::try_from(feature).ok()?, face })
+    Some(Overlay::RetouchEffect { feature: u8::try_from(feature).ok()?, control: u8::try_from(control).ok()?, face })
 }
 
 /// The preview a mask's slider (bare id) asks for.

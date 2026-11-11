@@ -55,6 +55,7 @@ pub mod recolor;
 pub mod redeye;
 pub mod reshape_step;
 pub mod residual_look;
+pub mod retouch_effect;
 pub mod retouch_step;
 // fork: `fork/perf-portrait-draft.md`
 pub mod kept_budget;
@@ -1139,8 +1140,14 @@ fn render_impl(
         .filter(|(k, _)| retouch_step::active(s) && *k == plan.pre_retouch_key)
         .and_then(|(k, kept)| kept.get().map(|img| (k, kept, img)));
     let mut pre_retouch = None;
+    // (a Portrait slider's ⌥-drag map retouches the image before the step again, `retouch_effect`)
+    let wants_pre = matches!(req.overlay, Overlay::RetouchEffect { .. });
+    let mut overlay_pre: Option<Arc<Rgb32f>> = None;
     let lin = match cached.as_ref().and_then(|e| e.lin.clone()).filter(|(k, _)| *k == lin_key) {
         Some((_, img)) => {
+            if wants_pre {
+                overlay_pre = kept_pre_retouch.as_ref().map(|(_, _, img)| img.clone());
+            }
             pre_retouch = kept_pre_retouch.map(|(k, kept, _)| (k, kept));
             img
         }
@@ -1169,6 +1176,9 @@ fn render_impl(
                         (plan.pre_retouch_key, kept_budget::Kept::new(Arc::new(img.clone()), &[(&kept_budget::HOST, bytes)]))
                     }
                 });
+            }
+            if wants_pre {
+                overlay_pre = Some(Arc::new(img.clone()));
             }
             retouch_step::apply(&mut img, info, &plan);
             if colour_noise.is_none() {
@@ -1267,7 +1277,7 @@ fn render_impl(
     };
     lap("histogram", &mut t);
     let mut image = image;
-    let mask = overlay_alpha(req.overlay, &plan, &prep, info);
+    let mask = overlay_alpha(req.overlay, &plan, &prep, info, (src_img, overlay_pre.as_deref()));
     let masks = overlay_alphas_all(req.overlay, &plan, &prep);
     visualize::apply(&mut image, req.overlay, &plan, mask.as_ref(), masks.as_deref());
     let mut image = if plan.keep.is_some() { cut(&image) } else { image };
@@ -1314,11 +1324,12 @@ pub fn color_range_sample(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, 
     Some(acc.map(|v| v / n))
 }
 
-/// The plane an overlay shows: a sharpening view's detail plane, or the alpha of a mask overlay
-/// (the one the render evaluated, or for a hidden mask a fresh evaluation).
-fn overlay_alpha(o: Overlay, plan: &Plan<'_>, prep: &Prepared, info: &SourceInfo) -> Option<Plane> {
-    if let Overlay::RetouchArea { feature, face } = o {
-        return retouch_step::area(info, plan, feature, face);
+/// The plane an overlay shows: a sharpening view's detail plane, the alpha of a mask overlay
+/// (the one the render evaluated, or for a hidden mask a fresh evaluation), or what a Portrait slider changes (from the
+/// source and the image before the retouch step, `pre`, when the render has it).
+fn overlay_alpha(o: Overlay, plan: &Plan<'_>, prep: &Prepared, info: &SourceInfo, (src, pre): (&Rgb32f, Option<&Rgb32f>)) -> Option<Plane> {
+    if let Overlay::RetouchEffect { feature, control, face } = o {
+        return retouch_effect::effect(src, pre, info, plan, feature, control, face);
     }
     if o.reads_detail() {
         let v3 = plan.settings.process >= lightcraft_develop::Process::V3.version();

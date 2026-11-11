@@ -83,11 +83,11 @@ pub trait Feature: Clone + Default + PartialEq + Debug + Serialize + Deserialize
     /// feature needs is left alone.
     fn apply(&self, img: &mut Rgb32f, scene: &Scene<'_>, face: Option<usize>);
 
-    /// Where the feature works on `faces` (places in [`Scene::faces`]), as a map over the scene's image: 1 where it
-    /// works fully, 0 where not. The Portrait tab shows it while a slider is dragged with ⌥ held (the grey / white
-    /// map of Lightroom's Masking). By default the union of the faces' [`Feature::PARTS`] masks; a feature whose
-    /// reach is not those masks (spots, strands, the lenses, the face's outline, the background) overrides it.
-    /// `None`: nowhere (no masks to say). It reads the faces' input only, never the image or the settings.
+    /// Where the feature can work on `faces` (places in [`Scene::faces`]), as a map over the scene's image: 1 where it
+    /// works fully, 0 where not. By default the union of the faces' [`Feature::PARTS`] masks; a feature whose reach is
+    /// not those masks (spots, strands, the lenses, the face's outline, the background) overrides it. `None`: nowhere
+    /// (no masks to say). It reads the faces' input only, never the image or the settings. The ⌥-drag view does not
+    /// use it: it measures what [`Feature::apply`] changes (`crates/pipeline/src/retouch_effect.rs`, issue #208).
     fn area(scene: &Scene<'_>, faces: &[usize]) -> Option<Plane> {
         parts_area(scene, faces, Self::PARTS)
     }

@@ -27,6 +27,12 @@ use crate::retouch_step::FrameKeyMap;
 /// The Face Reshape warp of `s` for the faces of `info` on `frame` (built without a reshape); `None` when nothing
 /// moves.
 pub fn field(info: &SourceInfo, s: &DevelopSettings, frame: &Frame) -> Option<Arc<Field>> {
+    field_of(info, s, frame, None)
+}
+
+/// [`field`] of face `only` alone (a place in the photo's faces; `None`: every face), the others left in place: the
+/// ⌥-drag map measures how far each face moves (`crate::retouch_effect`).
+pub fn field_of(info: &SourceInfo, s: &DevelopSettings, frame: &Frame, only: Option<usize>) -> Option<Arc<Field>> {
     if !lightcraft_develop::retouch::active(s) {
         return None;
     }
@@ -58,12 +64,14 @@ pub fn field(info: &SourceInfo, s: &DevelopSettings, frame: &Frame) -> Option<Ar
             }
         })
         .collect();
+    // (a face `only` leaves out keeps Face Reshape off)
+    let still = Reshape::default();
     let list: Vec<(&[(f64, f64)], &Reshape)> = landmarks
         .iter()
         .enumerate()
         .map(|(i, l)| {
             let settings = own.get(i).copied().flatten().and_then(|o| r.faces.get(o)).map_or(&r.global, |o| &o.settings);
-            (l.as_ref(), &settings.reshape)
+            (l.as_ref(), if only.is_none_or(|o| o == i) { &settings.reshape } else { &still })
         })
         .collect();
     Field::build(&list, frame.ow, frame.oh).map(Arc::new)
