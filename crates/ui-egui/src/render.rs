@@ -348,6 +348,10 @@ pub struct Renderer {
     thumb_inputs: HashMap<PhotoId, (std::sync::Weak<lightcraft_catalog::Photo>, usize, u64, bool, u32)>,
     /// Photos whose grid thumbnail is the camera's embedded preview itself (no render behind it).
     embedded_thumbs: HashMap<PhotoId, (std::sync::Weak<lightcraft_catalog::Photo>, usize, u64)>,
+    /// Grid thumbnails that make their photo's view preview after them, and whether that view is still wanted: a cell
+    /// scrolled out of view clears its flag, and the worker drops the view (and its preview-size picture) instead of
+    /// rendering it.
+    view_wanted: HashMap<PhotoId, Arc<std::sync::atomic::AtomicBool>>,
     pool: JobPool<Slot, Finished>,
     /// Jobs run elsewhere (see [`RenderOffload`]); `queue` holds the ones not started yet.
     offload: Option<Box<dyn RenderOffload>>,
@@ -527,6 +531,7 @@ impl Renderer {
             pool: JobPool::new(threads),
             thumb_inputs: HashMap::new(),
             embedded_thumbs: HashMap::new(),
+            view_wanted: HashMap::new(),
             offload: None,
             queue: Vec::new(),
             seq: 0,
@@ -985,6 +990,14 @@ impl Renderer {
         if lightcraft_pipeline::profiling() && !background {
             eprintln!("  ui: {slot:?} submitted (at {:.1})", stamp());
         }
+        let wanted = match slot {
+            Slot::Thumb(id) if job.view_after.is_some() => {
+                let flag = Arc::new(std::sync::atomic::AtomicBool::new(true));
+                self.view_wanted.insert(id, flag.clone());
+                Some(flag)
+            }
+            _ => None,
+        };
         self.pool.submit_or_then(
             slot,
             key,
@@ -1003,8 +1016,14 @@ impl Renderer {
                     r
                 };
                 let finished = Finished { look, ..Self::run_for(run, &display) };
-                let then =
-                    after.map(|view| -> lightcraft_preview::Then { Box::new(move || lightcraft_engine::memory::in_background(|| view.run())) });
+                // (a cell scrolled away since: the view and its picture are dropped, not rendered)
+                let then = after.map(|view| -> lightcraft_preview::Then {
+                    Box::new(move || {
+                        if wanted.is_none_or(|w| w.load(std::sync::atomic::Ordering::Relaxed)) {
+                            lightcraft_engine::memory::in_background(|| view.run());
+                        }
+                    })
+                });
                 Finished { then, ..finished }
             }),
             panicked,
@@ -2095,6 +2114,14 @@ impl Renderer {
     pub fn evict_thumbs(&mut self, keep: &std::collections::HashSet<PhotoId>, max: usize) {
         self.thumb_inputs.retain(|id, _| keep.contains(id));
         self.embedded_thumbs.retain(|id, _| keep.contains(id));
+        // (a view still to be made from a thumbnail's decode is not made for a photo scrolled away)
+        self.view_wanted.retain(|id, wanted| {
+            let kept = keep.contains(id);
+            if !kept {
+                wanted.store(false, std::sync::atomic::Ordering::Relaxed);
+            }
+            kept
+        });
         // (a thumbnail that failed is tried again when its photo comes back on screen)
         self.failed.retain(|s, _| !matches!(s, Slot::Thumb(id) | Slot::ThumbQuick(id) if !keep.contains(id)));
         let dropped = self.pool.reprioritize(|s, p| match s {

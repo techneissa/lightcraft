@@ -8,6 +8,11 @@
 //! waited to decode the file themselves. A job on one of rayon's threads never waits: the decode it would wait for
 //! could be running further up that same thread's stack (rayon runs other jobs while it waits for its own), so it
 //! decodes alone, as before.
+//!
+//! Interactive work never waits behind background work. A background decode (a grid thumbnail's view, the photos
+//! prepared ahead: [`crate::memory::in_background`]) can sit at the memory gate, where interactive loads never wait
+//! (`files::fs`). An interactive job (the loupe) that finds a background decode of its file running decodes it
+//! itself, ungated, and the jobs that ask after it wait for that decode instead.
 
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
 
@@ -18,6 +23,8 @@ use super::source::DecodedSource;
 struct Running {
     done: Mutex<Option<Option<DecodedSource>>>,
     finished: Condvar,
+    /// Run as background work: it may wait at the memory gate, so an interactive job doesn't wait for it.
+    background: bool,
     /// Jobs waiting for it (tests).
     #[cfg(test)]
     waiting: std::sync::atomic::AtomicUsize,
@@ -30,12 +37,21 @@ pub(super) fn decode_shared(key: u128, decode: impl FnOnce() -> Result<DecodedSo
     if rayon::current_thread_index().is_some() {
         return decode();
     }
+    let background = crate::memory::is_background();
     let (running, mine) = {
         let mut all = RUNNING.lock().unwrap_or_else(PoisonError::into_inner);
-        match all.iter().find(|(k, _)| *k == key) {
-            Some((_, r)) => (r.clone(), false),
-            None => {
-                let r = Arc::new(Running::default());
+        match all.iter().position(|(k, _)| *k == key) {
+            // (an interactive job never waits for a background decode: see the module's note)
+            Some(at) if background || !all.get(at).is_some_and(|(_, r)| r.background) => match all.get(at) {
+                Some((_, r)) => (r.clone(), false),
+                None => return decode(),
+            },
+            found => {
+                // this decode is the one later jobs wait for; a background one it replaces keeps its own waiters
+                if let Some(at) = found {
+                    all.swap_remove(at);
+                }
+                let r = Arc::new(Running { background, ..Running::default() });
                 all.push((key, r.clone()));
                 (r, true)
             }
@@ -98,7 +114,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Barrier};
 
-    use super::{decode_shared, until_waiting};
+    use super::{decode_shared, until_waiting, waiting};
     use crate::media::source::DecodedSource;
 
     fn picture(v: f32) -> DecodedSource {
@@ -166,5 +182,53 @@ mod tests {
         assert!(first.join().unwrap().is_err());
         let own = second.join().unwrap().expect("its own decode");
         assert_eq!(own.image.data[0], [0.7; 3]);
+    }
+
+    /// Review of #246: the loupe (interactive) never waits behind a background decode of the same file, which can be
+    /// queued at the memory gate (where interactive loads never wait). It decodes on its own, and a job asking after
+    /// it waits for that decode, not the background one.
+    #[test]
+    fn an_interactive_load_never_waits_on_a_background_decode_queued_at_the_gate() {
+        let key = u128::from_le_bytes(*b"shared-decode-03");
+        let started = Arc::new(Barrier::new(2));
+        let (release, held) = std::sync::mpsc::channel::<()>();
+        // the grid's view decode: background work, held as if queued at the gate
+        let background = {
+            let started = started.clone();
+            std::thread::spawn(move || {
+                crate::memory::in_background(|| {
+                    decode_shared(key, || {
+                        started.wait();
+                        let _ = held.recv_timeout(std::time::Duration::from_secs(60));
+                        Ok(picture(0.2))
+                    })
+                })
+            })
+        };
+        started.wait();
+        // the loupe: its own decode, while the background one is still held
+        let (loupe_in, loupe_out) = std::sync::mpsc::channel::<()>();
+        let (loupe_started, loupe_decoding) = std::sync::mpsc::channel::<()>();
+        let (loupe_done, loupe_result) = std::sync::mpsc::channel();
+        let loupe = std::thread::spawn(move || {
+            let r = decode_shared(key, || {
+                let _ = loupe_started.send(());
+                let _ = loupe_out.recv_timeout(std::time::Duration::from_secs(60));
+                Ok(picture(0.6))
+            });
+            let _ = loupe_done.send(r.map(|s| s.image.data[0]));
+        });
+        loupe_decoding.recv_timeout(std::time::Duration::from_secs(60)).expect("the loupe decodes while the background decode is held");
+        // a third job (the build) asks while the loupe decodes: it waits for the loupe's decode
+        let build = std::thread::spawn(move || crate::memory::in_background(|| decode_shared(key, || Ok(picture(0.9)))));
+        until_waiting(key);
+        assert_eq!(waiting(key), 1, "the build waits for the loupe's decode");
+        loupe_in.send(()).unwrap();
+        let got = loupe_result.recv_timeout(std::time::Duration::from_secs(60)).expect("the loupe is not held by the background decode");
+        assert_eq!(got, Ok([0.6; 3]), "the loupe's own decode");
+        assert_eq!(build.join().unwrap().unwrap().image.data[0], [0.6; 3], "the build took the loupe's picture");
+        loupe.join().unwrap();
+        release.send(()).unwrap();
+        assert_eq!(background.join().unwrap().unwrap().image.data[0], [0.2; 3], "the background decode ends on its own");
     }
 }
