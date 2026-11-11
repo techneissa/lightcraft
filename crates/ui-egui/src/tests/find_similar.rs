@@ -42,6 +42,16 @@ impl Drive {
         all.dedup();
         all.len()
     }
+
+    /// The paths the search itself read more than once (the grid's reads are not in `paths`, so the #257 race can't
+    /// change this).
+    fn read_twice(&self) -> Vec<String> {
+        let mut read = self.paths.lock().unwrap_or_else(PoisonError::into_inner).clone();
+        read.sort();
+        let mut twice: Vec<String> = read.windows(2).filter(|w| w[0] == w[1]).map(|w| w[0].clone()).collect();
+        twice.dedup();
+        twice
+    }
 }
 
 fn app_on_a_slow_drive(guard: Duration) -> (Headless, Drive) {
@@ -142,6 +152,7 @@ fn a_search_from_the_menu_reads_off_the_ui_thread_and_the_window_goes_on() {
     // (a photo the grid was already reading for its thumbnail is that same read, shared: the search's own reads can be
     // fewer than the photos, never the files read)
     assert_eq!(drive.files_read(), PHOTOS as usize);
+    assert!(drive.read_twice().is_empty(), "read twice: {:?}", drive.read_twice());
     assert!(rows(&h).is_empty(), "the row goes with the search");
     let shown = h.app.session.filter.only.len();
     assert_eq!(shown, PHOTOS as usize / 2, "the photos alike are shown");
@@ -328,6 +339,7 @@ fn a_request_nobody_waits_for_any_more_leaves_what_it_read() {
     until_done(&mut h);
     let reads = drive.reads.load(Ordering::SeqCst);
     assert_eq!(drive.files_read(), PHOTOS as usize);
+    assert!(drive.read_twice().is_empty(), "read twice: {:?}", drive.read_twice());
     let rx = ask(&mut h);
     assert_eq!(answer(&mut h, &rx)["ok"], true);
     assert_eq!(drive.reads.load(Ordering::SeqCst), reads);

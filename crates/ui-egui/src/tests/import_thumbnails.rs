@@ -37,8 +37,8 @@ struct Review {
 
 impl Review {
     /// Open sixty candidates at the requested display density, including duplicate/error badges. The source is
-    /// as big as the largest preview the density asks for needs (1024 px at scale 2 and up, 384 px below), no
-    /// bigger: each tile's preview decodes it.
+    /// big enough for the largest preview the density asks for (1600 px above scale 1, for its 768–1024 px previews;
+    /// 640 px at scale 1 and below, for 384 px), no bigger: each tile's preview decodes it.
     fn new(scale: f32) -> Self {
         if scale > 1.0 { Self::with_dimensions(scale, 1600, 1200) } else { Self::with_dimensions(scale, 640, 480) }
     }
