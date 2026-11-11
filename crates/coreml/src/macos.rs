@@ -111,9 +111,17 @@ fn names(dict: Option<Retained<NSDictionary<NSString, AnyObject>>>) -> Vec<Strin
     out
 }
 
-pub(crate) fn load(compiled: &Path, units: ComputeUnits) -> Result<(Handle, Vec<String>, Vec<String>)> {
+/// Whether `MLModelConfiguration` can pick one function of a model with several (macOS 15 or later).
+fn functions_available() -> bool {
+    AnyClass::get(c"MLModelConfiguration").is_some_and(|c| c.responds_to(sel!(setFunctionName:)))
+}
+
+pub(crate) fn load(compiled: &Path, units: ComputeUnits, function: Option<&str>) -> Result<(Handle, Vec<String>, Vec<String>)> {
     if !available() {
         return Err(Error::Unavailable);
+    }
+    if function.is_some() && !functions_available() {
+        return Err(Error::Load("this macOS can't load one function of a model (macOS 15 or later)".into()));
     }
     autoreleasepool(|_| {
         let url = url_of(compiled)?;
@@ -124,6 +132,11 @@ pub(crate) fn load(compiled: &Path, units: ComputeUnits) -> Result<(Handle, Vec<
             c.setComputeUnits(units_of(units));
             c
         };
+        if let Some(f) = function {
+            // SAFETY: `setFunctionName:` is checked above (`functions_available`); it takes an NSString, which the
+            // configuration copies. A name the model lacks makes the load below fail through its NSError.
+            unsafe { config.setFunctionName(Some(&NSString::from_str(f))) };
+        }
         let mut err: Option<Retained<NSError>> = None;
         // SAFETY: a class method checked in `available`, with a non-nil URL and configuration and an NSError
         // out-parameter; the result is received as optional.

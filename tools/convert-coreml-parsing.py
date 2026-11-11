@@ -102,7 +102,7 @@ MODELS = {
         "sha256": "8f86fd90c567afd4370b3cc3a7e81ed767a632b2832a738331af660acc0c4c68",
         "classes": 18,
         "kind": "body",
-        "license": "MIT per the model card (mattmdjaga/segformer_b2_clothes); MiT-b2 encoder under the NVIDIA Source Code License for SegFormer (non-commercial)",
+        "license": "other per the model card (mattmdjaga/segformer_b2_clothes): the NVIDIA Source Code License for SegFormer (non-commercial); fine-tuned from NVIDIA MiT-b2",
     },
 }
 

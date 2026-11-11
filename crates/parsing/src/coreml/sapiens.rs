@@ -6,9 +6,10 @@
 //! and Sapiens2 runs on a box around each person, each of another size. So each model takes one fixed shape and a
 //! call holds several passes:
 //!
-//! - the backbone takes [`TOKENS`] rows, the passes' tokens one after another (each pass's class and storage tokens,
-//!   then its patches with their rotary sin and cos), each row carrying its pass's number: a token attends only to its
-//!   own pass's tokens, so each pass gives what it gives alone;
+//! - the backbone takes a fixed number of rows ([`BACKBONES`]: one package with a function for each, sharing the
+//!   weights; a call takes the smallest that holds it), the passes' tokens one after another (each pass's class and
+//!   storage tokens, then its patches with their rotary sin and cos), each row carrying its pass's number: a token
+//!   attends only to its own pass's tokens, so each pass gives what it gives alone;
 //! - the head takes the passes' features laid out on a canvas of patches ([`HEAD_CANVASES`]: the smallest that holds
 //!   them), each pass in its own rectangle with an empty patch between two of them and a channel of its own marking
 //!   it; every instance norm takes each pass's own statistics and every layer sees zeros past a pass's edge, so each
@@ -30,6 +31,9 @@ use crate::sapiens::{self, CLASSES, HEAD_DIM, PATCH, PREFIX};
 /// Rows a backbone call holds: the largest pass `crops.rs` makes (1.05 × 1024 × 768 pixels: 3225 patches) with its
 /// class and storage tokens, rounded up to a multiple of 64.
 pub const TOKENS: usize = 3264;
+/// The backbone's functions (rows, name), smallest first: one that holds a whole photo's pass alone (about half the
+/// trained size, at most 1600 patches: `fuse.rs` `input_size`), at about half the time of the largest, and [`TOKENS`].
+pub const BACKBONES: [(usize, &str); 2] = [(1664, "tokens1664"), (TOKENS, "tokens3264")];
 /// Most passes a call holds (the whole photo's and [`crate::crops::MAX_CROPS`] people's).
 pub const MAX_PASSES: usize = 9;
 /// The head's canvases in patches (height, width), smallest first: one that holds a whole photo's pass of 3:2 either
@@ -55,9 +59,9 @@ pub(crate) fn names() -> Vec<String> {
     v
 }
 
-/// Sapiens2's three Core ML models and the rotary periods of its weights.
+/// Sapiens2's Core ML models (each function of the backbone, each head) and the rotary periods of its weights.
 pub(crate) struct Models {
-    backbone: Model,
+    backbones: Vec<(usize, Model)>,
     heads: Vec<((usize, usize), Model)>,
     periods: Vec<f32>,
 }
@@ -73,13 +77,16 @@ impl Models {
 pub(crate) fn load(models: &Path) -> Result<Models, Error> {
     let names = names();
     let (first, rest) = names.split_first().ok_or_else(|| Error::Load("no Sapiens2 models".into()))?;
-    let backbone = super::load_named(models, &BODY_SAPIENS2, first, BACKBONE_OUTPUT, ComputeUnits::CpuAndGpu)?;
+    let backbones = BACKBONES
+        .iter()
+        .map(|&(n, f)| Ok((n, super::load_named(models, &BODY_SAPIENS2, first, Some(f), BACKBONE_OUTPUT, ComputeUnits::CpuAndGpu)?)))
+        .collect::<Result<Vec<_>, Error>>()?;
     let heads = HEAD_CANVASES
         .iter()
         .zip(rest)
-        .map(|(&c, n)| Ok((c, super::load_named(models, &BODY_SAPIENS2, n, HEAD_OUTPUT, ComputeUnits::CpuAndGpu)?)))
+        .map(|(&c, n)| Ok((c, super::load_named(models, &BODY_SAPIENS2, n, None, HEAD_OUTPUT, ComputeUnits::CpuAndGpu)?)))
         .collect::<Result<Vec<_>, Error>>()?;
-    Ok(Models { backbone, heads, periods: Vec::new() })
+    Ok(Models { backbones, heads, periods: Vec::new() })
 }
 
 /// The input a pass wanted at `w × h` pixels gets: the same when the largest canvas and a call hold it, else smaller,
@@ -168,10 +175,15 @@ pub(crate) fn probs(m: &Models, passes: &[Pass], cancelled: &dyn Fn() -> bool) -
 
 /// One backbone call and one head call for `passes` (of `sizes` patches).
 fn call(m: &Models, passes: &[Pass], sizes: &[(usize, usize)]) -> Result<Vec<Vec<f32>>, Error> {
-    let (x, starts) = rows(passes, sizes, &m.periods);
-    let t = m.backbone.predict(INPUT, &[1, TOKENS, ROW], &x, BACKBONE_OUTPUT)?;
-    if t.shape != [1, TOKENS, WIDTH] || t.data.len() != TOKENS * WIDTH {
-        return Err(Error::Output(format!("the Sapiens2 backbone gave {:?}, not [1, {TOKENS}, {WIDTH}]", t.shape)));
+    let need: usize = sizes.iter().map(|(h, w)| h * w + PREFIX).sum();
+    let (tokens, backbone) =
+        m.backbones.iter().find(|(n, _)| *n >= need).ok_or_else(|| Error::Input(format!("{need} Sapiens2 tokens do not fit a call")))?;
+    let (x, starts) = rows(passes, sizes, &m.periods, *tokens);
+    crate::profile::mark("sapiens2 rows");
+    let t = backbone.predict(INPUT, &[1, *tokens, ROW], &x, BACKBONE_OUTPUT)?;
+    crate::profile::mark("sapiens2 backbone");
+    if t.shape != [1, *tokens, WIDTH] || t.data.len() != tokens * WIDTH {
+        return Err(Error::Output(format!("the Sapiens2 backbone gave {:?}, not [1, {tokens}, {WIDTH}]", t.shape)));
     }
     let ((ch, cw), head, places) = m
         .heads
@@ -179,7 +191,9 @@ fn call(m: &Models, passes: &[Pass], sizes: &[(usize, usize)]) -> Result<Vec<Vec
         .find_map(|(c, h)| shelf(sizes, *c).map(|p| (*c, h, p)))
         .ok_or_else(|| Error::Input("the Sapiens2 passes do not fit the head's canvas".into()))?;
     let x = canvas(&t.data, &starts, sizes, &places, (ch, cw));
+    crate::profile::mark("sapiens2 canvas");
     let out = head.predict(INPUT, &[1, WIDTH + MAX_PASSES, ch, cw], &x, HEAD_OUTPUT)?;
+    crate::profile::mark("sapiens2 head");
     let (oh, ow) = (ch * PATCH, cw * PATCH);
     if out.shape != [1, CLASSES, oh, ow] || out.data.len() != CLASSES * oh * ow {
         return Err(Error::Output(format!("the Sapiens2 head gave {:?}, not [1, {CLASSES}, {oh}, {ow}]", out.shape)));
@@ -203,10 +217,10 @@ fn call(m: &Models, passes: &[Pass], sizes: &[(usize, usize)]) -> Result<Vec<Vec
         .collect()
 }
 
-/// The backbone's input for `passes` (`TOKENS × ROW`), and the row of each pass's first patch.
-fn rows(passes: &[Pass], sizes: &[(usize, usize)], periods: &[f32]) -> (Vec<f32>, Vec<usize>) {
+/// The backbone's input for `passes` (`tokens × ROW`, enough for them), and the row of each pass's first patch.
+fn rows(passes: &[Pass], sizes: &[(usize, usize)], periods: &[f32], tokens: usize) -> (Vec<f32>, Vec<usize>) {
     let rope = PX + PREFIX;
-    let mut x = vec![0.0f32; TOKENS * ROW];
+    let mut x = vec![0.0f32; tokens * ROW];
     for row in x.as_chunks_mut::<ROW>().0 {
         // padding, and the prefix tokens until written: not turned (cos 1, sin 0), a pass of their own
         if let Some(cos) = row.get_mut(rope + HEAD_DIM..rope + 2 * HEAD_DIM) {
@@ -263,7 +277,7 @@ fn rows(passes: &[Pass], sizes: &[(usize, usize)], periods: &[f32]) -> (Vec<f32>
     (x, starts)
 }
 
-/// The head's input: each pass's features (`tokens`, `TOKENS × WIDTH`, its patches from row `starts[k]`) at its place
+/// The head's input: each pass's features (`tokens`, a row of `WIDTH` each, its patches from row `starts[k]`) at its place
 /// on a canvas of `(ch, cw)` patches, channel-major, then a channel per pass marking its patches.
 fn canvas(tokens: &[f32], starts: &[usize], sizes: &[(usize, usize)], places: &[(usize, usize)], (ch, cw): (usize, usize)) -> Vec<f32> {
     let plane = ch * cw;

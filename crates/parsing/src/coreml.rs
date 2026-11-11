@@ -109,16 +109,23 @@ pub(crate) fn canvas(w: usize, h: usize) -> Option<(usize, usize)> {
 
 /// Load `file`'s Core ML model, checked to have the input and output the parser sends and reads.
 fn load(models: &Path, file: &ModelFile, output: &str, units: ComputeUnits) -> Result<Model, Error> {
-    load_named(models, file, file.folder, output, units)
+    load_named(models, file, file.folder, None, output, units)
 }
 
-/// Load the Core ML model `name` of `file`, checked as [`load`] does.
-pub(crate) fn load_named(models: &Path, file: &ModelFile, name: &str, output: &str, units: ComputeUnits) -> Result<Model, Error> {
+/// Load the Core ML model `name` of `file` (`function`: one of its functions), checked as [`load`] does.
+pub(crate) fn load_named(
+    models: &Path,
+    file: &ModelFile,
+    name: &str,
+    function: Option<&str>,
+    output: &str,
+    units: ComputeUnits,
+) -> Result<Model, Error> {
     if !lightcraft_coreml::available() {
         return Err(Error::Unavailable);
     }
     let (package, compiled) = named(models, file, name);
-    let model = lightcraft_coreml::load_package(&package, &compiled, units)?;
+    let model = lightcraft_coreml::load_package_function(&package, &compiled, units, function)?;
     if !model.inputs().iter().any(|n| n == INPUT) || !model.outputs().iter().any(|n| n == output) {
         return Err(Error::Load(format!(
             "{} is not the converted {} (it takes {:?} and gives {:?})",

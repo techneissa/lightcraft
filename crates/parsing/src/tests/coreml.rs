@@ -397,8 +397,10 @@ fn sapiens2_and_the_bisenet_sets_clothes_parser_on_core_ml_give_what_candle_give
             };
             let passes = [whole, pass(192, 384, 200.0, 60.0, 50, 100), pass(384, 192, 150.0, 150.0, 100, 50)];
             let (a, b) = (coreml.parts_probs(&passes).unwrap(), candle.parts_probs(&passes).unwrap());
-            assert_eq!(a.len(), 3);
-            for (k, ((x, y), p)) in a.iter().zip(&b).zip(&passes).enumerate() {
+            // and the whole photo's pass alone: the backbone's small function, the small canvas
+            let (a1, b1) = (coreml.parts_probs(&passes[..1]).unwrap(), candle.parts_probs(&passes[..1]).unwrap());
+            assert_eq!((a.len(), a1.len()), (3, 1));
+            for (k, ((x, y), p)) in a.iter().chain(&a1).zip(b.iter().chain(&b1)).zip(passes.iter().chain(&passes[..1])).enumerate() {
                 assert_eq!(x.len(), y.len());
                 let agree = argmax_agreement(x, y, p.w * p.h);
                 let mean = x.iter().zip(y).map(|(u, v)| (u - v).abs()).sum::<f32>() / x.len().max(1) as f32;

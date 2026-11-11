@@ -11,16 +11,19 @@ PyTorch from the same tensor names (MLX layout: kernels out, kh, kw, in).
     M=~/Library/Application\\ Support/ArtCraft/models
     venv/bin/python -I tools/convert-coreml-sapiens2.py --models "$M" --out out/ --install
 
-Core ML plans a model again whenever its input shape changes (issue #200), and Sapiens2 runs on a box around each
-person, each of another size. So each of the two models takes one fixed shape, and a call holds several people:
+Core ML plans a model again whenever its input shape changes (issue #200: about 1.7 s for this backbone), and
+Sapiens2 runs on a box around each person, each of another size. So each model takes one fixed shape, and a call holds
+several people:
 
-* `body-parsing-sapiens2-0.4b-backbone.mlpackage`, the transformer, takes `pixels` [1, TOKENS, 906]: one row per
-  token, of up to 9 passes packed one after another. A row is the patch's 16 x 16 x 3 ImageNet-normalised pixels
+* `body-parsing-sapiens2-0.4b-backbone.mlpackage`, the transformer, has a function for each row count of `BACKBONES`
+  (`tokens1664`, `tokens3264`; one weights file, which Core ML shares between the two when both are loaded: 128 MB
+  more, not 800), so a photo whose passes fit in 1664 rows (a whole photo's pass alone) takes half the time without a
+  shape change. Each takes `pixels` [1, N, 906]: one row per token, of up to 9 passes packed one after another. A row is the patch's 16 x 16 x 3 ImageNet-normalised pixels
   (row, column, channel), then 9 channels choosing one of the class and storage tokens instead (one-hot; all 0 for a
   patch), then the rotary table's sin and cos for the patch (64 each; 0 and 1 for the class and storage tokens, which
   are not turned), then the pass's number. A token attends only to the tokens of its own pass, so each pass gives what
-  it gives alone; rows past the last pass are padding with a number of their own. It gives `tokens` [1, TOKENS, 1024]
-  after the last norm. Float16, on the Neural Engine.
+  it gives alone; rows past the last pass are padding with a number of their own. It gives `tokens` [1, N, 1024]
+  after the last norm. Float16 on the GPU (macOS 15 or later for the functions).
 * `body-parsing-sapiens2-0.4b-head-<H>x<W>.mlpackage`, the decoder head, one for each canvas of `HEAD_CANVASES`
   (H x W patches; a call takes the smallest that holds its passes), takes `pixels` [1, 1024 + 9, H, W]:
   the passes' patch features laid out on a canvas of patches, each pass's grid in its own rectangle with at least one
@@ -61,8 +64,10 @@ PATCH = 16
 HEAD_DIM = 64
 PREFIX = 9  # the class token and 8 storage tokens
 # Tokens a backbone call holds: the largest pass (`crops.rs` `input_size`: at most 1.05 x 1024 x 768 / 256 = 3225
-# patches) with its prefix, rounded up to a multiple of 64.
+# patches) with its prefix, rounded up to a multiple of 64; and a smaller function for a whole photo's pass alone
+# (`fuse.rs` `input_size`: about 1536 patches, at most 1600).
 TOKENS = 3264
+BACKBONES = [1664, TOKENS]
 # The head's canvases in patches (height, width), smallest first (`crates/parsing/src/coreml/sapiens.rs` keeps the
 # same): one that holds a whole photo's pass of 3:2 either way round, and a tall one for the boxes around people.
 HEAD_CANVASES = [(48, 48), (96, 64)]
@@ -272,9 +277,9 @@ def reference(bb, head, x, periods):
     return F.conv2d(y, *head.seg)
 
 
-def pack(xs, periods):
-    """The backbone's input for passes `xs` (each [1, 3, H, W]) and where each one's patches are in it."""
-    rows = np.zeros((1, TOKENS, ROW), np.float32)
+def pack(xs, periods, tokens=TOKENS):
+    """The backbone's input (`tokens` rows) for passes `xs` (each [1, 3, H, W]) and where each one's patches are."""
+    rows = np.zeros((1, tokens, ROW), np.float32)
     rows[0, :, ROW - 1] = 1000.0  # padding: a pass of its own
     rows[0, :, PX + PREFIX + HEAD_DIM : PX + PREFIX + 2 * HEAD_DIM] = 1.0
     at, spans = 0, []
@@ -292,7 +297,7 @@ def pack(xs, periods):
         rows[0, b : b + gh * gw, PX + PREFIX + HEAD_DIM : PX + PREFIX + 2 * HEAD_DIM] = c
         spans.append((b, gh, gw))
         at = b + gh * gw
-    assert at <= TOKENS
+    assert at <= tokens
     return rows, spans
 
 
@@ -372,62 +377,95 @@ def main():
         name = f"{FOLDER}-{part}"
         t = time.time()
         if part == "backbone":
-            example = torch.from_numpy(rows)
-            model, output = bb, "tokens"
             # the GPU: the Neural Engine was slower and further from float32 (see above)
-            precision, units = ct.precision.FLOAT16, ct.ComputeUnit.CPU_AND_GPU
+            sizes = {}
+            for n in BACKBONES:
+                x, _ = pack(xs if n == TOKENS else xs[:1], periods, n)
+                with torch.no_grad():
+                    traced = torch.jit.trace(bb, torch.from_numpy(x))
+                ml = ct.convert(
+                    traced,
+                    convert_to="mlprogram",
+                    inputs=[ct.TensorType(name="pixels", shape=x.shape, dtype=np.float32)],
+                    outputs=[ct.TensorType(name="tokens", dtype=np.float16)],
+                    compute_precision=ct.precision.FLOAT16,
+                    minimum_deployment_target=ct.target.macOS15,
+                    compute_units=ct.ComputeUnit.CPU_AND_GPU,
+                )
+                ml.short_description = f"Sapiens2 0.4B backbone, {n} tokens, for LightCraft (fork/coreml.md)"
+                ml.license = LICENSE
+                part_pkg = a.out / f"{name}-{n}.mlpackage"
+                shutil.rmtree(part_pkg, ignore_errors=True)
+                ml.save(str(part_pkg))
+                sizes[n] = (ml, part_pkg)
+            desc = ct.utils.MultiFunctionDescriptor()
+            for n, (_, part_pkg) in sizes.items():
+                desc.add_function(str(part_pkg), src_function_name="main", target_function_name=f"tokens{n}")
+            desc.default_function_name = f"tokens{TOKENS}"
+            package, compiled = a.out / f"{name}.mlpackage", a.out / f"{name}.mlmodelc"
+            for old in (package, compiled):
+                shutil.rmtree(old, ignore_errors=True)
+            ct.utils.save_multifunction(desc, str(package))
+            shutil.move(str(ct.utils.compile_model(str(package))), str(compiled))
+            for _, part_pkg in sizes.values():
+                shutil.rmtree(part_pkg, ignore_errors=True)
+            shapes = [[1, n, ROW] for n in BACKBONES]
+            made[part] = (sizes, package, name, shapes, "tokens", ct.precision.FLOAT16)
         else:
             model, output = heads[part], "logits"
             n = len(layouts[part])
             example = torch.from_numpy(canvas(tokens32, spans[:n], layouts[part], bb.c, model.size))
-            precision, units = ct.precision.FLOAT32, ct.ComputeUnit.CPU_AND_GPU
-        shape = tuple(example.shape)
-        with torch.no_grad():
-            traced = torch.jit.trace(model, example)
-        ml = ct.convert(
-            traced,
-            convert_to="mlprogram",
-            inputs=[ct.TensorType(name="pixels", shape=shape, dtype=np.float32)],
-            outputs=[ct.TensorType(name=output, dtype=np.float16 if precision == ct.precision.FLOAT16 else np.float32)],
-            compute_precision=precision,
-            minimum_deployment_target=ct.target.macOS14,
-            compute_units=units,
-        )
-        ml.short_description = f"Sapiens2 0.4B {part} for LightCraft (fork/coreml.md)"
-        ml.license = LICENSE
-        package = save(ml, a.out, name)
+            shape = tuple(example.shape)
+            with torch.no_grad():
+                traced = torch.jit.trace(model, example)
+            ml = ct.convert(
+                traced,
+                convert_to="mlprogram",
+                inputs=[ct.TensorType(name="pixels", shape=shape, dtype=np.float32)],
+                outputs=[ct.TensorType(name=output, dtype=np.float32)],
+                compute_precision=ct.precision.FLOAT32,
+                minimum_deployment_target=ct.target.macOS14,
+                compute_units=ct.ComputeUnit.CPU_AND_GPU,
+            )
+            ml.short_description = f"Sapiens2 0.4B {part} for LightCraft (fork/coreml.md)"
+            ml.license = LICENSE
+            package = save(ml, a.out, name)
+            made[part] = (ml, package, name, [list(shape)], output, ct.precision.FLOAT32)
         print(f"{name}: converted in {time.time() - t:.0f} s")
-        made[part] = (ml, package, name, shape, output, precision)
 
     # Check against the float32 reference, each pass alone (what the Rust test then checks against candle): the
-    # backbone on Core ML (or PyTorch when not converted now), then each head on Core ML (or PyTorch).
+    # backbone on Core ML (or PyTorch when not converted now; the small function for the whole photo alone, the large
+    # one for both passes), then each head on Core ML (or PyTorch).
     report = {}
     with torch.no_grad():
         refs = [reference(bb, heads["head-96x64"], x, periods).numpy() for x in xs]
-    if "backbone" in made:
-        tokens = made["backbone"][0].predict({"pixels": rows})["tokens"].astype(np.float32)
-    else:
-        tokens = tokens32
     for part, places in layouts.items():
         n = len(places)
-        x = canvas(tokens, spans[:n], places, bb.c, heads[part].size)
+        size = TOKENS if n > 1 else BACKBONES[0]
+        x_rows, x_spans = pack(xs[:n], periods, size)
+        if "backbone" in made:
+            tokens = made["backbone"][0][size][0].predict({"pixels": x_rows})["tokens"].astype(np.float32)
+        else:
+            with torch.no_grad():
+                tokens = bb(torch.from_numpy(x_rows)).numpy()
+        x = canvas(tokens, x_spans, places, bb.c, heads[part].size)
         if part in made:
             logits = made[part][0].predict({"pixels": x})["logits"].astype(np.float32)
         else:
             with torch.no_grad():
                 logits = heads[part](torch.from_numpy(x)).numpy()
-        for xi, ref, (b, gh, gw), (r, col) in zip(xs, refs, spans, places):
+        for xi, ref, (b, gh, gw), (r, col) in zip(xs, refs, x_spans, places):
             got = logits[:, :, r * PATCH : (r + gh) * PATCH, col * PATCH : (col + gw) * PATCH]
             agree = float((ref.argmax(1) == got.argmax(1)).mean())
             diff = float(np.abs(ref - got).max())
-            print(f"{part}, Core ML vs PyTorch fp32 {list(xi.shape)}: argmax agreement {agree:.5f}, max |diff| {diff:.4f} (logits up to {np.abs(ref).max():.1f})")
-            report.setdefault(part, []).append({"shape": list(xi.shape), "argmaxAgreement": round(agree, 5), "maxDiff": round(diff, 4)})
+            print(f"backbone {size} + {part}, Core ML vs PyTorch fp32 {list(xi.shape)}: argmax agreement {agree:.5f}, max |diff| {diff:.4f} (logits up to {np.abs(ref).max():.1f})")
+            report.setdefault(part, []).append({"shape": list(xi.shape), "tokens": size, "argmaxAgreement": round(agree, 5), "maxDiff": round(diff, 4)})
 
     for part, (ml, package, name, shape, output, precision) in made.items():
         manifest = {
             "model": name,
             "package": package.name,
-            "input": {"name": "pixels", "shape": list(shape)},
+            "input": {"name": "pixels", "shapes": shape},
             "output": {"name": output},
             "precision": "float16" if precision == ct.precision.FLOAT16 else "float32",
             "source": {"file": "model.safetensors", "sha256": SHA256},

@@ -301,7 +301,9 @@ fn parts_map_with(run: &dyn Runner, map: BodyMap, img: &RgbImage, faces: &[NormR
     if cancelled() {
         return Err(Error::Cancelled);
     }
+    crate::profile::mark("sapiens2 inputs");
     let out = run.probs(&passes, cancelled)?;
+    crate::profile::mark("sapiens2 passes");
     if cancelled() {
         return Err(Error::Cancelled);
     }
