@@ -93,8 +93,8 @@ struct Running {
     _row: Option<lightcraft_engine::activity::TaskGuard>,
 }
 
-/// The photo open in the loupe, the zoom and pan it opened with, and whether it has been zoomed into since: the zoom
-/// or the pan changed while the loupe was past Fit. Only such a photo gets a picture rendered: zoom and pan are all
+/// The photo open in the loupe, its zoom and pan in the last frame, and whether it has been zoomed into since it
+/// opened: the zoom or the pan changed from one frame to the next, to a view past Fit. Only such a photo gets a picture rendered: zoom and pan are all
 /// that draw from it, and a zoom kept from the photo before, while photos are stepped through, does not count.
 struct Opened {
     photo: PhotoId,
@@ -395,7 +395,11 @@ pub fn update(app: &mut LightcraftApp, ctx: &egui::Context, a: &Ask) -> Option<u
     let (zoom, pan) = (app.ui.zoom, app.ui.pan);
     let store = &mut app.renderer.full;
     match store.opened.as_mut() {
-        Some(o) if o.photo == a.id => o.zoomed |= a.zoomed && (o.zoom != zoom || o.pan != pan),
+        Some(o) if o.photo == a.id => {
+            o.zoomed |= a.zoomed && (o.zoom != zoom || o.pan != pan);
+            // (compared frame to frame: Z to Fit and Z back to the same zoom and pan is a zoom too)
+            (o.zoom, o.pan) = (zoom, pan);
+        }
         _ => store.opened = Some(Opened { photo: a.id, zoom, pan, zoomed: false }),
     }
     if !a.eligible {

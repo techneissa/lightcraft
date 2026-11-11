@@ -416,3 +416,34 @@ fn photos_only_stepped_past_render_no_picture() {
     until_ready(&mut h);
     assert_eq!(h.app.renderer.full.stats.rendered, 2, "the photo panned");
 }
+
+// Given a photo opened at the zoom kept from the photo before, when I press Z to Fit and Z again, back to that same
+// zoom and pan, then it counts as zoomed into: its picture is built
+#[test]
+fn z_to_fit_and_back_on_a_photo_opened_zoomed_builds_its_picture() {
+    let fixture = RenderFixture::new("full-picture-z-toggle", 2);
+    let mut h = at_fit(&fixture, None);
+    let z = |h: &mut Headless| {
+        let r = h.request("ui.key", json!({"key": "z"}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.step();
+    };
+    z(&mut h);
+    let kept = (h.app.ui.zoom, h.app.ui.pan);
+    assert_ne!(kept.0, crate::state::Zoom::Fit, "Z zooms in");
+    exec(&mut h, "library.next", json!({}));
+    assert!(h.settle(SETTLE), "the second photo settles, at the zoom kept");
+    let id = h.app.session.active().expect("a photo");
+    for _ in 0..120 {
+        h.step();
+        assert!(!h.app.renderer.full.renders(id), "stepped to at a kept zoom: no build");
+    }
+    let rendered = h.app.renderer.full.stats.rendered;
+    z(&mut h);
+    assert_eq!(h.app.ui.zoom, crate::state::Zoom::Fit);
+    assert!(h.settle(SETTLE), "Fit settles");
+    z(&mut h);
+    assert_eq!((h.app.ui.zoom, h.app.ui.pan), kept, "back to the same zoom and pan");
+    until_ready(&mut h);
+    assert_eq!(h.app.renderer.full.stats.rendered, rendered + 1, "the photo zoomed into with Z");
+}

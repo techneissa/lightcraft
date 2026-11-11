@@ -113,17 +113,43 @@ fn near(img: &Rgba8, size: [usize; 2]) -> bool {
 /// One render, not bands: a band is a window render, and each repeats work done for the whole frame (the source's
 /// upload and sampling, the reduced whole frame the wide planes come from, the noise model) besides its margins of
 /// context. Three bands of a 45 MP photo took about twice the GPU and CPU time of the one render (#199).
-pub(super) fn render(job: RenderJob, plan: &Plan) -> (RenderResult, Option<Rgba8>) {
-    if plan.cancel.load(Ordering::Relaxed) {
+pub(super) fn render(mut job: RenderJob, plan: &Plan) -> (RenderResult, Option<Rgba8>) {
+    let stopped = || plan.cancel.load(Ordering::Relaxed);
+    if stopped() {
         return (job.failed("cancelled".into()), None);
     }
-    // A render that reads the file first waits its turn at the memory gate, like other background work, and gives up
-    // there once the build is stopped: AI Denoise holds the gate for its whole run, and a build stopped by an edit must
-    // not wait for it. Past the gate the load takes its own place without queueing again.
-    if !wait_at_gate(&job, &plan.cancel) {
-        return (job.failed("cancelled".into()), None);
+    // The original first, when it isn't held. Its read waits its turn at the memory gate, like other background work,
+    // and gives up there once the build is stopped: AI Denoise holds the gate for its whole run, and a build stopped by
+    // an edit must not wait for it. Past the gate the load weighs itself (a photo on macOS Colour waits there again),
+    // so no permit of the build's may be held across it: that wait would be for the build itself.
+    let mut loaded = None;
+    if !matches!(job.source, SourceRef::Loaded(_)) {
+        if !wait_at_gate(&job, &plan.cancel) {
+            return (job.failed("cancelled".into()), None);
+        }
+        match job.source.load_source() {
+            Ok(src) => {
+                job.source = SourceRef::Loaded(Box::new(src.clone()));
+                loaded = Some(src);
+            }
+            Err(e) => return (job.failed(e), None),
+        }
     }
+    // Then the render's own working memory, weighed as an export of the photo at its own size is (about 48 bytes a
+    // pixel: 2.2 GB at 45 MP). One render of the whole frame holds it all at once, where bands held about a third, so
+    // it waits until the gate has room, as background work does, and gives up there once the build is stopped.
+    let [w, h] = plan.size;
+    let px = w.saturating_mul(h);
+    let weight = lightcraft_engine::export::render_weight(px, w.max(h), job.level, px);
+    let Some(held) = lightcraft_engine::memory::work_gate().acquire_unless(weight, stopped) else {
+        return (job.failed("cancelled".into()), None);
+    };
     let mut r = job.run();
+    drop(held);
+    // (the original this build decoded goes to the session's cache, as a render that loads it hands it on)
+    if r.loaded.is_none() {
+        r.loaded = loaded;
+    }
     let img = match &mut r.rendered {
         Ok(x) if x.deep.is_none() && near(&x.image, plan.size) => {
             Some(std::mem::replace(&mut x.image, Rgba8 { width: 0, height: 0, data: Vec::new() }))
