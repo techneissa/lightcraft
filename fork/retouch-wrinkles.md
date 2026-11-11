@@ -41,7 +41,7 @@ v1 (below) only lifts a crease by part of its depth, so deep wrinkles stayed. v2
   plus the chin below the lower lip; Neck is unchanged. The old Wrinkles (a face without a search) use the same areas.
   **No double work with Eyes** (Dark Circles and Eye Bags, `fork/retouch-eyes.md`): Wrinkles runs first and takes away narrow
   creases (the ridge mask, a few pixels wide); Eyes then works on the lifted skin at another scale (Eye Bags flattens the shading
-  between 0.05 and 0.45 half eye widths and keeps what is finer, Dark Circles corrects the colour under the eye), so the two
+  between 0.025 and 0.45 half eye widths and keeps what is finer, Dark Circles corrects the colour under the eye), so the two
   never act on the same band.
 - **A row** `retouch.wrinkles` ("Smoothing Wrinkles") in the activity stack while it runs; its ✕ stops it. LaMa's own row is not
   added (the search's row is held by the fill's run). **A cancelled search drops every face's change** (the ones of faces it
