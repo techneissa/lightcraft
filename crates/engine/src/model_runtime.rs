@@ -26,6 +26,8 @@ pub const MODELS: &[(&str, &str)] = &[
     (crate::people_parsing::COREML_MODELS[0], "People Parts: Faces"),
     (crate::people_parsing::COREML_MODELS[1], "People Parts: Bodies"),
     (crate::people_parsing::COREML_MODELS[2], "People Parts: Face Mesh"),
+    (crate::people_parsing::COREML_MODELS[3], "People Parts: Bodies (BiSeNet Set)"),
+    (crate::people_parsing::COREML_MODELS[4], "People Parts: Sapiens2"),
 ];
 
 /// `<config>/model-runtimes.json`.

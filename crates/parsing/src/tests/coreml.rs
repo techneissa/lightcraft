@@ -6,21 +6,29 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::coreml::{CONVERTED, paths};
+use crate::coreml::{CONVERTED, packages, paths};
 use crate::image::Crop;
-use crate::models::{BODY_SEGFORMER_B3, FACE_MESH, FACE_SEGFORMER_B0, ModelFile, ModelSet};
+use crate::models::{BODY_SAPIENS2, BODY_SEGFORMER_B2, BODY_SEGFORMER_B3, FACE_MESH, FACE_SEGFORMER_B0, ModelFile, ModelSet};
 use crate::{Backend, Error, Parser, RgbImage, Runtimes};
 use lightcraft_coreml::Runtime;
 
 /// The two SegFormer parsers with a Core ML version.
 const PARSERS: [ModelFile; 2] = [FACE_SEGFORMER_B0, BODY_SEGFORMER_B3];
 
-/// The shared models folder, when it holds the SegFormer set and the Core ML packages of `packages`.
-fn shared_with(packages: &[ModelFile]) -> Option<PathBuf> {
+/// The models converted before #216 (the SegFormer set's).
+const SEGFORMER_SET: [ModelFile; 3] = [FACE_SEGFORMER_B0, BODY_SEGFORMER_B3, FACE_MESH];
+
+/// The shared models folder, when it holds `set` and the Core ML packages of `converted`.
+fn shared_set(set: ModelSet, converted: &[ModelFile]) -> Option<PathBuf> {
     let home = PathBuf::from(std::env::var_os("HOME")?);
     let dir = home.join("Library/Application Support/ArtCraft/models");
-    let ok = ModelSet::Segformer.installed_in(&dir) && packages.iter().all(|f| paths(&dir, f).0.is_dir());
+    let ok = set.installed_in(&dir) && converted.iter().all(|f| packages(&dir, f).iter().all(|(p, _)| p.is_dir()));
     ok.then_some(dir)
+}
+
+/// The shared models folder, when it holds the SegFormer set and the Core ML packages of `packages`.
+fn shared_with(packages: &[ModelFile]) -> Option<PathBuf> {
+    shared_set(ModelSet::Segformer, packages)
 }
 
 /// The shared models folder, when it holds the SegFormer set and both parsers' Core ML packages.
@@ -30,7 +38,7 @@ fn shared() -> Option<PathBuf> {
 
 /// Every model on `runtime`.
 fn all(runtime: Runtime) -> Runtimes {
-    Runtimes { face: runtime, body: runtime, mesh: runtime }
+    Runtimes::all(runtime)
 }
 
 fn link(from: &Path, to: &Path) {
@@ -44,12 +52,19 @@ fn link(from: &Path, to: &Path) {
 /// A models folder in a temporary folder holding links to the shared set's weights, and to the Core ML packages of
 /// `coreml`.
 fn linked(name: &str, models: &Path, coreml: &[ModelFile]) -> PathBuf {
+    linked_set(name, ModelSet::Segformer, models, coreml)
+}
+
+/// [`linked`] for `set`.
+fn linked_set(name: &str, set: ModelSet, models: &Path, coreml: &[ModelFile]) -> PathBuf {
     let dir = super::scratch(name);
-    for f in ModelSet::Segformer.files() {
+    for f in set.files() {
         link(&f.path_in(models), &f.path_in(&dir));
     }
     for f in coreml {
-        link(&paths(models, f).0, &paths(&dir, f).0);
+        for ((from, _), (to, _)) in packages(models, f).into_iter().zip(packages(&dir, f)) {
+            link(&from, &to);
+        }
     }
     dir
 }
@@ -297,7 +312,7 @@ fn the_core_ml_face_mesh_gives_the_points_candle_gives() {
 /// their own number.
 #[test]
 fn the_models_give_in_one_input_shape_what_they_gave_in_the_shapes_before() {
-    let Some(models) = shared_with(&CONVERTED) else {
+    let Some(models) = shared_with(&SEGFORMER_SET) else {
         lightcraft_testkit::skip!(Model, "the SegFormer set and its Core ML packages are not in the shared models folder");
         return;
     };
@@ -305,10 +320,10 @@ fn the_models_give_in_one_input_shape_what_they_gave_in_the_shapes_before() {
         lightcraft_testkit::skip!(Model, "Core ML runs only on a Mac");
         return;
     }
-    let dir = linked("coreml-one-shape", &models, &CONVERTED);
+    let dir = linked("coreml-one-shape", &models, &SEGFORMER_SET);
     let img = fixture();
 
-    let body = crate::coreml::load_body(&dir).unwrap();
+    let body = crate::coreml::load_body(&dir, &BODY_SEGFORMER_B3).unwrap();
     for side in [768, 1024] {
         let (w, h, px) = crate::body::pixels(&img, side);
         let tight = crate::coreml::BODY_CANVASES.iter().copied().filter(|&(ch, cw)| ch >= h && cw >= w).min_by_key(|&(ch, cw)| ch * cw).unwrap();
@@ -346,5 +361,71 @@ fn the_models_give_in_one_input_shape_what_they_gave_in_the_shapes_before() {
         let own = crate::facemesh::MeshOut::from_row(r).unwrap();
         let d = m.points.iter().zip(&own.points).flat_map(|(p, q)| p.iter().zip(q).map(|(x, y)| (x - y).abs())).fold(0.0f32, f32::max);
         assert!(d < 1e-3, "mesh face {k}: {d} px from a call of two");
+    }
+}
+
+/// Sapiens2 on Core ML (several passes packed in one call of each of its models) gives each pass the class
+/// probabilities candle gives it alone; the BiSeNet set's SegFormer-B2 clothes parser gives candle's map; without
+/// their packages Automatic is candle and Core ML an error (#216).
+#[test]
+fn sapiens2_and_the_bisenet_sets_clothes_parser_on_core_ml_give_what_candle_gives() {
+    if !lightcraft_coreml::available() {
+        lightcraft_testkit::skip!(Model, "Core ML runs only on a Mac");
+        return;
+    }
+    let dev = crate::best_device();
+    let img = fixture();
+    match shared_set(ModelSet::Sapiens2, &[BODY_SAPIENS2]) {
+        None => lightcraft_testkit::skip!(Model, "the Sapiens2 set and its Core ML packages are not in the shared models folder"),
+        Some(models) => {
+            let dir = linked_set("coreml-sapiens2", ModelSet::Sapiens2, &models, &[BODY_SAPIENS2]);
+            let only = |r: Runtime| Runtimes { parts: r, ..all(Runtime::Candle) };
+            let coreml = Parser::load_with(ModelSet::Sapiens2, &dir, dev.clone(), only(Runtime::CoreMl)).unwrap();
+            let candle = Parser::load_with(ModelSet::Sapiens2, &dir, dev.clone(), only(Runtime::Candle)).unwrap();
+            assert_eq!((coreml.parts_backend(), candle.parts_backend()), (Some(Backend::CoreMl), Some(Backend::Candle)));
+            // a whole photo of 3:2 and two boxes, one tall and one wide: one call, on the large canvas in two rows
+            let pass = |iw: usize, ih: usize, x0: f32, y0: f32, w: usize, h: usize| {
+                let (sx, sy) = (200.0 / iw as f32, 300.0 / ih as f32);
+                let px = crate::image::sample_grid(&img, iw, ih, sx.max(sy), [0.485, 0.456, 0.406], |u, v| (x0 + u * sx, y0 + v * sy));
+                crate::crops::Pass { px, iw, ih, w, h }
+            };
+            let whole = {
+                let (iw, ih) = crate::fuse::input_size(img.width, img.height);
+                let (sx, sy) = (img.width as f32 / iw as f32, img.height as f32 / ih as f32);
+                let px = crate::image::sample_grid(&img, iw, ih, sx.max(sy), [0.485, 0.456, 0.406], |u, v| (u * sx, v * sy));
+                crate::crops::Pass { px, iw, ih, w: 120, h: 80 }
+            };
+            let passes = [whole, pass(192, 384, 200.0, 60.0, 50, 100), pass(384, 192, 150.0, 150.0, 100, 50)];
+            let (a, b) = (coreml.parts_probs(&passes).unwrap(), candle.parts_probs(&passes).unwrap());
+            assert_eq!(a.len(), 3);
+            for (k, ((x, y), p)) in a.iter().zip(&b).zip(&passes).enumerate() {
+                assert_eq!(x.len(), y.len());
+                let agree = argmax_agreement(x, y, p.w * p.h);
+                let mean = x.iter().zip(y).map(|(u, v)| (u - v).abs()).sum::<f32>() / x.len().max(1) as f32;
+                assert!(agree >= 0.99 && mean < 0.005, "pass {k}: {agree} agree, mean difference {mean}");
+            }
+            // no packages: Automatic is candle, Core ML an error that says so
+            let bare = linked_set("coreml-sapiens2-missing", ModelSet::Sapiens2, &models, &[]);
+            let p = Parser::load_with(ModelSet::Sapiens2, &bare, dev.clone(), Runtimes::default()).unwrap();
+            assert_eq!(p.parts_backend(), Some(Backend::Candle));
+            let e = Parser::load_with(ModelSet::Sapiens2, &bare, dev.clone(), only(Runtime::CoreMl)).err().unwrap();
+            assert!(matches!(&e, Error::Model(m) if m.contains("Core ML")), "{e}");
+        }
+    }
+    match shared_set(ModelSet::BiSeNet, &[BODY_SEGFORMER_B2]) {
+        None => lightcraft_testkit::skip!(Model, "the BiSeNet set and its clothes parser's Core ML package are not in the shared models folder"),
+        Some(models) => {
+            let dir = linked_set("coreml-bisenet-body", ModelSet::BiSeNet, &models, &[BODY_SEGFORMER_B2]);
+            let only = |r: Runtime| Runtimes { body_b2: r, ..all(Runtime::Candle) };
+            let coreml = Parser::load_with(ModelSet::BiSeNet, &dir, dev.clone(), only(Runtime::CoreMl)).unwrap();
+            let candle = Parser::load_with(ModelSet::BiSeNet, &dir, dev.clone(), only(Runtime::Candle)).unwrap();
+            assert_eq!(coreml.backends(), (Backend::Candle, Backend::CoreMl));
+            let (a, b) = (coreml.body_map(&img, 768).unwrap(), candle.body_map(&img, 768).unwrap());
+            assert_eq!((a.w, a.h), (b.w, b.h));
+            let agree = argmax_agreement(&a.probs, &b.probs, a.w * a.h);
+            assert!(agree >= 0.99, "B2 body: {agree}");
+            let bare = linked_set("coreml-bisenet-missing", ModelSet::BiSeNet, &models, &[]);
+            assert_eq!(Parser::load_with(ModelSet::BiSeNet, &bare, dev, Runtimes::default()).unwrap().backends(), (Backend::Candle, Backend::Candle));
+        }
     }
 }

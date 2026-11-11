@@ -213,24 +213,67 @@ fn grow(r: &NormRect, by: f32) -> NormRect {
     NormRect::new(r.x0 - mx, r.y0 - my, r.x1 + mx, r.y1 + my)
 }
 
+/// One Sapiens2 pass: the picture it sees (three planes of values 0 to 1, `iw × ih`, sides multiples of the patch) and
+/// the grid its class probabilities are wanted on (`w × h`).
+pub struct Pass {
+    pub px: Vec<f32>,
+    pub iw: usize,
+    pub ih: usize,
+    pub w: usize,
+    pub h: usize,
+}
+
+/// Runs Sapiens2's passes over a photo.
+pub trait Runner {
+    /// The input a pass wanted at `w × h` gets (Core ML's canvas holds passes up to a size).
+    fn fit(&self, w: usize, h: usize) -> (usize, usize) {
+        (w, h)
+    }
+
+    /// Each pass's class probabilities on its grid (class-major), in order; fewer only when `cancelled`.
+    fn probs(&self, passes: &[Pass], cancelled: &dyn Fn() -> bool) -> Result<Vec<Vec<f32>>>;
+}
+
+/// Sapiens2 on candle (or a stand-in in tests), one pass at a time.
+pub struct OnCandle<'a> {
+    pub net: Forward<'a>,
+    pub dev: &'a Device,
+}
+
+impl Runner for OnCandle<'_> {
+    fn probs(&self, passes: &[Pass], cancelled: &dyn Fn() -> bool) -> Result<Vec<Vec<f32>>> {
+        let mut out = Vec::with_capacity(passes.len());
+        for p in passes {
+            if cancelled() {
+                break;
+            }
+            let logits = (self.net)(&sapiens::input(p.px.clone(), p.iw, p.ih, self.dev)?)?;
+            out.push(probs_of(&logits, p.w, p.h)?);
+        }
+        Ok(out)
+    }
+}
+
+/// The class probabilities (class-major) on a `w × h` grid of Sapiens2's logits `1 × 29 × H × W`.
+pub(crate) fn probs_of(logits: &Tensor, w: usize, h: usize) -> Result<Vec<f32>> {
+    let down = crate::nn::resize(logits, h, w, false)?;
+    let probs = candle_nn::ops::softmax(&down, 1)?.flatten_all()?.to_vec1::<f32>()?;
+    if probs.len() != sapiens::CLASSES * w * h {
+        return Err(Error::Model(format!("Sapiens2 gave {} values, not {}", probs.len(), sapiens::CLASSES * w * h)));
+    }
+    Ok(probs)
+}
+
 /// The clothes parser's `map` with Sapiens2's say inside the people's boxes (`faces`: the people's faces, largest
 /// first). The first [`MAX_CROPS`] people get a pass of their own; a cell takes the pass of the box it belongs to, or
 /// the whole photo's pass when that box had none (a portrait filling the frame, the ninth person), which runs only
-/// then.
-pub fn parts_map(net: Forward, map: BodyMap, img: &RgbImage, faces: &[NormRect], dev: &Device, cancelled: &dyn Fn() -> bool) -> Result<BodyMap> {
-    parts_map_with(net, map, img, faces, dev, cancelled, MAX_CROPS)
+/// then. The passes run together (`run`: Core ML packs several in a call).
+pub fn parts_map(run: &dyn Runner, map: BodyMap, img: &RgbImage, faces: &[NormRect], cancelled: &dyn Fn() -> bool) -> Result<BodyMap> {
+    parts_map_with(run, map, img, faces, cancelled, MAX_CROPS)
 }
 
 /// [`parts_map`] with at most `max` passes of their own.
-fn parts_map_with(
-    net: Forward,
-    map: BodyMap,
-    img: &RgbImage,
-    faces: &[NormRect],
-    dev: &Device,
-    cancelled: &dyn Fn() -> bool,
-    max: usize,
-) -> Result<BodyMap> {
+fn parts_map_with(run: &dyn Runner, map: BodyMap, img: &RgbImage, faces: &[NormRect], cancelled: &dyn Fn() -> bool, max: usize) -> Result<BodyMap> {
     let (people, stands) = placed(&map, faces, img);
     if people.is_empty() {
         return Ok(map);
@@ -239,73 +282,75 @@ fn parts_map_with(
     let cropped = crops(&people, max);
     let owner = owners(&people, &stands, w, h);
     let uncropped = |k: &usize| !cropped.get(*k).copied().unwrap_or(false);
-    let mut probs = if owner.iter().flatten().any(uncropped) { crate::fuse::run(net, img, w, h, dev)? } else { vec![0.0; sapiens::CLASSES * w * h] };
+    let whole = owner.iter().flatten().any(uncropped);
     let mine: Vec<(usize, &NormRect)> = people.iter().enumerate().filter(|(k, _)| !uncropped(k)).collect();
     let samples = samples(mine.iter().map(|(_, b)| cells(b, w, h)), CELL_SAMPLES);
+    let mut passes = Vec::with_capacity(mine.len() + 1);
+    if whole {
+        passes.push(crate::fuse::whole_pass(run, img, w, h));
+    }
+    let mut boxes = Vec::with_capacity(mine.len());
     for (k, b) in mine {
-        if cancelled() {
-            return Err(Error::Cancelled);
+        let at = cells(b, w, h);
+        if at.2 < 2 || at.3 < 2 {
+            continue;
         }
-        let at = Passes { net, img, grid: (w, h), samples, dev };
-        at.place(&mut probs, b, |i| owner.get(i).copied().flatten() == Some(k))?;
+        passes.push(box_pass(run, img, (w, h), samples, at));
+        boxes.push((k, at));
+    }
+    if cancelled() {
+        return Err(Error::Cancelled);
+    }
+    let out = run.probs(&passes, cancelled)?;
+    if cancelled() {
+        return Err(Error::Cancelled);
+    }
+    if out.len() != passes.len() {
+        return Err(Error::Model(format!("Sapiens2 gave {} passes, not {}", out.len(), passes.len())));
+    }
+    let mut out = out.into_iter();
+    let n = w * h;
+    let mut probs = if whole { out.next().unwrap_or_default() } else { vec![0.0; sapiens::CLASSES * n] };
+    if probs.len() != sapiens::CLASSES * n {
+        return Err(Error::Model(format!("Sapiens2 gave {} values, not {}", probs.len(), sapiens::CLASSES * n)));
+    }
+    for ((k, at), local) in boxes.into_iter().zip(out) {
+        place(&mut probs, &local, (w, h), at, |i| owner.get(i).copied().flatten() == Some(k));
     }
     Ok(crate::fuse::fuse(&map, &probs, &presence(&people, w, h), faces))
 }
 
-/// What every person's pass shares: the network, the photo, the body map's grid, model pixels per cell, the device.
-struct Passes<'a> {
-    net: Forward<'a>,
-    img: &'a RgbImage,
-    grid: (usize, usize),
-    samples: f32,
-    dev: &'a Device,
-}
-
-impl Passes<'_> {
-    /// Run Sapiens2 over box `b` and write its class probabilities into `probs` (class-major on the grid) at the cells
-    /// where `mine(cell)`.
-    fn place(&self, probs: &mut [f32], b: &NormRect, mine: impl Fn(usize) -> bool) -> Result<()> {
-        let (w, h) = self.grid;
-        let n = w * h;
-        let (gx0, gy0, cw, ch) = cells(b, w, h);
-        if cw < 2 || ch < 2 {
-            return Ok(());
-        }
-        let local = self.pass((gx0, gy0, cw, ch))?;
-        for y in 0..ch {
-            for x in 0..cw {
-                let i = (gy0 + y) * w + gx0 + x;
-                if !mine(i) {
-                    continue;
-                }
-                for c in 0..sapiens::CLASSES {
-                    if let (Some(o), Some(&p)) = (probs.get_mut(c * n + i), local.get(c * cw * ch + y * cw + x)) {
-                        *o = p;
-                    }
+/// Write a box's class probabilities `local` (over its grid cells `at`: `x0, y0, width, height`) into `probs`
+/// (class-major on the `w × h` grid) at the cells where `mine(cell)`.
+fn place(probs: &mut [f32], local: &[f32], (w, h): (usize, usize), at: (usize, usize, usize, usize), mine: impl Fn(usize) -> bool) {
+    let n = w * h;
+    let (gx0, gy0, cw, ch) = at;
+    for y in 0..ch {
+        for x in 0..cw {
+            let i = (gy0 + y) * w + gx0 + x;
+            if !mine(i) {
+                continue;
+            }
+            for c in 0..sapiens::CLASSES {
+                if let (Some(o), Some(&p)) = (probs.get_mut(c * n + i), local.get(c * cw * ch + y * cw + x)) {
+                    *o = p;
                 }
             }
         }
-        Ok(())
     }
+}
 
-    /// Sapiens2's class probabilities over the grid cells `cells` (`x0, y0, width, height`), from a pass over that
-    /// part of the photo alone.
-    fn pass(&self, cells: (usize, usize, usize, usize)) -> Result<Vec<f32>> {
-        let (gx0, gy0, cw, ch) = cells;
-        let img = self.img;
-        let (sx, sy) = (img.width as f32 / self.grid.0 as f32, img.height as f32 / self.grid.1 as f32);
-        let (px0, py0, pw, ph) = (gx0 as f32 * sx, gy0 as f32 * sy, cw as f32 * sx, ch as f32 * sy);
-        let (iw, ih) = input_size(cw as f32 * self.samples, ch as f32 * self.samples);
-        let (ux, uy) = (pw / iw as f32, ph / ih as f32);
-        let px = sample_grid(img, iw, ih, ux.max(uy), [0.485, 0.456, 0.406], |u, v| (px0 + u * ux, py0 + v * uy));
-        let logits = (self.net)(&sapiens::input(px, iw, ih, self.dev)?)?;
-        let down = crate::nn::resize(&logits, ch, cw, false)?;
-        let probs = candle_nn::ops::softmax(&down, 1)?.flatten_all()?.to_vec1::<f32>()?;
-        if probs.len() != sapiens::CLASSES * cw * ch {
-            return Err(Error::Model(format!("Sapiens2 gave {} values, not {}", probs.len(), sapiens::CLASSES * cw * ch)));
-        }
-        Ok(probs)
-    }
+/// The pass over the grid cells `at` (`x0, y0, width, height`) of a `grid` over `img`, at `samples` model pixels a
+/// cell: that part of the photo alone, its probabilities wanted on those cells.
+fn box_pass(run: &dyn Runner, img: &RgbImage, grid: (usize, usize), samples: f32, at: (usize, usize, usize, usize)) -> Pass {
+    let (gx0, gy0, cw, ch) = at;
+    let (sx, sy) = (img.width as f32 / grid.0 as f32, img.height as f32 / grid.1 as f32);
+    let (px0, py0, pw, ph) = (gx0 as f32 * sx, gy0 as f32 * sy, cw as f32 * sx, ch as f32 * sy);
+    let (iw, ih) = input_size(cw as f32 * samples, ch as f32 * samples);
+    let (iw, ih) = run.fit(iw, ih);
+    let (ux, uy) = (pw / iw as f32, ph / ih as f32);
+    let px = sample_grid(img, iw, ih, ux.max(uy), [0.485, 0.456, 0.406], |u, v| (px0 + u * ux, py0 + v * uy));
+    Pass { px, iw, ih, w: cw, h: ch }
 }
 
 /// How much a box's result counts at cell `at` of its `len` cells along one axis (the box starts at cell `start` of
@@ -455,7 +500,7 @@ mod tests {
         let img = photo(&[((2, 7, 5, 10), [255, 0, 0]), ((21, 15, 24, 18), [255, 0, 0])]);
         let faces = [NormRect::new(0.0, 0.0, 0.1, 0.15), NormRect::new(0.5, 0.35, 0.58, 0.48)];
         let net = |x: &Tensor| logits(x, &by_colour);
-        let m = parts_map(&net, nothing(), &img, &faces, &Device::Cpu, &|| false).unwrap();
+        let m = parts_map(&OnCandle { net: &net, dev: &Device::Cpu }, nothing(), &img, &faces, &|| false).unwrap();
         for (x0, y0, x1, y1) in [(2, 7, 5, 10), (21, 15, 24, 18)] {
             for y in y0..y1 {
                 for x in x0..x1 {
@@ -479,7 +524,7 @@ mod tests {
             let main = if mean(0)? > mean(2)? { class::UPPER_CLOTHING } else { class::LOWER_CLOTHING };
             logits(x, &|_, _, _, _, _| main)
         };
-        let m = parts_map(&net, nothing(), &img, &faces, &Device::Cpu, &|| false).unwrap();
+        let m = parts_map(&OnCandle { net: &net, dev: &Device::Cpu }, nothing(), &img, &faces, &|| false).unwrap();
         let people = people_boxes(&nothing(), &faces, &img);
         assert!(people[0].x1 > people[1].x0, "the boxes overlap: {people:?}");
         let overlap = ((people[1].x0 * 40.0).ceil() as usize + (people[0].x1 * 40.0).floor() as usize) / 2;
@@ -500,7 +545,7 @@ mod tests {
         let (a, b) = (cells(&people[0], 40, 24), cells(&people[1], 40, 24));
         assert!(a.0 + a.2 >= b.0 && a.0 + a.2 <= b.0 + 1, "the boxes meet with at most a cell in common: {a:?} {b:?}");
         let net = |x: &Tensor| logits(x, &by_colour);
-        let m = parts_map(&net, nothing(), &img, &faces, &Device::Cpu, &|| false).unwrap();
+        let m = parts_map(&OnCandle { net: &net, dev: &Device::Cpu }, nothing(), &img, &faces, &|| false).unwrap();
         for y in 6..18 {
             for x in 11..29 {
                 assert!(atr(&m, UPPER, x, y) > 0.95, "({x}, {y}) breaks the shirt: {}", atr(&m, UPPER, x, y));
@@ -523,7 +568,7 @@ mod tests {
             let c = if (w, h) == whole { class::HAIR } else { class::UPPER_CLOTHING };
             logits(x, &|_, _, _, _, _| c)
         };
-        let m = parts_map_with(&net, nothing(), &img, &faces, &Device::Cpu, &|| false, 1).unwrap();
+        let m = parts_map_with(&OnCandle { net: &net, dev: &Device::Cpu }, nothing(), &img, &faces, &|| false, 1).unwrap();
         let people = people_boxes(&nothing(), &faces, &img);
         assert_eq!(crops(&people, 1), vec![true, false]);
         let small = people[1];

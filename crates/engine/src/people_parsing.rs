@@ -337,20 +337,19 @@ impl PeopleParsing {
     /// (the loaded models are dropped). False for a model that is not one of them. Never waits for a load going (the
     /// Settings window calls it).
     pub fn set_runtime(&self, model: &str, runtime: crate::model_runtime::Runtime) -> bool {
-        let Some(k) = COREML_MODELS.iter().position(|m| *m == model) else { return false };
+        if !COREML_MODELS.contains(&model) {
+            return false;
+        }
         #[cfg(not(target_arch = "wasm32"))]
         {
             // the runtimes change before the set goes stale, so a load that read the old ones is not kept
             let mut r = lock(&self.inner.runtimes);
-            let slot = match k {
-                0 => &mut r.face,
-                1 => &mut r.body,
-                _ => &mut r.mesh,
-            };
-            *slot = runtime;
+            if let Some(slot) = r.slot(model) {
+                *slot = runtime;
+            }
         }
         #[cfg(target_arch = "wasm32")]
-        let _ = (k, runtime);
+        let _ = runtime;
         self.unload();
         true
     }
@@ -383,6 +382,9 @@ impl PeopleParsing {
             }
             if lightcraft_parsing::models::FACE_MESH.folder == model {
                 return Some(l.parser.mesh_backend().id());
+            }
+            if l.set.parts_file().is_some_and(|f| f.folder == model) {
+                return l.parser.parts_backend().map(lightcraft_parsing::Backend::id);
             }
         }
         let _ = model;
@@ -728,11 +730,14 @@ impl PeopleParsing {
 }
 
 /// The parsing models with a Core ML version (`fork/coreml.md`): their ids (folders) in `models.runtime` and Settings;
-/// the face parser, the clothes parser, the face mesh.
-pub const COREML_MODELS: [&str; 3] = [
+/// the SegFormer face parser, the SegFormer-B3 clothes parser, the face mesh, the BiSeNet set's SegFormer-B2 clothes
+/// parser and Sapiens2.
+pub const COREML_MODELS: [&str; 5] = [
     lightcraft_parsing::models::FACE_SEGFORMER_B0.folder,
     lightcraft_parsing::models::BODY_SEGFORMER_B3.folder,
     lightcraft_parsing::models::FACE_MESH.folder,
+    lightcraft_parsing::models::BODY_SEGFORMER_B2.folder,
+    lightcraft_parsing::models::BODY_SAPIENS2.folder,
 ];
 
 /// `p` with its Entire Person edges drawn by BiRefNet Matting from `img` (the picture it was parsed from).

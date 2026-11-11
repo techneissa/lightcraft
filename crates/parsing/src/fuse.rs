@@ -3,13 +3,10 @@
 //! classes for. The result is a body map in the clothes parser's 18 classes, so the rest of the parse (people, parts,
 //! faces) runs as for the other sets.
 
-use candle_core::Device;
-
 use crate::body::{BodyMap, CLASSES as ATR};
 use crate::image::{RgbImage, sample_grid};
 use crate::sapiens::{self, class as s};
 use crate::types::NormRect;
-use crate::{Error, Result};
 
 /// The clothes parser's classes (ATR order).
 mod atr {
@@ -86,19 +83,13 @@ pub fn input_size(width: usize, height: usize) -> (usize, usize) {
     (w as usize, h as usize)
 }
 
-/// Sapiens2's class probabilities over the whole photo, on a `w × h` grid (class-major), for the clothes parser's grid.
-pub fn run(net: crate::crops::Forward, img: &RgbImage, w: usize, h: usize, dev: &Device) -> Result<Vec<f32>> {
+/// Sapiens2's pass over the whole photo, its class probabilities wanted on the clothes parser's `w × h` grid.
+pub fn whole_pass(run: &dyn crate::crops::Runner, img: &RgbImage, w: usize, h: usize) -> crate::crops::Pass {
     let (iw, ih) = input_size(img.width, img.height);
+    let (iw, ih) = run.fit(iw, ih);
     let (sx, sy) = (img.width as f32 / iw as f32, img.height as f32 / ih as f32);
     let px = sample_grid(img, iw, ih, sx.max(sy), [0.485, 0.456, 0.406], |u, v| (u * sx, v * sy));
-    let x = sapiens::input(px, iw, ih, dev)?;
-    let logits = net(&x)?;
-    let down = crate::nn::resize(&logits, h, w, false)?;
-    let probs = candle_nn::ops::softmax(&down, 1)?.flatten_all()?.to_vec1::<f32>()?;
-    if probs.len() != sapiens::CLASSES * w * h {
-        return Err(Error::Model(format!("Sapiens2 gave {} values, not {}", probs.len(), sapiens::CLASSES * w * h)));
-    }
-    Ok(probs)
+    crate::crops::Pass { px, iw, ih, w, h }
 }
 
 /// Under a face, down to this many face heights below its chin, Sapiens2's face-and-neck class is neck (Body Skin).
@@ -181,7 +172,7 @@ fn softmax(t: &candle_core::Tensor) -> Vec<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use candle_core::Tensor;
+    use candle_core::{Device, Tensor};
 
     fn one_pixel(atr_probs: &[(usize, f32)], parts: &[(usize, f32)]) -> BodyMap {
         let mut a = vec![0.0; ATR];

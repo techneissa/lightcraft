@@ -40,13 +40,45 @@ impl Default for Options {
     }
 }
 
-/// Which engine runs the face parser, the clothes parser and the face mesh. Of the parsers only the SegFormer set's two
-/// have a Core ML version; the others always run on candle. Every set has the same face mesh.
+/// Which engine runs each model with a Core ML version ([`coreml::CONVERTED`]): the face parser (only the SegFormer
+/// set's has one, so Core ML is an error for BiSeNet's), the clothes parsers (SegFormer-B3 of the SegFormer and
+/// Sapiens2 sets, SegFormer-B2 of the BiSeNet set), Sapiens2 and the face mesh every set has.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Runtimes {
     pub face: Runtime,
+    /// SegFormer-B3.
     pub body: Runtime,
+    /// SegFormer-B2.
+    pub body_b2: Runtime,
+    /// Sapiens2.
+    pub parts: Runtime,
     pub mesh: Runtime,
+}
+
+impl Runtimes {
+    /// Every model on `runtime`.
+    pub fn all(runtime: Runtime) -> Self {
+        Self { face: runtime, body: runtime, body_b2: runtime, parts: runtime, mesh: runtime }
+    }
+
+    /// The choice for the model in `folder` (its id), when it has a Core ML version.
+    pub fn slot(&mut self, folder: &str) -> Option<&mut Runtime> {
+        use crate::models::{BODY_SAPIENS2, BODY_SEGFORMER_B2, BODY_SEGFORMER_B3, FACE_MESH, FACE_SEGFORMER_B0};
+        Some(match folder {
+            f if f == FACE_SEGFORMER_B0.folder => &mut self.face,
+            f if f == BODY_SEGFORMER_B3.folder => &mut self.body,
+            f if f == BODY_SEGFORMER_B2.folder => &mut self.body_b2,
+            f if f == BODY_SAPIENS2.folder => &mut self.parts,
+            f if f == FACE_MESH.folder => &mut self.mesh,
+            _ => return None,
+        })
+    }
+
+    /// The choice for `file` (Automatic for a model without a Core ML version).
+    pub fn of(&self, file: &ModelFile) -> Runtime {
+        let mut copy = *self;
+        copy.slot(file.folder).map_or(Runtime::Automatic, |r| *r)
+    }
 }
 
 /// Which engine runs a model.
@@ -67,12 +99,13 @@ impl Backend {
 
 pub(crate) type CoreMlResult<T> = std::result::Result<T, lightcraft_coreml::Error>;
 
-/// One parser of a set: its Core ML version when it has one and it loaded, and its candle port, loaded at once when
-/// it is the one that runs, else only when Core ML fails.
-pub(crate) struct Engine<T> {
+/// One parser of a set: its Core ML version when it has one and it loaded (`M`: one model, or Sapiens2's
+/// [`coreml::sapiens::Models`]), and its candle port, loaded at once when it is the one that runs, else only when Core
+/// ML fails.
+pub(crate) struct Engine<T, M = lightcraft_coreml::Model> {
     label: &'static str,
     runtime: Runtime,
-    coreml: Option<lightcraft_coreml::Model>,
+    coreml: Option<M>,
     /// Set when Core ML failed on a photo: candle runs from then on.
     failed: AtomicBool,
     candle: OnceLock<std::result::Result<T, String>>,
@@ -81,12 +114,12 @@ pub(crate) struct Engine<T> {
     fail_next: AtomicBool,
 }
 
-impl<T> Engine<T> {
+impl<T, M> Engine<T, M> {
     /// `coreml`: the loader of `file`'s Core ML version, when it has one. `candle`: the candle port's loader.
     pub(crate) fn load(
         file: &ModelFile,
         runtime: Runtime,
-        coreml: Option<&dyn Fn() -> CoreMlResult<lightcraft_coreml::Model>>,
+        coreml: Option<&dyn Fn() -> CoreMlResult<M>>,
         candle: impl FnOnce() -> Result<T>,
     ) -> Result<Self> {
         let loaded = match (runtime, coreml) {
@@ -125,7 +158,7 @@ impl<T> Engine<T> {
     /// Run on Core ML, or on candle (loaded by `load_candle` the first time it is needed).
     pub(crate) fn run<R>(
         &self,
-        on_coreml: impl FnOnce(&lightcraft_coreml::Model) -> CoreMlResult<R>,
+        on_coreml: impl FnOnce(&M) -> CoreMlResult<R>,
         on_candle: impl FnOnce(&T) -> Result<R>,
         load_candle: impl FnOnce() -> Result<T>,
     ) -> Result<R> {
@@ -177,7 +210,7 @@ pub struct Parser {
     face_model: FaceModel,
     body: Engine<Segformer>,
     /// The set's body-part parser (Sapiens2), which decides where skin, hair and clothes are.
-    parts: Option<Sapiens2>,
+    parts: Option<Engine<Sapiens2, coreml::sapiens::Models>>,
     mesh: Engine<FaceMesh>,
     dev: Device,
 }
@@ -229,6 +262,19 @@ pub(crate) fn load_mesh_net(models: &Path, dev: &Device) -> Result<FaceMesh> {
     FaceMesh::load(open(&file, models)?.as_ref(), dev).map_err(|e| named(&file, e))
 }
 
+fn load_parts_net(file: &ModelFile, models: &Path, dev: &Device) -> Result<Sapiens2> {
+    Sapiens2::load(&Params::new(open(file, models)?, dev.clone(), Layout::Ohwi)).map_err(|e| named(file, e))
+}
+
+/// Sapiens2 on Core ML: its three models, and the rotary periods from its weights (which candle reads too).
+fn load_parts_coreml(file: &ModelFile, models: &Path) -> CoreMlResult<coreml::sapiens::Models> {
+    let loaded = coreml::sapiens::load(models)?;
+    let periods = open(file, models)
+        .and_then(|w| crate::sapiens::periods(&Params::new(w, Device::Cpu, Layout::Ohwi)))
+        .map_err(|e| lightcraft_coreml::Error::Load(format!("{}: {e}", file.label)))?;
+    Ok(loaded.with_periods(periods))
+}
+
 fn load_body_net(set: ModelSet, models: &Path, dev: &Device) -> Result<Segformer> {
     let file = set.body_file();
     let body = Segformer::load(&Params::new(open(&file, models)?, dev.clone(), Layout::Oihw)).map_err(|e| named(&file, e))?;
@@ -248,22 +294,26 @@ impl Parser {
         Self::load_with(set, models, dev, Runtimes::default())
     }
 
-    /// Load `set` with its face and clothes parsers and the face mesh on the engines `runtimes` asks for; Sapiens2, and
-    /// candle's models, run on `dev`.
+    /// Load `set` with its models on the engines `runtimes` asks for; candle's models run on `dev`.
     pub fn load_with(set: ModelSet, models: &Path, dev: Device, runtimes: Runtimes) -> Result<Self> {
         let (face_file, body_file) = (set.face_file(), set.body_file());
         let face_coreml = || coreml::load_face(models);
-        let body_coreml = || coreml::load_body(models);
+        let body_coreml = || coreml::load_body(models, &body_file);
         let has = |f: &ModelFile| coreml::CONVERTED.contains(f);
         let face_loader: Option<&dyn Fn() -> CoreMlResult<lightcraft_coreml::Model>> = has(&face_file).then_some(&face_coreml);
         let body_loader: Option<&dyn Fn() -> CoreMlResult<lightcraft_coreml::Model>> = has(&body_file).then_some(&body_coreml);
         crate::profile::mark("load start");
+        // (the face choice is the set's face parser's: Core ML is an error for BiSeNet's, which has no Core ML version)
         let face = Engine::load(&face_file, runtimes.face, face_loader, || load_face_net(set, models, &dev))?;
         crate::profile::mark("load face");
-        let body = Engine::load(&body_file, runtimes.body, body_loader, || load_body_net(set, models, &dev))?;
+        let body = Engine::load(&body_file, runtimes.of(&body_file), body_loader, || load_body_net(set, models, &dev))?;
         crate::profile::mark("load body");
         let parts = match set.parts_file() {
-            Some(f) => Some(Sapiens2::load(&Params::new(open(&f, models)?, dev.clone(), Layout::Ohwi)).map_err(|e| named(&f, e))?),
+            Some(f) => {
+                let parts_coreml = || load_parts_coreml(&f, models);
+                let loader: &dyn Fn() -> CoreMlResult<coreml::sapiens::Models> = &parts_coreml;
+                Some(Engine::load(&f, runtimes.parts, Some(loader), || load_parts_net(&f, models, &dev))?)
+            }
             None => None,
         };
         let mesh_coreml = || coreml::load_mesh(models);
@@ -290,6 +340,11 @@ impl Parser {
     /// The engine the next photo's face mesh runs on.
     pub fn mesh_backend(&self) -> Backend {
         self.mesh.backend()
+    }
+
+    /// The engine the next photo's Sapiens2 passes run on (`None`: the set has no Sapiens2).
+    pub fn parts_backend(&self) -> Option<Backend> {
+        self.parts.as_ref().map(Engine::backend)
     }
 
     /// The face mesh of `crops` (of [`crate::facemesh::SIDE`]²).
@@ -345,6 +400,14 @@ impl Parser {
         )
     }
 
+    /// Sapiens2's class probabilities for `passes`, on the engine it runs on (tests).
+    #[cfg(test)]
+    pub(crate) fn parts_probs(&self, passes: &[crate::crops::Pass]) -> Result<Vec<Vec<f32>>> {
+        use crate::crops::Runner;
+        let engine = self.parts.as_ref().ok_or_else(|| Error::Model("the set has no Sapiens2".into()))?;
+        PartsRunner { engine, parser: self }.probs(passes, &|| false)
+    }
+
     /// Make the face parser's next Core ML call fail, as a GPU error on a photo would.
     #[cfg(test)]
     pub(crate) fn fail_next_face_call(&self) {
@@ -379,8 +442,9 @@ impl Parser {
         }
         let rects: Vec<NormRect> = faces.iter().map(|f| f.rect).collect();
         let map = match &self.parts {
-            Some(net) => {
-                let m = crate::crops::parts_map(&|x| net.forward(x), map, img, &rects, &self.dev, cancelled)?;
+            Some(engine) => {
+                let runner = PartsRunner { engine, parser: self };
+                let m = crate::crops::parts_map(&runner, map, img, &rects, cancelled)?;
                 prof.step("people up close");
                 crate::profile::mark("sapiens2");
                 m
@@ -436,6 +500,30 @@ impl Parser {
         out.people = people;
         crate::profile::mark("finish");
         Ok(out)
+    }
+}
+
+/// Sapiens2's passes on its engine: Core ML several a call, candle one at a time (also when Core ML fails on them).
+struct PartsRunner<'a> {
+    engine: &'a Engine<Sapiens2, coreml::sapiens::Models>,
+    parser: &'a Parser,
+}
+
+impl crate::crops::Runner for PartsRunner<'_> {
+    fn fit(&self, w: usize, h: usize) -> (usize, usize) {
+        if self.engine.backend() == Backend::CoreMl { coreml::sapiens::fit(w, h) } else { (w, h) }
+    }
+
+    fn probs(&self, passes: &[crate::crops::Pass], cancelled: &dyn Fn() -> bool) -> Result<Vec<Vec<f32>>> {
+        let dev = &self.parser.dev;
+        self.engine.run(
+            |m| coreml::sapiens::probs(m, passes, cancelled),
+            |net| crate::crops::OnCandle { net: &|x| net.forward(x), dev }.probs(passes, cancelled),
+            || match self.parser.set.parts_file() {
+                Some(f) => load_parts_net(&f, &self.parser.models, dev),
+                None => Err(Error::Model("the set has no Sapiens2".into())),
+            },
+        )
     }
 }
 

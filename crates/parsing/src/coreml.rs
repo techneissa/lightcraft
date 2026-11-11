@@ -1,6 +1,7 @@
-//! The SegFormer set's two parsers and every set's face mesh through Apple's Core ML on the GPU (issue #105,
-//! `fork/coreml.md`): the face parser (SegFormer-B0) and the clothes parser (SegFormer-B3), converted once by
-//! `tools/convert-coreml-parsing.py`, and MediaPipe's face mesh, by `tools/convert-coreml-facemesh.py`.
+//! The people-parts models through Apple's Core ML on the GPU (issues #105, #216, `fork/coreml.md`): the face parser
+//! (SegFormer-B0) and the clothes parsers (SegFormer-B3, and the BiSeNet set's SegFormer-B2), converted once by
+//! `tools/convert-coreml-parsing.py`; MediaPipe's face mesh, by `tools/convert-coreml-facemesh.py`; and Sapiens2, by
+//! `tools/convert-coreml-sapiens2.py` (its three models: [`sapiens`]).
 //!
 //! The converted models live next to the candle weights in the models folder: `<models>/<folder>/coreml/<folder>.mlpackage`,
 //! compiled once for this Mac into `<folder>.mlmodelc` beside it (again when the package changes). candle stays the
@@ -27,7 +28,9 @@ pub use lightcraft_coreml::Runtime;
 use lightcraft_coreml::{ComputeUnits, Error, Model};
 
 use crate::facemesh::MeshOut;
-use crate::models::{BODY_SEGFORMER_B3, FACE_MESH, FACE_SEGFORMER_B0, ModelFile};
+use crate::models::{BODY_SAPIENS2, BODY_SEGFORMER_B2, BODY_SEGFORMER_B3, FACE_MESH, FACE_SEGFORMER_B0, ModelFile};
+
+pub(crate) mod sapiens;
 
 /// The Core ML files' folder inside a model's folder.
 pub const COREML_DIR: &str = "coreml";
@@ -73,19 +76,29 @@ pub const BODY_CANVASES: [(usize, usize); 28] = [
 ];
 
 /// The model files that have a Core ML version, with the id Settings and `models.runtime` use for each (its folder).
-pub const CONVERTED: [ModelFile; 3] = [FACE_SEGFORMER_B0, BODY_SEGFORMER_B3, FACE_MESH];
+pub const CONVERTED: [ModelFile; 5] = [FACE_SEGFORMER_B0, BODY_SEGFORMER_B3, FACE_MESH, BODY_SEGFORMER_B2, BODY_SAPIENS2];
 
-/// Where `file`'s Core ML package and compiled model are under `models`.
+/// Where `file`'s Core ML package and compiled model are under `models` (Sapiens2's first, the backbone: [`packages`]).
 pub fn paths(models: &Path, file: &ModelFile) -> (PathBuf, PathBuf) {
+    let name = if *file == BODY_SAPIENS2 { sapiens::names().swap_remove(0) } else { file.folder.to_string() };
+    named(models, file, &name)
+}
+
+/// The package and compiled model `name` in `file`'s Core ML folder under `models`.
+pub(crate) fn named(models: &Path, file: &ModelFile, name: &str) -> (PathBuf, PathBuf) {
     let dir = models.join(file.folder).join(COREML_DIR);
-    (dir.join(format!("{}.mlpackage", file.folder)), dir.join(format!("{}.mlmodelc", file.folder)))
+    (dir.join(format!("{name}.mlpackage")), dir.join(format!("{name}.mlmodelc")))
+}
+
+/// Every Core ML package (and compiled model) `file`'s Core ML version needs: one, or Sapiens2's three.
+pub fn packages(models: &Path, file: &ModelFile) -> Vec<(PathBuf, PathBuf)> {
+    if *file == BODY_SAPIENS2 { sapiens::names().iter().map(|n| named(models, file, n)).collect() } else { vec![paths(models, file)] }
 }
 
 /// Whether `file` has a Core ML version and it is under `models` (packaged or compiled; whether it loads is only known
 /// by loading it).
 pub fn installed(models: &Path, file: &ModelFile) -> bool {
-    let (package, compiled) = paths(models, file);
-    CONVERTED.contains(file) && (package.is_dir() || compiled.is_dir())
+    CONVERTED.contains(file) && packages(models, file).iter().all(|(package, compiled)| package.is_dir() || compiled.is_dir())
 }
 
 /// The canvas a `w × h` grid is run in: the smallest square that holds it, so photos of every shape with the same
@@ -96,10 +109,15 @@ pub(crate) fn canvas(w: usize, h: usize) -> Option<(usize, usize)> {
 
 /// Load `file`'s Core ML model, checked to have the input and output the parser sends and reads.
 fn load(models: &Path, file: &ModelFile, output: &str, units: ComputeUnits) -> Result<Model, Error> {
+    load_named(models, file, file.folder, output, units)
+}
+
+/// Load the Core ML model `name` of `file`, checked as [`load`] does.
+pub(crate) fn load_named(models: &Path, file: &ModelFile, name: &str, output: &str, units: ComputeUnits) -> Result<Model, Error> {
     if !lightcraft_coreml::available() {
         return Err(Error::Unavailable);
     }
-    let (package, compiled) = paths(models, file);
+    let (package, compiled) = named(models, file, name);
     let model = lightcraft_coreml::load_package(&package, &compiled, units)?;
     if !model.inputs().iter().any(|n| n == INPUT) || !model.outputs().iter().any(|n| n == output) {
         return Err(Error::Load(format!(
@@ -119,9 +137,13 @@ pub(crate) fn load_face(models: &Path) -> Result<Model, Error> {
     load(models, &FACE_SEGFORMER_B0, FACE_OUTPUT, ComputeUnits::CpuAndGpu)
 }
 
-/// The converted clothes parser, on the GPU: the Neural Engine compiler takes over 15 minutes for one large canvas.
-pub(crate) fn load_body(models: &Path) -> Result<Model, Error> {
-    load(models, &BODY_SEGFORMER_B3, BODY_OUTPUT, ComputeUnits::CpuAndGpu)
+/// The converted clothes parser `file` (SegFormer-B3 or -B2: the same network and canvases), on the GPU: the Neural
+/// Engine compiler takes over 15 minutes for one large canvas.
+pub(crate) fn load_body(models: &Path, file: &ModelFile) -> Result<Model, Error> {
+    if ![BODY_SEGFORMER_B3, BODY_SEGFORMER_B2].contains(file) {
+        return Err(Error::Missing(paths(models, file).0));
+    }
+    load(models, file, BODY_OUTPUT, ComputeUnits::CpuAndGpu)
 }
 
 /// The converted face mesh, on the GPU in float32: as fast as float16 for this small network and equal to float32
