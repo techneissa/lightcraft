@@ -14,9 +14,11 @@
 //! wedding library prepares everything.
 //!
 //! The whole-view build is the preview build ([`crate::cmd::previews`]) in its background form: two
-//! lanes, waiting whenever the photo on screen is being made ([`foreground`]), nearest photos to the
-//! user first and re-aimed as they move ([`crate::cmd::previews::PreviewBuild::focus_on`]), photos
-//! with previews skipped, one row in the activity stack that can be cancelled. It starts once the
+//! lanes, waiting whenever the photo on screen or the photos the loupe prepares ahead are being made
+//! ([`foreground`]), nearest photos to the user first and re-aimed as they move
+//! ([`crate::cmd::previews::PreviewBuild::focus_on`]) but past the loupe's own photos, which it builds
+//! last (#196: the two never decode one file at once), photos with previews skipped (the loupe's own
+//! renders of them too), one row in the activity stack that can be cancelled. It starts once the
 //! user is culling (a few photos stepped through in the loupe), never just because a library was
 //! opened (note 36: opening an old library to look at two photos must not start rebuilding).
 
@@ -370,8 +372,12 @@ impl Session {
                     // (not counted as stopped by the user)
                     b.cancel.store(true, Ordering::Relaxed);
                     self.prep.started_for = None;
-                } else if let Some(id) = at {
-                    b.focus_on(id, backward);
+                } else {
+                    if let Some(id) = at {
+                        b.focus_on(id, backward);
+                    }
+                    // in the loupe, the photos it prepares ahead are its own: the build goes past them
+                    b.loupe_ahead.store(at.map_or(0, |_| settings.ahead(mode)), Ordering::Relaxed);
                 }
                 return;
             }
@@ -434,6 +440,9 @@ impl Session {
         match started {
             Ok(_) => {
                 self.prep.build = self.preview_build.clone();
+                if let Some(b) = &self.prep.build {
+                    b.loupe_ahead.store(settings.ahead(mode), Ordering::Relaxed);
+                }
                 self.prep.retry_at = None;
             }
             Err(e) => {

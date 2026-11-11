@@ -233,6 +233,29 @@ fn the_background_build_starts_where_the_user_is() {
     assert!(b.next_index(&queue).is_none(), "all taken");
 }
 
+/// #196: in the loupe, a background build leaves the photo on screen, the one behind it and the ones the loupe
+/// prepares ahead to the loupe, and comes back to them last: the two never decode the same file at once.
+#[test]
+fn the_background_build_leaves_the_loupes_photos_for_last() {
+    use crate::cmd::previews::PreviewBuild;
+    let b = PreviewBuild { order: (10..30).collect(), ..Default::default() };
+    let mut queue: Vec<Option<u64>> = (10..30).map(Some).collect();
+    b.focus_on(PhotoId(14), false);
+    b.loupe_ahead.store(3, Ordering::Relaxed);
+    let mut took = Vec::new();
+    while let Some(i) = b.next_index(&queue) {
+        took.push(queue[i].take().unwrap());
+    }
+    assert_eq!(took.first(), Some(&18), "past the photos the loupe prepares: {took:?}");
+    assert_eq!(&took[took.len() - 5..], &[14, 15, 16, 17, 13], "the loupe's photos last, nearest first: {took:?}");
+    assert_eq!(took.len(), 20, "every photo once");
+    // backwards, the window lies the other way
+    let mut queue: Vec<Option<u64>> = (10..30).map(Some).collect();
+    b.focus_on(PhotoId(20), true);
+    let i = b.next_index(&queue).unwrap();
+    assert_eq!(queue[i].take(), Some(16), "behind the photos the loupe prepares backwards");
+}
+
 /// Note 49: the background preparation gives way to a build that is asked for (no error, no
 /// two builds), and is not started again for a view the user stopped it in.
 #[test]
@@ -452,12 +475,47 @@ fn a_preview_kept_only_in_memory_is_built_and_written() {
             cache.put_memory(*key, img);
         }
     }
-    assert!(!crate::cmd::previews::already_built(&jobs), "a copy only in memory is not a built preview");
+    assert!(!crate::cmd::previews::already_built(&jobs, (0, 0)), "a copy only in memory is not a built preview");
     let r = s.execute("library.buildPreviews", &json!({"ids": ids_json(&ids), "edge": 300, "wait": true})).unwrap();
     assert_eq!((r["skipped"].as_u64(), r["failed"].as_u64()), (Some(0), Some(0)), "{r}");
     let p = s.catalog.photo(ids[0]).unwrap().clone();
     let key = s.view_key(&p, true);
     assert!(s.media.rendered.disk().and_then(|d| d.dims(key)).is_some(), "the view preview is on disk");
+    let _ = std::fs::remove_dir_all(root);
+}
+
+/// #196: a view the loupe rendered at the size it shows the photo on its canvas (the photos it prepares ahead) is a
+/// built preview: the build skips the photo instead of rendering it again at the canvas's long edge.
+#[test]
+fn a_view_the_loupe_made_at_its_canvas_size_counts_as_built() {
+    let root = temp_dir("loupe-size");
+    let path = root.join("shoot").join("big.png");
+    let img = lightcraft_raster::Rgba8::from_fn(2400, 1600, |x, y| [(x % 251) as u8, (y % 241) as u8, 9, 255]);
+    let b =
+        crate::export::encode_image(&img, &crate::export::ExportOptions { format: crate::export::ExportFormat::Png, ..Default::default() }).unwrap();
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, b).unwrap();
+    let mut s = Session::new().with_fs();
+    s.open_library(root.join("lib"), false).unwrap();
+    s.execute("library.import", &json!({"paths": [path.to_string_lossy()]})).unwrap();
+    let id = s.catalog.photos().next().unwrap().id;
+    // a 2200 × 1100 canvas: the photo shows at 1650 × 1100 there, below the 2200 px a standard preview is built at
+    (s.loupe_edge, s.loupe_canvas) = (2200, (2200, 1100));
+    let edge = crate::cmd::previews::standard_edge(&s);
+    let jobs = crate::cmd::previews::jobs_for(&mut s, id, Some(edge));
+    for j in &jobs {
+        let (cache, key, (w, h)) = match (&j.view_cache, &j.cache) {
+            (Some((cache, key)), _) => (cache, key, (1650, 1100)),
+            (None, Some((cache, key))) => (cache, key, (j.request.max_w, j.request.max_h * 2 / 3)),
+            _ => continue,
+        };
+        assert!(cache.put_at(j.cache_generation, *key, std::sync::Arc::new(lightcraft_raster::Rgba8::new(w, h))), "kept on disk");
+    }
+    let r = s.execute("library.buildPreviews", &json!({"ids": [id.0], "wait": true})).unwrap();
+    assert_eq!((r["skipped"].as_u64(), r["done"].as_u64()), (Some(1), Some(1)), "the loupe's own view is not rendered again: {r}");
+    // a size asked for is built at that size
+    let r = s.execute("library.buildPreviews", &json!({"ids": [id.0], "edge": 2200, "wait": true})).unwrap();
+    assert_eq!(r["skipped"], 0, "{r}");
     let _ = std::fs::remove_dir_all(root);
 }
 

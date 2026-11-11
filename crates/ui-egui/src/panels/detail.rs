@@ -298,7 +298,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     // one axis only. A box that matches the source to rounding is rendered at exactly its size.
     let short = |e: usize, a: f32| ((e as f32 / a).round() as usize).max(1);
     let (rw, rh) = if aspect >= 1.0 { (want, short(want, aspect)) } else { (short(want, 1.0 / aspect), want) };
-    note_loupe_edge(app, sizes.canvas_long, !interacting && !split && !split_view);
+    note_loupe_edge(app, [canvas.width() * ppp, canvas.height() * ppp], !interacting && !split && !split_view);
     // hover and before renders are stand-ins: the preview size is plenty and keeps them cheap
     let se = app.ui.settings.stand_in_edge(want, texture_side);
     let (sw, sh) = if aspect >= 1.0 { (se, short(se, aspect)) } else { (short(se, 1.0 / aspect), se) };
@@ -748,9 +748,12 @@ fn prepare_ahead(app: &LightcraftApp) -> Prepare {
 /// The most the loupe shows a whole photo at (the canvas's long side; a photo of another shape than
 /// this one may fill it), noted while it shows one view fitted (`single`): standard previews are
 /// built at least this big.
-fn note_loupe_edge(app: &mut LightcraftApp, canvas_long: f32, single: bool) {
-    if single && matches!(app.ui.zoom, Zoom::Fit) && canvas_long.is_finite() && canvas_long >= 1.0 {
+fn note_loupe_edge(app: &mut LightcraftApp, [w, h]: [f32; 2], single: bool) {
+    let canvas_long = w.max(h);
+    if single && matches!(app.ui.zoom, Zoom::Fit) && canvas_long.is_finite() && canvas_long >= 1.0 && w >= 1.0 && h >= 1.0 {
         app.session.loupe_edge = canvas_long.ceil() as usize;
+        // (the canvas, for what the loupe shows a photo at: its own renders of the photos ahead are built previews)
+        app.session.loupe_canvas = (w.min(65_536.0).ceil() as usize, h.min(65_536.0).ceil() as usize);
     }
 }
 
@@ -1220,9 +1223,10 @@ fn request_main(app: &mut LightcraftApp, ui: &egui::Ui, a: &LoupeAsk, [rw, rh]: 
         let planes_for = job.clone();
         app.renderer.request(Slot::Main, job, 100);
         request_planes(app, (Slot::Alpha, Slot::Main), &planes_for, a.tint);
-        // the photo on screen comes first: background preparation waits while it is being made
-        // (only then: this runs every loupe frame, and a render already shown asks for nothing)
-        if app.renderer.is_pending(Slot::Main) {
+        // the photo on screen and the next ones the loupe prepares come first: background preparation waits
+        // while they are being made (only then: this runs every loupe frame, and renders already made ask for
+        // nothing). Stepping through photos keeps it waiting; it goes on once they are ready.
+        if app.renderer.is_pending(Slot::Main) || app.renderer.prefetches_pending() > 0 {
             signal_foreground();
         }
         // a drag's draft that renders in a few ms (GPU) is drawn in this frame, not the next (zoomed
