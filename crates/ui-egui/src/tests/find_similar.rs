@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use lightcraft_catalog::{Op, Photo, PhotoId, Source};
+use lightcraft_engine::SourceLevel;
 use lightcraft_raster::Rgb32f;
 use serde_json::{Value, json};
 
@@ -28,7 +29,29 @@ struct Drive {
     reads: Arc<AtomicUsize>,
     /// The files the search read, in order.
     paths: Arc<Mutex<Vec<String>>>,
+    /// Every file the loader was asked for, on any thread (the search's, the grid's thumbnails').
+    loaded: Arc<Mutex<Vec<String>>>,
     on_ui: Arc<AtomicUsize>,
+}
+
+impl Drive {
+    /// How many different files have been read, by whoever.
+    fn files_read(&self) -> usize {
+        let mut all = self.loaded.lock().unwrap_or_else(PoisonError::into_inner).clone();
+        all.sort();
+        all.dedup();
+        all.len()
+    }
+
+    /// The paths the search itself read more than once (the grid's reads are not in `paths`, so the #257 race can't
+    /// change this).
+    fn read_twice(&self) -> Vec<String> {
+        let mut read = self.paths.lock().unwrap_or_else(PoisonError::into_inner).clone();
+        read.sort();
+        let mut twice: Vec<String> = read.windows(2).filter(|w| w[0] == w[1]).map(|w| w[0].clone()).collect();
+        twice.dedup();
+        twice
+    }
 }
 
 fn app_on_a_slow_drive(guard: Duration) -> (Headless, Drive) {
@@ -42,14 +65,16 @@ fn app_on_a_slow_drive(guard: Duration) -> (Headless, Drive) {
         open: Arc::new(AtomicBool::new(false)),
         reads: Arc::new(AtomicUsize::new(0)),
         paths: Arc::new(Mutex::new(Vec::new())),
+        loaded: Arc::new(Mutex::new(Vec::new())),
         on_ui: Arc::new(AtomicUsize::new(0)),
     };
     let (ui, open, reads, on_ui) = (std::thread::current().id(), drive.open.clone(), drive.reads.clone(), drive.on_ui.clone());
-    let paths = drive.paths.clone();
+    let (paths, loaded) = (drive.paths.clone(), drive.loaded.clone());
     let deadline = Instant::now() + guard;
     app.session.media.file_loader = Some(Arc::new(move |path: &str, _, _, _| {
         // (the grid reads the photos for its thumbnails too, on threads of its own)
         let thread = std::thread::current();
+        loaded.lock().unwrap_or_else(PoisonError::into_inner).push(path.to_string());
         if thread.name().is_some_and(|n| n.starts_with("similar-") || n.contains(LABEL)) {
             paths.lock().unwrap_or_else(PoisonError::into_inner).push(path.to_string());
             reads.fetch_add(1, Ordering::SeqCst);
@@ -124,13 +149,36 @@ fn a_search_from_the_menu_reads_off_the_ui_thread_and_the_window_goes_on() {
     drive.open.store(true, Ordering::SeqCst);
     until_done(&mut h);
     assert_eq!(drive.on_ui.load(Ordering::SeqCst), 0, "a file was read on the UI thread");
-    assert_eq!(drive.reads.load(Ordering::SeqCst), PHOTOS as usize);
+    // (a photo the grid was already reading for its thumbnail is that same read, shared: the search's own reads can be
+    // fewer than the photos, never the files read)
+    assert_eq!(drive.files_read(), PHOTOS as usize);
+    assert!(drive.read_twice().is_empty(), "read twice: {:?}", drive.read_twice());
     assert!(rows(&h).is_empty(), "the row goes with the search");
     let shown = h.app.session.filter.only.len();
     assert_eq!(shown, PHOTOS as usize / 2, "the photos alike are shown");
     assert_eq!(h.app.ui.view, ViewMode::PhotoGrid);
     let toast = h.app.ui.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
     assert!(toast.starts_with(&format!("{shown} similar photos")), "{toast}");
+}
+
+/// Issue #257: a photo the grid is already reading for its thumbnail is that read, shared (#221): the search takes
+/// the running decode instead of reading the file again, so what the search read itself is one short of the photos
+/// while every file was read. (On a loaded machine the grid's thumbnail reads start before the search's.)
+#[test]
+fn a_photo_the_grid_is_already_reading_is_not_read_again_for_the_search() {
+    let (mut h, drive) = app_on_a_slow_drive(GUARD);
+    let photo = h.app.session.catalog.photo(PhotoId(1)).expect("the searched photo");
+    let source = h.app.session.media.source_ref(photo, SourceLevel::Thumb);
+    let grid = std::thread::Builder::new().name("grid-thumbnail".into()).spawn(move || source.load_source().map(|_| ())).expect("a thread");
+    // (inside the loader: the decode is running, and the search's read of the same file joins it)
+    assert!(h.step_until(T, |_| drive.files_read() == 1), "the grid's read never started");
+    h.app.run("library.findSimilar", json!({"id": 1})).unwrap();
+    drive.open.store(true, Ordering::SeqCst);
+    until_done(&mut h);
+    assert_eq!(grid.join().expect("the grid's read"), Ok(()));
+    assert_eq!(drive.reads.load(Ordering::SeqCst), PHOTOS as usize - 1, "the searched photo was the grid's read");
+    assert_eq!(drive.files_read(), PHOTOS as usize, "every file was read once the drive opened");
+    assert_eq!(h.app.session.filter.only.len(), PHOTOS as usize / 2, "and every photo got its signature");
 }
 
 /// One search at a time: the menu row is off while one runs and on again after it, and a second
@@ -290,7 +338,8 @@ fn a_request_nobody_waits_for_any_more_leaves_what_it_read() {
     h.step();
     until_done(&mut h);
     let reads = drive.reads.load(Ordering::SeqCst);
-    assert_eq!(reads, PHOTOS as usize);
+    assert_eq!(drive.files_read(), PHOTOS as usize);
+    assert!(drive.read_twice().is_empty(), "read twice: {:?}", drive.read_twice());
     let rx = ask(&mut h);
     assert_eq!(answer(&mut h, &rx)["ok"], true);
     assert_eq!(drive.reads.load(Ordering::SeqCst), reads);
