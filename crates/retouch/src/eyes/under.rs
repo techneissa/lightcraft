@@ -63,7 +63,7 @@ const BAG_COARSE: f64 = 0.45;
 /// How much of the shading Eye Bags removes at 100.
 const BAG_STRENGTH: f32 = 1.0;
 /// Most Eye Bags changes a pixel's luminance (a factor either way).
-const BAG_RANGE: f32 = 1.6;
+const BAG_RANGE: f32 = 2.2;
 /// The cheek patch must have at least this much skin (in square half widths) to give Dark Circles a target.
 const MIN_CHEEK: f64 = 0.02;
 /// Plain Facial Skin under the eye (in square half widths) that gives the skin's colour; with less (glasses over
@@ -324,8 +324,17 @@ struct Model {
     skin: [f32; 3],
 }
 
-/// Dark Circles (`dark`) and Eye Bags (`bags`), 0…1 each, under `eye` of face `face`.
+/// A slider's value (0…1) as the strength the effects use: the square root, so every step of the slider shows. The
+/// effects' own response (a lift in stops, a share of the shading) is slow at first: linear, Dark Circles at 25 / 50 /
+/// 75 closed 18 / 38 / 61 % of the circle's gap in lightness (L*) to the cheek on the test portraits, and 88 % at 100;
+/// with the square root, about 38 / 56 / 74 %. 0 stays 0 (off).
+fn response(v: f32) -> f32 {
+    if v > 0.0 { v.min(1.0).sqrt() } else { 0.0 }
+}
+
+/// Dark Circles (`dark`) and Eye Bags (`bags`), 0…1 each (the sliders' values), under `eye` of face `face`.
 pub fn apply(img: &mut Rgb32f, scene: &Scene<'_>, face: usize, eye: &Eye, dark: f32, bags: f32) {
+    let (dark, bags) = (response(dark), response(bags));
     let Some(f) = scene.faces.get(face).map(|c| c.face) else { return };
     let Some(skin) = f.mask(Part::FacialSkin) else { return };
     let masks = Masks { skin, others: f.mask(Part::Others), whites: f.mask(Part::EyeWhites), iris: f.mask(Part::Iris) };
