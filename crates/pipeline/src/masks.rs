@@ -489,11 +489,28 @@ pub struct SegGrid {
     logits: Vec<f32>,
     side: usize,
     r: [f64; 4],
+    /// Drawn from the photo itself (a refined edge, [`REFINED`]): every cell is as reliable as the next, the
+    /// outermost ring included.
+    exact: bool,
+}
+
+/// What the model id of a selection whose edge was refined on the photo ends with (fork, issue #240:
+/// `lightcraft_engine::hair_edges::refine`). Its grids already follow the photo's edges at their own cells.
+pub const REFINED: &str = "+refined";
+
+/// Whether a stored selection's edge was drawn by an edge model or refined on the photo, so a render must not filter
+/// it again (it would draw another outline in a preview than in an export): BiRefNet Matting (`+matting`), Apple
+/// Vision (`+vision`), or refined (`+refined`) with its finer grids (a refined grid that lost them, through an older
+/// build, is filtered as any other).
+pub(crate) fn edge_drawn(seg: Option<&SegMask>, detail: &[SegMask], people: bool) -> bool {
+    let model = seg.or(detail.first()).and_then(|s| s.model.as_deref());
+    model.is_some_and(|m| m.ends_with("+matting") || m.ends_with("+vision") || (m.ends_with(REFINED) && (people || !detail.is_empty())))
 }
 
 impl SegGrid {
     pub fn new(seg: &SegMask) -> Option<SegGrid> {
-        Some(SegGrid { logits: seg.logits()?, side: seg.side as usize, r: seg.bounds()? })
+        let exact = seg.model.as_deref().is_some_and(|m| m.ends_with(REFINED));
+        Some(SegGrid { logits: seg.logits()?, side: seg.side as usize, r: seg.bounds()?, exact })
     }
 
     pub fn contains(&self, n: Point) -> bool {
@@ -511,7 +528,7 @@ impl SegGrid {
         // (the outermost ring of cells is the model's least reliable: on a real photo its top row read -1.5 on
         // average under a sky the row below read +2, a 2-8 px strip along the top edge. A grid is sampled
         // from its second ring inwards, so the edge cells continue what lies next to them)
-        let (lo, hi) = if side >= 4 { (1.0, (side - 2) as f32) } else { (0.0, (side - 1) as f32) };
+        let (lo, hi) = if side >= 4 && !self.exact { (1.0, (side - 2) as f32) } else { (0.0, (side - 1) as f32) };
         let (fx, fy) = (fx.clamp(lo, hi), fy.clamp(lo, hi));
         let (x0, y0) = (fx.floor() as usize, fy.floor() as usize);
         let (tx, ty) = (fx - x0 as f32, fy - y0 as f32);
@@ -579,8 +596,8 @@ fn sample_seg(seg: Option<&SegMask>, detail: &[SegMask], gain: f32, frame: &Fram
     // (fork, `fork/hair-edges.md`: a grid whose edge BiRefNet-matting drew already follows the photo's strands; filtered
     // only where its cells are wider than a pixel, an export would draw another outline than a preview)
     // (and `+vision`, an edge Apple Vision drew: `fork/apple-vision-masks.md`)
-    let matted = seg.and_then(|s| s.model.as_deref()).is_some_and(|m| m.ends_with("+matting") || m.ends_with("+vision"));
-    if cell >= 1.0 && !matted {
+    // (and `+refined`, an edge refined on the photo with its finer grids: issue #240)
+    if cell >= 1.0 && !edge_drawn(seg, detail, false) {
         guided_cross_fast(log_l, out, (SEG_WINDOW * cell) as f32, SEG_EPS, |mean| 1.0 - smooth(3.0 * gain, 7.0 * gain, mean.abs()));
     }
     out.map_in_place(|l| 1.0 / (1.0 + (-l).exp()));

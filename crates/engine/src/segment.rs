@@ -177,6 +177,10 @@ pub struct Segmenter {
     next_job_id: u64,
     #[cfg_attr(not(feature = "sam"), allow(dead_code))]
     in_flight: Vec<InFlight>,
+    /// The last refined selection the worker made and the finer grids over its edge (fork, issue #240), until the
+    /// mask it is for is added ([`Segmenter::attach_refined`]).
+    #[cfg_attr(not(feature = "sam"), allow(dead_code))]
+    refined: Option<(SegMask, Vec<SegMask>)>,
     #[cfg(feature = "sam")]
     worker: worker::Worker,
     #[cfg(feature = "sam")]
@@ -199,6 +203,7 @@ impl Default for Segmenter {
             messages: Vec::new(),
             next_job_id: 1,
             in_flight: Vec::new(),
+            refined: None,
             #[cfg(feature = "sam")]
             worker: worker::Worker::default(),
             #[cfg(feature = "sam")]
@@ -210,6 +215,42 @@ impl Default for Segmenter {
 }
 
 impl Segmenter {
+    /// Keep the finer grids a worker result came with (fork, issue #240) for the mask its selection makes.
+    #[cfg(feature = "sam")]
+    fn keep_refined(&mut self, o: &worker::Outcome) {
+        self.refined = match (&o.result, o.detail.is_empty()) {
+            (Ok(Some(seg)), false) => Some((seg.clone(), o.detail.clone())),
+            _ => None,
+        };
+    }
+
+    /// Give a new Subject or Background `shape` the finer grids over its edge, when its selection is the refined one
+    /// the worker made last (as made, or turned around for a Background). Fork, issue #240: the grids travel beside
+    /// the selection from the worker to the mask, so the commands' parameters stay as they were.
+    pub(crate) fn attach_refined(&mut self, shape: &mut MaskShape) {
+        let (MaskShape::Subject { seg: Some(seg), detail, .. } | MaskShape::Background { seg: Some(seg), detail, .. }) = shape else { return };
+        if !detail.is_empty() {
+            return;
+        }
+        if let Some(grids) = self.take_refined(seg) {
+            *detail = grids;
+        }
+    }
+
+    /// The finer grids of `seg` when it is the refined selection the worker made last, as made or turned around (the
+    /// grids turned with it); taken, so they go to one mask.
+    pub(crate) fn take_refined(&mut self, seg: &SegMask) -> Option<Vec<SegMask>> {
+        let (made, grids) = self.refined.as_ref()?;
+        let out = if seg.data == made.data && seg.rect == made.rect {
+            grids.clone()
+        } else if made.invert().is_some_and(|inv| inv.data == seg.data && inv.rect == seg.rect) {
+            grids.iter().filter_map(SegMask::invert).collect()
+        } else {
+            return None;
+        };
+        self.refined = None;
+        Some(out)
+    }
     /// Whether this build can compute AI masks at all.
     pub const AVAILABLE: bool = cfg!(feature = "sam");
 
@@ -634,11 +675,30 @@ impl Session {
                 job
             }
         };
+        // (fork, issue #240: a Subject or Background a BiRefNet job makes is refined on the photo at a finer size)
+        let refine = match (&kind, region) {
+            (worker::Kind::BiRefNet { .. }, None) => {
+                let edge = crate::hair_edges::refine::WORK_EDGE;
+                self.preview_job(id, edge, edge, false, &d)
+            }
+            _ => None,
+        };
+        // (…and its matte is made from the picture a people parse uses, so the two share one matte)
+        let plain = match (&kind, region) {
+            (worker::Kind::BiRefNet { .. }, None) => {
+                let edge = crate::people_parsing::PARSE_EDGE;
+                self.preview_job(id, edge, edge, false, &lightcraft_develop::DevelopSettings::default())
+            }
+            _ => None,
+        };
         let job_id = self.segmenter.next_job_id;
         self.segmenter.next_job_id = self.segmenter.next_job_id.wrapping_add(1).max(1);
         let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let remote = self.segmenter.remote_endpoint();
         Ok(worker::Job {
+            refine,
+            plain,
+            detail: Vec::new(),
             id: job_id,
             cancel,
             dir,
@@ -661,6 +721,7 @@ impl Session {
         match rx.recv_timeout(WAIT) {
             Ok(o) => {
                 // (shown by the next poll in an app; logged anyway)
+                self.segmenter.keep_refined(&o);
                 self.segmenter.messages.extend(o.notice);
                 o.result
             }
@@ -853,7 +914,7 @@ impl Session {
                 self.segment_queue(id, kind, tag, Some(region))?;
             } else {
                 let patch = self.segment_wait(id, kind, Some(region))?;
-                let outcome = worker::Outcome { id: 0, tag, result: Ok(patch), superseded: false, notice: None };
+                let outcome = worker::Outcome { id: 0, tag, result: Ok(patch), superseded: false, notice: None, detail: Vec::new() };
                 let mut polled = Polled::default();
                 self.apply_outcome(outcome, &mut polled);
             }
@@ -892,7 +953,7 @@ impl Session {
     }
 
     #[cfg(feature = "sam")]
-    fn apply_outcome(&mut self, o: worker::Outcome, polled: &mut Polled) {
+    fn apply_outcome(&mut self, mut o: worker::Outcome, polled: &mut Polled) {
         if o.id != 0 {
             let was_tracked = self.segmenter.in_flight.iter().any(|j| j.id == o.id);
             self.segmenter.in_flight.retain(|j| j.id != o.id);
@@ -970,6 +1031,10 @@ impl Session {
                 }
             }
             Tag::NewConcept { photo, mask, op, name, kind, invert, .. } => {
+                self.segmenter.refined = match (&o.result, o.detail.is_empty()) {
+                    (Ok(Some(seg)), false) => Some((seg.clone(), std::mem::take(&mut o.detail))),
+                    _ => None,
+                };
                 let seg = match o.result {
                     Ok(Some(mut seg)) => {
                         if invert {
@@ -1051,7 +1116,11 @@ mod tests {
         // the job after which the model runs on the CPU (the GPU failed) says so
         let mut s = Session::with_demo();
         let notice = Some(worker::GPU_FAILED.to_string());
-        s.segmenter.results.0.send(worker::Outcome { id: 0, tag: Tag::Prepare, result: Ok(None), superseded: false, notice }).unwrap();
+        s.segmenter
+            .results
+            .0
+            .send(worker::Outcome { id: 0, tag: Tag::Prepare, result: Ok(None), superseded: false, notice, detail: Vec::new() })
+            .unwrap();
         let polled = s.segment_poll();
         assert_eq!(polled.messages, vec![worker::GPU_FAILED.to_string()]);
         assert!(s.segment_poll().messages.is_empty(), "once");
@@ -1075,7 +1144,7 @@ mod tests {
     #[cfg(feature = "sam")]
     fn concept_outcome(photo: PhotoId, mask: Option<u32>, kind: &str, invert: bool, seg: SegMask) -> worker::Outcome {
         let tag = Tag::NewConcept { photo, mask, op: "add".into(), name: None, kind: kind.into(), invert, model: birefnet::SelectionModel::Sam3 };
-        worker::Outcome { id: 0, tag, result: Ok(Some(seg)), superseded: false, notice: None }
+        worker::Outcome { id: 0, tag, result: Ok(Some(seg)), superseded: false, notice: None, detail: Vec::new() }
     }
 
     /// Subject, Sky and Background wait for SAM 3 like Describe: no rough mask shows meanwhile, the work has a row in
@@ -1144,6 +1213,7 @@ mod tests {
             result: Ok(None),
             superseded: false,
             notice: None,
+            detail: Vec::new(),
         };
         s.segmenter.results.0.send(none).unwrap();
         let polled = s.segment_poll();

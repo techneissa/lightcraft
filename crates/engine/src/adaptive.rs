@@ -135,12 +135,18 @@ impl Adaptive {
 
 /// What the model answered for a part.
 fn answered(result: Result<Option<SegMask>, String>, invert: bool, shape: &MaskShape) -> Found {
+    answered_with(result, Vec::new(), invert, shape)
+}
+
+/// [`answered`] with the finer grids over the selection's edge the worker made with it (fork, issue #240: a refined
+/// Subject or Background), turned around with it.
+fn answered_with(result: Result<Option<SegMask>, String>, detail: Vec<SegMask>, invert: bool, shape: &MaskShape) -> Found {
     match result {
         Ok(Some(seg)) if invert => match seg.invert() {
-            Some(inv) => Found::of(inv, Vec::new()),
+            Some(inv) => Found::of(inv, detail.iter().filter_map(SegMask::invert).collect()),
             None => Found::nothing(not_found(shape)),
         },
-        Ok(Some(seg)) => Found::of(seg, Vec::new()),
+        Ok(Some(seg)) => Found::of(seg, detail),
         Ok(None) => Found::nothing(not_found(shape)),
         Err(e) => Found::nothing(e),
     }
@@ -296,7 +302,8 @@ impl Session {
             Ask::Missing(why) => Found::nothing(why),
             Ask::Model { request, invert } => {
                 let r = self.adaptive_wait(id, request);
-                answered(r, invert, shape)
+                let detail = r.as_ref().ok().and_then(Option::as_ref).and_then(|s| self.segmenter.take_refined(s)).unwrap_or_default();
+                answered_with(r, detail, invert, shape)
             }
         }
     }
@@ -361,12 +368,12 @@ impl Session {
             self.adaptive.stop();
             return false;
         }
-        for (job, result) in self.adaptive.replies.drain() {
+        for (job, result, detail) in self.adaptive.replies.drain() {
             let Some(r) = self.adaptive.running.as_mut() else { break };
             if let Some(part) = r.parts.iter_mut().find(|p| matches!(p.state, State::Model { job: j, .. } if j == job))
                 && let State::Model { invert, .. } = part.state
             {
-                part.state = State::Done(answered(result, invert, &part.waiting.recipe));
+                part.state = State::Done(answered_with(result, detail, invert, &part.waiting.recipe));
             }
         }
         self.adaptive_people();

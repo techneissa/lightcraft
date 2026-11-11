@@ -107,7 +107,7 @@ fn no_model_a_failing_run_and_a_damaged_cache_file_are_messages() {
     assert!(matches!(p.parse(picture(4), Vec::new(), true), Outcome::Failed(_)));
     // a damaged file in the cache is parsed again, and replaced
     p.set_runner(Some(fake_runner()));
-    let key = cache::key(&picture(5), &[], &p.model_set().version());
+    let key = cache::key(&picture(5), &[], &p.version());
     std::fs::create_dir_all(dir.join("cache")).unwrap();
     std::fs::write(cache::path(&dir.join("cache"), &key), b"LCPARSE1 broken").unwrap();
     assert!(matches!(p.parse(picture(5), Vec::new(), true), Outcome::Ready { cached: false, .. }));
@@ -315,7 +315,7 @@ fn many_finished_runs_keep_the_newest_and_a_late_waiter_gets_the_cached_parse() 
     // only the oldest go, never all of them at once
     assert_eq!(p.finished_kept(), 16);
     // the first run is no longer filed, and memory holds the last four only: its waiter reads the disk cache
-    let key = cache::key(&picture(100), &[], &p.model_set().version());
+    let key = cache::key(&picture(100), &[], &p.version());
     let Outcome::Ready { parsing, cached: true } = p.wait_for(&key) else { panic!("the first run was dropped") };
     assert_eq!(parsing.people.len(), 1);
 }
@@ -370,11 +370,14 @@ fn a_sapiens2_parse_on_core_ml_is_filed_apart_from_candles() {
     let folder = lightcraft_parsing::models::BODY_SAPIENS2.folder;
     assert!(p.set_runtime(folder, Runtime::Candle));
     let candle = (filed(&picture(3)), filed(&wide));
-    assert_eq!(candle.0.version, ModelSet::Sapiens2.version());
-    assert_eq!(candle.0.key, cache::key(&picture(3), &[], &ModelSet::Sapiens2.version()));
+    // (every version ends with the edge refinement's, #240)
+    let refined = format!("+{}", crate::hair_edges::refine::VERSION);
+    let sapiens = format!("{}{refined}", ModelSet::Sapiens2.version());
+    assert_eq!(candle.0.version, sapiens);
+    assert_eq!(candle.0.key, cache::key(&picture(3), &[], &sapiens));
     assert!(p.set_runtime(folder, Runtime::CoreMl));
     let coreml = (filed(&picture(3)), filed(&wide));
-    assert_eq!(coreml.0.version, format!("{}+coreml", ModelSet::Sapiens2.version()));
+    assert_eq!(coreml.0.version, format!("{}+coreml{refined}", ModelSet::Sapiens2.version()));
     assert_ne!(coreml.0.key, candle.0.key);
     // the wide photo's whole-photo pass is made smaller on Core ML: its key says so, a 3:2 photo's does not
     assert_eq!(coreml.1.key, cache::key(&wide, &[], &format!("{}-fit", coreml.1.version)));
@@ -382,5 +385,5 @@ fn a_sapiens2_parse_on_core_ml_is_filed_apart_from_candles() {
     assert_ne!(coreml.1.key, candle.1.key);
     // the other sets have no Sapiens2: their version stays
     p.set_model_set(ModelSet::Segformer).unwrap();
-    assert_eq!(filed(&picture(3)).version, ModelSet::Segformer.version());
+    assert_eq!(filed(&picture(3)).version, format!("{}{refined}", ModelSet::Segformer.version()));
 }

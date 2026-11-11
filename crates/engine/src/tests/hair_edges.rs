@@ -82,18 +82,25 @@ fn ready(o: Outcome) -> Arc<Parsing> {
     }
 }
 
+/// Issue #240: the default edge is BiRefNet Matting where its model is installed, Current elsewhere; Current chosen
+/// leaves masks without a matte.
 #[test]
-fn the_default_edge_is_current_and_leaves_masks_as_they_were() {
+fn the_default_edge_is_matting_where_installed_and_current_makes_no_matte() {
     let (h, dir, _) = edges("default");
+    for k in EdgeKind::ALL {
+        assert_eq!((h.chosen(k), h.edge(k)), (Edge::Current, Edge::Current), "not installed");
+    }
     h.set_runner(Some(fake_matte()));
     for k in EdgeKind::ALL {
-        assert_eq!(h.chosen(k), Edge::Current);
-        assert_eq!(h.edge(k), Edge::Current);
+        assert_eq!((h.chosen(k), h.edge(k)), (Edge::Matting, Edge::Matting), "installed");
+        h.set_edge(k, Edge::Current).unwrap();
+        assert_eq!(h.chosen(k), Edge::Current, "an explicit Current wins");
     }
-    // people parsing: the parse exactly as the parser made it, and no matte made
+    // people parsing: no matte made (the edge is still refined on the picture: `hair_edges::refine`)
     let p = parsing_with(&h, &dir);
     let parsed = ready(p.parse(picture(), Vec::new(), true));
-    assert_eq!(*parsed, person_parse(ModelSet::Segformer));
+    assert!(!parsed.model_version.contains("+matting"), "{}", parsed.model_version);
+    assert_eq!(parsed.people.len(), person_parse(ModelSet::Segformer).people.len());
     assert_eq!(h.runs(), 0);
     // Subject and Background: no matting step
     #[cfg(feature = "sam")]
@@ -115,7 +122,7 @@ fn matting_draws_the_entire_person_edge_and_keeps_far_things_out() {
     let p = parsing_with(&h, &dir);
     let parsed = ready(p.parse(picture(), Vec::new(), true));
     let person = &parsed.people[0];
-    assert!(parsed.model_version.ends_with("+matting1"), "{}", parsed.model_version);
+    assert!(parsed.model_version.contains("+matting1"), "{}", parsed.model_version);
     // a strand 0.285 from the centre: out in the parse, in the matte, inside the band → in
     assert!(person.sample(Part::EntirePerson, 0.5, 0.5 - 0.285) > 0.5, "the strand comes in");
     assert!(person.sample(Part::EntirePerson, 0.5, 0.5) > 0.9, "the inside stays in");
@@ -129,7 +136,10 @@ fn matting_draws_the_entire_person_edge_and_keeps_far_things_out() {
     // the same photo again: cached, no new matte; back to Current: the parse as it was (its own cache entry)
     assert!(matches!(p.parse(picture(), Vec::new(), true), Outcome::Ready { cached: true, .. }));
     h.set_edge(EdgeKind::People, Edge::Current).unwrap();
-    assert_eq!(*ready(p.parse(picture(), Vec::new(), true)), person_parse(ModelSet::Segformer));
+    // (its edge refined on the picture, #240, which leaves this flat test picture's parse as it was)
+    let current = ready(p.parse(picture(), Vec::new(), true));
+    assert!(!current.model_version.contains("+matting"), "{}", current.model_version);
+    assert_eq!(current.people, person_parse(ModelSet::Segformer).people);
     assert_eq!(h.runs(), 1);
     let _ = std::fs::remove_dir_all(dir);
 }
@@ -473,8 +483,8 @@ fn the_choice_is_written_before_it_counts() {
     let blocked = dir.join("blocked.json");
     std::fs::create_dir_all(blocked.with_extension("json.part")).unwrap();
     h.set_paths(Some(dir.join("models")), Some(blocked));
-    assert!(h.set_edge(EdgeKind::People, Edge::Matting).is_err());
-    assert_eq!(h.chosen(EdgeKind::People), Edge::Current, "not chosen when it could not be kept");
+    assert!(h.set_edge(EdgeKind::People, Edge::Current).is_err());
+    assert_eq!(h.chosen(EdgeKind::People), Edge::Matting, "not chosen when it could not be kept (the default stays)");
     // two threads, each flipping its own kind
     h.set_paths(Some(dir.join("models")), Some(dir.join("mask-edges.json")));
     let threads: Vec<_> = EdgeKind::ALL
@@ -513,7 +523,7 @@ fn the_kind_asked_for_is_chosen_when_the_download_ends() {
         assert!(t.elapsed() < std::time::Duration::from_secs(30), "never chosen");
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
-    assert_eq!(h.chosen(EdgeKind::People), Edge::Current);
+    assert_eq!(h.chosen(EdgeKind::People), h.default_edge(), "the other kind keeps its default");
     // not installed when it ends (a failed download): nothing is chosen
     let (h, dir2, _) = edges("pending-failed");
     h.choose_when_downloaded(EdgeKind::People);

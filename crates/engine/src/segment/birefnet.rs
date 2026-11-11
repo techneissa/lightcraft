@@ -292,7 +292,7 @@ impl crate::Session {
             if model.uses_sam3() {
                 self.segmenter.model_dir()?;
             }
-            super::worker::Kind::BiRefNet { model, text, main: concept.main_only, dir, matting }
+            super::worker::Kind::BiRefNet { model, text, main: concept.main_only, dir, matting, activity: Some(self.activity.clone()) }
         } else {
             self.segmenter.model_dir()?;
             super::worker::Kind::Concept(text, concept.main_only)
@@ -338,7 +338,7 @@ impl Segmenter {
 
     /// Answer a request as the worker would (the tag decides what the result is applied to).
     pub(crate) fn deliver(&self, tag: super::Tag, result: Result<Option<lightcraft_develop::SegMask>, String>) {
-        let _ = self.results.0.send(super::worker::Outcome { id: 0, tag, result, superseded: false, notice: None });
+        let _ = self.results.0.send(super::worker::Outcome { id: 0, tag, result, superseded: false, notice: None, detail: Vec::new() });
     }
 }
 

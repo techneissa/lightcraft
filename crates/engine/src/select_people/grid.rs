@@ -80,25 +80,29 @@ pub fn build(p: &Parsing, sel: &Selection, orient: Orientation) -> Option<(SegMa
     let main = grid(&draw(&main_rect, side), side, &main_rect, &model);
     // finer grids for the people the main grid draws too coarsely, largest first
     let main_cell = (f64::from(main_rect.width()) / side as f64, f64::from(main_rect.height()) / side as f64);
+    let coarser = |cell: (f64, f64)| main_cell.0 > DETAIL_GAIN * cell.0 || main_cell.1 > DETAIL_GAIN * cell.1;
     let mut detail: Vec<(f32, NormRect)> = people
         .iter()
         .filter_map(|&k| {
-            let mine: Vec<&Placed<'_>> = parts.iter().filter(|q| q.person == k).collect();
+            // (a Background's edge is its people's: their Entire Person planes)
+            let mine: Vec<&Placed<'_>> = parts.iter().chain(&bodies).filter(|q| q.person == k).collect();
             let finest = mine.iter().map(|q| q.cell).reduce(|a, b| (a.0.min(b.0), a.1.min(b.1)))?;
-            (main_cell.0 > DETAIL_GAIN * finest.0 || main_cell.1 > DETAIL_GAIN * finest.1).then_some(())?;
             let rect = padded(union(mine.iter().map(|q| q.rect))?)?;
+            // (or a person whose planes are finer than one grid can hold: an edge refined on the picture, #240)
+            (coarser(finest) || need(&rect, mine.iter().copied()) > TILE_NEED).then_some(())?;
             Some((rect.width() * rect.height(), rect))
         })
         .collect();
     detail.sort_by(|a, b| b.0.total_cmp(&a.0));
     let detail = detail
         .into_iter()
-        .filter_map(|(_, rect)| {
-            let side = side_for(&rect, parts.iter().filter(|q| overlaps(&q.rect, &rect)));
+        .flat_map(|(_, rect)| tiles(&rect, need_xy(&rect, parts.iter().chain(&bodies).filter(|q| overlaps(&q.rect, &rect)))))
+        .filter_map(|rect| {
+            let side = side_for(&rect, parts.iter().chain(&bodies).filter(|q| overlaps(&q.rect, &rect)));
             // (a grid no finer than the main one adds nothing: one person alone, whose box is the main grid's, at the
             // largest side both)
             let cell = (f64::from(rect.width()) / side as f64, f64::from(rect.height()) / side as f64);
-            (main_cell.0 > DETAIL_GAIN * cell.0 || main_cell.1 > DETAIL_GAIN * cell.1).then(|| grid(&draw(&rect, side), side, &rect, &model))
+            coarser(cell).then(|| grid(&draw(&rect, side), side, &rect, &model))
         })
         .take(MAX_DETAIL)
         .collect();
@@ -123,7 +127,14 @@ pub fn model_id(p: &Parsing, sel: &Selection) -> String {
     } else {
         ""
     };
-    format!("people:{set}{mark}")
+    // (an Entire Person edge refined on the picture, issue #240: its grids are not filtered again either)
+    let refined = crate::hair_edges::refine::SUFFIX;
+    let fine = if edged && sel.parts.iter().any(|part| matches!(part, Part::EntirePerson)) || sel.background {
+        if p.model_version.contains(refined) { refined } else { "" }
+    } else {
+        ""
+    };
+    format!("people:{set}{mark}{fine}")
 }
 
 /// A grid that selects nothing, over the whole photo (a saved face not in this photo, or no parse of it).
@@ -153,6 +164,38 @@ fn padded(r: NormRect) -> Option<NormRect> {
 
 fn overlaps(a: &NormRect, b: &NormRect) -> bool {
     a.x0 < b.x1 && b.x0 < a.x1 && a.y0 < b.y1 && b.y0 < a.y1
+}
+
+/// A person whose planes need more cells than this on a side gets finer grids, split in [`tiles`].
+const TILE_NEED: f64 = 1.2 * MAX_SIDE as f64;
+
+/// The cells a grid over `rect` needs across and down to be as fine as the finest of `planes` (0 for none).
+fn need_xy<'a, 'b: 'a>(rect: &NormRect, planes: impl Iterator<Item = &'a Placed<'b>>) -> (f64, f64) {
+    planes
+        .filter(|q| q.cell.0 > 0.0 && q.cell.1 > 0.0)
+        .map(|q| (f64::from(rect.width()) / q.cell.0, f64::from(rect.height()) / q.cell.1))
+        .fold((0.0, 0.0), |a, b| (a.0.max(b.0), a.1.max(b.1)))
+}
+
+fn need<'a, 'b: 'a>(rect: &NormRect, planes: impl Iterator<Item = &'a Placed<'b>>) -> f64 {
+    let (x, y) = need_xy(rect, planes);
+    x.max(y)
+}
+
+/// `rect` cut in halves along each side that needs more than [`MAX_SIDE`] cells (`need`: across, down), the halves
+/// overlapping by a hundredth of the side so the grids meet without a seam.
+fn tiles(rect: &NormRect, need: (f64, f64)) -> Vec<NormRect> {
+    let halves = |a: f32, b: f32, n: f64| -> Vec<(f32, f32)> {
+        if n.is_finite() && n > MAX_SIDE as f64 {
+            let (m, o) = ((a + b) / 2.0, (b - a) / 100.0);
+            vec![(a, m + o), (m - o, b)]
+        } else {
+            vec![(a, b)]
+        }
+    };
+    let xs = halves(rect.x0, rect.x1, need.0);
+    let ys = halves(rect.y0, rect.y1, need.1);
+    ys.iter().flat_map(|&(y0, y1)| xs.iter().map(move |&(x0, x1)| NormRect::new(x0, y0, x1, y1))).collect()
 }
 
 /// The side of a grid over `rect` whose cells are as fine as the finest of `planes` (64 to 1024).

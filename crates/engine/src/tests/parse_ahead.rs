@@ -543,7 +543,7 @@ fn the_cache_keeps_the_parses_used_last_and_the_idle_sweep_leaves_room() {
     let mut files = Vec::new();
     for (i, img) in pics.iter().enumerate() {
         assert!(matches!(s.parsing.parse(img.clone(), Vec::new(), true), crate::people_parsing::Outcome::Ready { .. }));
-        let key = cache::key(img, &[], &s.parsing.model_set().version());
+        let key = cache::key(img, &[], &s.parsing.version());
         let path = cache::path(&cache_dir, &key);
         let f = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
         f.set_modified(SystemTime::now() - Duration::from_secs(300 - 100 * i as u64)).unwrap();
@@ -604,7 +604,7 @@ fn a_parse_made_before_the_people_edge_changed_is_not_taken_for_the_new_edge() {
     let (mut s, _dir, ids) = library("edge", 1);
     let seen: Seen = Arc::default();
     s.parsing.set_runner(Some(recording_runner(&seen)));
-    let plain = s.parsing.model_set().version();
+    let plain = s.parsing.version();
     // a plain parse, filed by a request; parsing ahead finds it
     let r = s.execute("parsing.run", &json!({"ids": [ids[0].0], "wait": true})).unwrap();
     assert_eq!(r["photos"][0]["parse"]["version"], plain.as_str(), "{r}");
@@ -615,7 +615,7 @@ fn a_parse_made_before_the_people_edge_changed_is_not_taken_for_the_new_edge() {
     s.hair_edges.set_runner(Some(Arc::new(|_, _, _, _| Ok(Matte { side: 8, logits: vec![9.0; 64] }))));
     s.hair_edges.set_edge(EdgeKind::People, Edge::Matting).unwrap();
     let matted = s.parsing.ahead_version();
-    assert_eq!(matted, format!("{plain}+{}", crate::hair_edges::VERSION));
+    assert_eq!(matted, format!("{}+{}+{}", s.parsing.model_set().version(), crate::hair_edges::VERSION, crate::hair_edges::refine::VERSION));
     assert!(crate::parse_ahead::ready(&mut s, ids[0]).is_none(), "the plain parse is not ready for the matted request");
     // parsing ahead parses it again for the new edge, and a request then reads that parse without a render
     let st = settle(&mut s, json!({"pace": "normal"}));
@@ -811,6 +811,8 @@ fn portrait_retouching_reads_the_parse_the_index_knows_and_files_the_one_it_make
     let version = s.parsing.version();
     let other = cache::key(&lightcraft_parsing::RgbImage::new(1, 1, vec![9; 3]).unwrap(), &[], &version);
     let mut two = fake_parse(s.parsing.model_set());
+    // (filed as a parse is: its edges refined, #240)
+    two.model_version.clone_from(&version);
     two.people.push(Person { face: Some(NormRect::new(0.05, 0.1, 0.25, 0.4)), face_score: 0.8, ..Person::default() });
     cache::store(&dir.join("cache"), &other, &two).unwrap();
     crate::parse_ahead::remember(&mut s, ids[0], crate::people_parsing::Filed { version: version.clone(), key: other });

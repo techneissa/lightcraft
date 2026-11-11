@@ -2,7 +2,8 @@
 //! its cut-out of the photo, and the mix with SAM 3's selection ("SAM 3 + BiRefNet Edges").
 
 use std::path::Path;
-use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use lightcraft_birefnet::{BiRefNet, Matte, combine};
 use lightcraft_develop::SegMask;
@@ -68,6 +69,8 @@ pub(super) struct Request<'a> {
     pub dir: &'a Path,
     /// BiRefNet-matting redraws the selection's edge (`fork/hair-edges.md`).
     pub matting: Option<&'a crate::hair_edges::HairEdges>,
+    /// Where the edge refinement shows (fork, issue #240).
+    pub activity: Option<&'a crate::activity::Activity>,
 }
 
 /// The two steps of "SAM 3 + BiRefNet Edges", so the order they run in can be tested without a model.
@@ -100,8 +103,53 @@ impl Steps for Models<'_> {
 
 /// Run a BiRefNet job: SAM 3 alone (asked for `text`, the main subject's instances only when `main`), BiRefNet's
 /// cut-out alone, or SAM 3 deciding what the subject is and BiRefNet drawing its edge; then, with `matting`,
-/// BiRefNet-matting redraws the edge. `Ok(None)`: nothing found.
+/// BiRefNet-matting redraws the edge; then the edge is refined on the photo at a finer size (`hair_edges::refine`,
+/// its finer grids left in `job.detail`). `Ok(None)`: nothing found.
 pub(super) fn run(state: &mut State, shared: &Shared, job: &mut Job, placement: Placement, req: &Request) -> Result<Option<SegMask>, Failure> {
+    let Some(decided) = decide(state, shared, job, placement, req)? else { return Ok(None) };
+    Ok(Some(refined(job, req, decided)?))
+}
+
+/// `decided` with its edge refined on the job's finer render, the finer grids put in `job.detail`; as it is when the
+/// job has no finer render, the refinement can't run (a damaged grid) or its row in the top bar was stopped.
+fn refined(job: &mut Job, req: &Request, decided: SegMask) -> Result<SegMask, Failure> {
+    // (the row's ✕ stops only the refinement: the selection the models made stays; `job.cancel` (the photo switched,
+    // the mask deleted) drops it)
+    let row_stop = Arc::new(AtomicBool::new(false));
+    let _row = req.activity.map(|a| a.start_background("refine", "Refining mask edges", crate::activity::Cancel::Flag(row_stop.clone())));
+    refined_unless(job, decided, &row_stop)
+}
+
+/// [`refined`] with the refinement's own stop flag `row_stop`.
+fn refined_unless(job: &mut Job, decided: SegMask, row_stop: &AtomicBool) -> Result<SegMask, Failure> {
+    let Some(finer) = job.refine.clone() else { return Ok(decided) };
+    if job.cancel.load(Ordering::Relaxed) {
+        return Err(Failure::Cancelled);
+    }
+    if row_stop.load(Ordering::Relaxed) {
+        return Ok(decided);
+    }
+    // (the finer render goes through the job's own render step, which says when the photo's file is missing)
+    let saved = job.render.replace(finer);
+    let input = render(job);
+    job.render = saved;
+    let input = input?;
+    let t = web_time::Instant::now();
+    let cancel = job.cancel.clone();
+    let stop = || cancel.load(Ordering::Relaxed) || row_stop.load(Ordering::Relaxed);
+    match crate::hair_edges::refine::subject(&decided, &input.rgb, input.w, input.h, &stop) {
+        Some((main, detail)) => {
+            log::info!("mask edges refined at {}×{} in {:?} ({} finer grids)", input.w, input.h, t.elapsed(), detail.len());
+            job.detail = detail;
+            Ok(main)
+        }
+        None if job.cancel.load(Ordering::Relaxed) => Err(Failure::Cancelled),
+        None => Ok(decided),
+    }
+}
+
+/// The selection a BiRefNet job's models decide on, before its edge is refined.
+fn decide(state: &mut State, shared: &Shared, job: &mut Job, placement: Placement, req: &Request) -> Result<Option<SegMask>, Failure> {
     // (the matte renders the photo from the job's render, which SAM 3's encode may take)
     let saved = job.render.clone();
     let base = match req.model {
@@ -118,7 +166,16 @@ pub(super) fn run(state: &mut State, shared: &Shared, job: &mut Job, placement: 
     let matting = req.matting.filter(|_| edge != crate::hair_edges::Edge::Current);
     let (Some(edges), Some(base)) = (matting, base.as_ref()) else { return Ok(base) };
     job.render = saved;
-    let input = render(job)?;
+    // (BiRefNet Matting mattes the picture a people parse uses: a matte one of them made serves the other)
+    let input = match job.plain.take().filter(|_| edge == crate::hair_edges::Edge::Matting) {
+        Some(plain) => {
+            let saved = job.render.replace(plain);
+            let input = render(job);
+            job.render = saved;
+            input?
+        }
+        None => render(job)?,
+    };
     let m = edges.subject_matte(edge, &input.rgb, input.w, input.h, &job.cancel).map_err(|e| match job.cancel.load(Ordering::Relaxed) {
         true => Failure::Cancelled,
         false => Failure::Other(format!("Hair edges: {e}")),
@@ -202,11 +259,54 @@ mod tests {
             tag: crate::segment::Tag::Wait,
             reply: tx,
             remote: None,
+            refine: None,
+            plain: None,
+            detail: Vec::new(),
         };
         let mut stub = Stub { matte_saw_render: false };
         let seg = combined(&mut stub, &mut job).unwrap().expect("a selection");
         assert!(stub.matte_saw_render);
         assert_eq!(seg.model.as_deref(), Some("sam3+birefnet"));
         assert_eq!(seg.side, 64);
+    }
+
+    /// Stopping the "Refining mask edges" row keeps the selection the models made, unrefined; stopping the job (the
+    /// photo switched, the mask deleted) still drops it.
+    #[test]
+    fn stopping_the_refine_row_keeps_the_unrefined_selection() {
+        let mut s = Session::with_demo();
+        let id = s.active().unwrap();
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let mut job = Job {
+            id: 1,
+            cancel: Arc::new(AtomicBool::new(false)),
+            dir: std::env::temp_dir(),
+            key: 1,
+            render: None,
+            missing: None,
+            kind: super::super::Kind::Prepare,
+            tag: crate::segment::Tag::Wait,
+            reply: tx,
+            remote: None,
+            refine: Some(s.render_job(id, 96, 64, false, true).unwrap()),
+            plain: None,
+            detail: Vec::new(),
+        };
+        let side = 16;
+        let decided = SegMask::from_logits(side, &(0..side * side).map(|i| if (i % side) < side / 2 { 8.0 } else { -8.0 }).collect::<Vec<_>>())
+            .made_by("birefnet");
+        // (left alone, it is refined: the test below is not vacuous)
+        let free = AtomicBool::new(false);
+        let refined = refined_unless(&mut job, decided.clone(), &free).unwrap();
+        assert_eq!(refined.model.as_deref(), Some("birefnet+refined"));
+        // the row's ✕
+        job.detail.clear();
+        let row = AtomicBool::new(true);
+        let kept = refined_unless(&mut job, decided.clone(), &row).unwrap();
+        assert_eq!(kept, decided);
+        assert!(job.detail.is_empty());
+        // the job stopped
+        job.cancel.store(true, Ordering::Relaxed);
+        assert!(matches!(refined_unless(&mut job, decided, &free), Err(Failure::Cancelled)));
     }
 }

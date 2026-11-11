@@ -497,6 +497,9 @@ impl PeopleParsing {
             v.push('+');
             v.push_str(edge);
         }
+        // (every parse's people edges are refined: `hair_edges::refine`, issue #240)
+        v.push('+');
+        v.push_str(crate::hair_edges::refine::VERSION);
         v
     }
 
@@ -638,6 +641,8 @@ impl PeopleParsing {
                         Some((edges, edge)) => hair_edged(edges, *edge, p, &img, &flag),
                         None => Ok(p),
                     };
+                    // (fork, issue #240: every Entire Person edge snapped to the picture at its own size)
+                    let p = p.and_then(|p| crate::hair_edges::refine::people(p, &img, &flag));
                     lightcraft_parsing::profile::mark("people edges");
                     p
                 }));

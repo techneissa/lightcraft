@@ -36,7 +36,7 @@ pub(super) fn filter(
     log_l: &Plane,
     out: &mut Plane,
 ) {
-    if model(seg, detail).is_some_and(|m| m.ends_with("+matting") || m.ends_with("+vision")) {
+    if super::edge_drawn(seg, detail, true) {
         return;
     }
     let h = out.height;

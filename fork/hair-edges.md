@@ -4,7 +4,7 @@ List: hair-accurate edges for Entire Person / Background and Subject masks: BiRe
 
 ## What it does
 
-- **Two settings**, in Settings ▸ Faces ▸ Hair Edges (and `maskEdges.edge`), each **Current** (the default: masks stay exactly as before) or **BiRefNet Matting**:
+- **Two settings**, in Settings ▸ Faces ▸ Hair Edges (and `maskEdges.edge`), each **Current** (masks as the model draws them) or **BiRefNet Matting**; until the user picks, BiRefNet Matting where its model is installed and Current elsewhere (issue #240, `fork/mask-edges.md`, which also refines every edge on the photo):
   - **Entire Person / Background** (`people`): the people parse's Entire Person parts, and so its Background (everything that is not a person).
   - **Subject** (`subject`): new Subject parts and the Background made from them, whatever model makes them (SAM 3, BiRefNet, SAM 3 + BiRefNet Edges).
   The choice is kept in `<config>/mask-edges.json`. A chosen BiRefNet Matting whose model has gone counts as Current until it is back.

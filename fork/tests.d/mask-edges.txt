@@ -1,0 +1,3 @@
+cargo test -p lightcraft-edgerefine
+cargo test -p lightcraft-engine --features sam --lib -- hair_edges segment select_people birefnet people_parsing parse_ahead masks
+cargo test -p lightcraft-pipeline --lib -- masks tests_window

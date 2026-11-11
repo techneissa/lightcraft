@@ -270,9 +270,10 @@ fn only_the_search_started_last_files_its_result() {
 }
 
 #[test]
-fn one_person_alone_gets_no_copy_of_the_main_grid() {
-    // a person whose parts are finer than the largest grid can draw: the main grid is over them already, so a finer
-    // grid over the same box would be the same grid again
+fn one_person_finer_than_a_grid_gets_finer_tiles_not_a_copy() {
+    // a person whose parts are finer than the largest grid can draw (an Entire Person edge refined on the picture,
+    // #240): the main grid covers them at 1024 cells, and up to four finer grids tile them, each finer than the main
+    // one (never the same grid again)
     let mut q = person(0.1, 0.1, 0.8, None);
     for planes in q.parts.values_mut() {
         let r = planes[0].rect;
@@ -281,5 +282,13 @@ fn one_person_alone_gets_no_copy_of_the_main_grid() {
     let p = parse(vec![q]);
     let (main, detail) = build(&p, &Selection::of(Some(0), &[Pick::EntirePerson]), Orientation::Normal).unwrap();
     assert_eq!(main.side as usize, lightcraft_develop::segmask::MAX_SIDE);
-    assert!(detail.is_empty(), "{} finer grids", detail.len());
+    assert_eq!(detail.len(), 4, "the person in quarters");
+    let width = |g: &lightcraft_develop::SegMask| g.bounds().map_or(1.0, |r| r[2] - r[0]) / f64::from(g.side);
+    for g in &detail {
+        assert!(g.side as usize <= lightcraft_develop::segmask::MAX_SIDE);
+        assert!(width(g) * 1.5 < width(&main), "a tile's cells are finer than the main grid's");
+    }
+    // parts no finer than the main grid: no finer grid
+    let p = parse(vec![person(0.1, 0.1, 0.8, None)]);
+    assert!(build(&p, &Selection::of(Some(0), &[Pick::EntirePerson]), Orientation::Normal).unwrap().1.is_empty());
 }

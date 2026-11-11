@@ -44,11 +44,15 @@ impl Default for Replies {
 }
 
 impl Replies {
-    /// The replies that came in: each request's id and what it found.
-    pub(crate) fn drain(&self) -> Vec<(u64, Result<Option<SegMask>, String>)> {
+    /// The replies that came in: each request's id, what it found and the finer grids over its edge (fork, issue #240).
+    pub(crate) fn drain(&self) -> Vec<(u64, Result<Option<SegMask>, String>, Vec<SegMask>)> {
         #[cfg(feature = "sam")]
         {
-            self.channel.1.try_iter().map(|o| (o.id, if o.superseded { Err("the selection was stopped".to_string()) } else { o.result })).collect()
+            self.channel
+                .1
+                .try_iter()
+                .map(|o| (o.id, if o.superseded { Err("the selection was stopped".to_string()) } else { o.result }, o.detail))
+                .collect()
         }
         #[cfg(not(feature = "sam"))]
         Vec::new()
