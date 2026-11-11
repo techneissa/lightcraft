@@ -184,28 +184,35 @@ pub fn order(record: Option<&Record>, key: &str, default: Unit) -> Vec<Unit> {
 }
 
 /// What a load of a model with a Core ML version does, from [`order`]: Core ML on `coreml`'s units in turn, unless
-/// candle comes first (`candle_first`: candle was measured fastest).
+/// candle comes first (`candle_first`: candle was measured fastest), or candle only when no Core ML unit may load
+/// (`coreml_allowed` false: every one went over the load cap or missed the reference, the old one over the cap).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Plan {
     pub coreml: UnitOrder,
     pub candle_first: bool,
+    pub coreml_allowed: bool,
 }
 
 impl Plan {
     pub fn from_order(order: &[Unit], default: ComputeUnits) -> Self {
         let units: Vec<ComputeUnits> = order.iter().filter_map(|u| u.compute_units()).collect();
-        let coreml = if units.is_empty() { UnitOrder::one(default) } else { UnitOrder::new(&units) };
-        Self { coreml, candle_first: order.first().is_some_and(|u| u.compute_units().is_none()) }
+        // ([`order`] always holds the old unit unless it went over the cap: then no Core ML unit is tried)
+        let coreml_allowed = !units.is_empty();
+        let coreml = if coreml_allowed { UnitOrder::new(&units) } else { UnitOrder::one(default) };
+        Self { coreml, candle_first: order.first().is_some_and(|u| u.compute_units().is_none()), coreml_allowed }
     }
 
     /// The model's unit of old, as loads were before any measurement.
     pub fn default_for(units: ComputeUnits) -> Self {
-        Self { coreml: UnitOrder::one(units), candle_first: false }
+        Self { coreml: UnitOrder::one(units), candle_first: false, coreml_allowed: true }
     }
 
-    /// The runtime a load uses for the one chosen in Settings: Automatic becomes Candle when candle comes first.
+    /// The runtime a load uses for the one chosen in Settings: Automatic becomes Candle when candle comes first, and
+    /// any choice becomes Candle when no Core ML unit may load (Core ML chosen included: its every unit goes over the
+    /// load cap on this Mac).
     pub fn runtime(&self, chosen: lightcraft_coreml::Runtime) -> lightcraft_coreml::Runtime {
         match chosen {
+            _ if !self.coreml_allowed => lightcraft_coreml::Runtime::Candle,
             lightcraft_coreml::Runtime::Automatic if self.candle_first => lightcraft_coreml::Runtime::Candle,
             other => other,
         }

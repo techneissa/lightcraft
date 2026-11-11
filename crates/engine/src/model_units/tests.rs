@@ -15,13 +15,13 @@ struct FakeClock(AtomicU64);
 
 impl FakeClock {
     fn spend(&self, ms: u64) {
-        self.0.fetch_add(ms, Ordering::Relaxed);
+        self.0.fetch_add(ms, Ordering::SeqCst);
     }
 }
 
 impl Clock for FakeClock {
     fn now(&self) -> Duration {
-        Duration::from_millis(self.0.load(Ordering::Relaxed))
+        Duration::from_millis(self.0.load(Ordering::SeqCst))
     }
 }
 
@@ -203,7 +203,15 @@ fn an_option_over_the_load_cap_is_remembered_and_dropped() {
     assert_eq!(t[0].outcome, Outcome::LoadCap);
     assert_eq!(t[1].outcome, Outcome::Mismatch);
     let record = super::Record { key: "k".into(), options: t, complete: true };
-    assert_eq!(order(Some(&record), "k", Unit::CoreMlAll), [Unit::CandleGpu, Unit::CandleCpu]);
+    let order = order(Some(&record), "k", Unit::CoreMlAll);
+    assert_eq!(order, [Unit::CandleGpu, Unit::CandleCpu]);
+    // and a load never tries Core ML, also with Core ML chosen in Settings (the load's own plan for it included)
+    let plan = Plan::from_order(&order, ComputeUnits::All);
+    assert!(!plan.coreml_allowed);
+    for chosen in [lightcraft_coreml::Runtime::Automatic, lightcraft_coreml::Runtime::CoreMl] {
+        assert_eq!(plan.runtime(chosen), lightcraft_coreml::Runtime::Candle, "{chosen:?}");
+        assert_eq!(Plan { candle_first: false, ..plan }.runtime(chosen), lightcraft_coreml::Runtime::Candle, "{chosen:?}");
+    }
     // a damaged file is no measurement, not a crash
     std::fs::write(&file, b"{not json").unwrap();
     let damaged = ModelUnits::default();
@@ -308,4 +316,47 @@ fn a_load_left_behind_is_counted_until_it_returns() {
         assert!(std::time::Instant::now() < until, "the load left behind was never counted out");
         std::thread::sleep(Duration::from_millis(5));
     }
+}
+
+/// F1: a model whose reference is a Neural Engine option (Learn My Edits' all units) waits for later too, loading
+/// nothing, while a load is left behind; nothing can be compared without its reference.
+#[test]
+fn a_neural_engine_reference_waits_while_a_load_is_left_behind() {
+    let options = vec![fake(Unit::CoreMlAll, 10, 400, &REF), fake(Unit::CoreMlGpu, 10, 650, &REF)];
+    let clock = Arc::new(FakeClock::default());
+    let probe = FakeProbe::new(&clock, options.clone());
+    let held = Rules { left_behind: Arc::new(AtomicUsize::new(1)), ..rules() };
+    let (end, saved, complete) = measure_with(&probe, &clock, &held, Vec::new());
+    assert_eq!((end, complete, saved.len()), (End::Later, false, 0));
+    assert!(probe.loaded().is_empty());
+    let probe = FakeProbe::new(&clock, options);
+    let (end, saved, complete) = measure_with(&probe, &clock, &rules(), saved);
+    assert_eq!((end, complete), (End::Complete, true));
+    assert_eq!(probe.loaded(), [Unit::CoreMlAll, Unit::CoreMlGpu]);
+    assert_eq!(chosen(&saved), Some((Unit::CoreMlAll, 400.0)));
+}
+
+/// F2: time a run spends waiting for the app (a long Learn My Edits batch) is not the run's: on the measurement's
+/// clock the wait takes 20 minutes, twice the run limit, and the option is still measured, at its run's time.
+#[test]
+fn a_long_wait_for_the_app_is_not_a_run_that_did_not_end() {
+    let clock = Arc::new(FakeClock::default());
+    let probe = FakeProbe::new(&clock, vec![fake(Unit::CoreMlGpu, 10, 650, &REF)]);
+    let (c, asked) = (clock.clone(), Arc::new(AtomicUsize::new(0)));
+    let a = asked.clone();
+    // (the 1st ask is before the option, the 2nd before its warm run, the 3rd before the timed one)
+    let busy = Rules {
+        wait: Arc::new(move || {
+            if a.fetch_add(1, Ordering::SeqCst) == 2 {
+                c.spend(20 * 60 * 1000);
+                // (still waiting while the measurement looks at its clock; how long does not decide the result)
+                std::thread::sleep(Duration::from_millis(200));
+            }
+            false
+        }),
+        ..rules()
+    };
+    let (end, saved, _) = measure_with(&probe, &clock, &busy, Vec::new());
+    assert_eq!(end, End::Complete);
+    assert_eq!((saved[0].outcome, saved[0].run_ms), (Outcome::Ok, Some(650.0)), "{:?}", saved[0].error);
 }

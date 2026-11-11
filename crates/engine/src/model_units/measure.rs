@@ -8,8 +8,11 @@ use std::time::Duration;
 
 use super::{Outcome, Timing, Unit};
 
-/// Longest a measured run may take before its option counts as failed (a guard against a hang, not a budget).
+/// Longest a measured run may take before its option counts as failed (a guard against a hang, not a budget), on the
+/// measurement's clock; the time a run waits for the app (`Rules::wait`) does not count.
 const RUN_LIMIT: Duration = Duration::from_secs(600);
+/// How often the measuring thread looks at the clock while a run goes.
+const POLL: Duration = Duration::from_millis(50);
 /// Timed runs of a fast model repeat until they took this long together, or [`MAX_RUNS`] of them.
 const MIN_TIMED: Duration = Duration::from_millis(250);
 const MAX_RUNS: u32 = 10;
@@ -79,8 +82,39 @@ pub enum End {
 
 enum Step {
     Loaded(Duration),
+    /// About to wait for the app (the run limit is off until [`Step::Running`]).
+    Waiting,
+    /// Done waiting, a run starts.
+    Running,
     Ran(Result<(Vec<f32>, Duration), String>),
     Stopped,
+}
+
+/// Settles a load's state when the load returns, or panics: a load left behind counts itself out.
+struct Settle<'a> {
+    state: &'a AtomicU8,
+    left_behind: &'a AtomicUsize,
+    settled: bool,
+}
+
+impl Settle<'_> {
+    /// `true` when the load is still the measurement's; `false` when it was left behind (now counted out).
+    fn settle(&mut self) -> bool {
+        self.settled = true;
+        if self.state.compare_exchange(LOADING, LOADED, Ordering::AcqRel, Ordering::Acquire).is_ok() {
+            return true;
+        }
+        self.left_behind.fetch_sub(1, Ordering::AcqRel);
+        false
+    }
+}
+
+impl Drop for Settle<'_> {
+    fn drop(&mut self) {
+        if !self.settled {
+            self.settle();
+        }
+    }
 }
 
 /// A load's state, decided once between the measuring thread and the loading one.
@@ -116,10 +150,10 @@ impl Loading {
     /// timed runs, asking `wait` before each.
     fn run(self) {
         let t0 = self.clock.now();
+        let mut settle = Settle { state: &self.state, left_behind: &self.rules.left_behind, settled: false };
         let loaded = self.probe.load(self.unit);
-        if self.state.compare_exchange(LOADING, LOADED, Ordering::AcqRel, Ordering::Acquire).is_err() {
-            // left behind: the measurement counted this load; it ends here, the model dropped
-            self.rules.left_behind.fetch_sub(1, Ordering::AcqRel);
+        if !settle.settle() {
+            // left behind: it ends here, the model dropped
             return;
         }
         let mut runner = match loaded {
@@ -141,9 +175,11 @@ impl Loading {
         let (mut spent, mut timed, mut out) = (Duration::ZERO, 0u32, Vec::new());
         let mut warm = true;
         while warm || (timed < MAX_RUNS && spent < MIN_TIMED) {
+            let _ = self.tx.send(Step::Waiting);
             if (self.rules.wait)() {
                 return Step::Stopped;
             }
+            let _ = self.tx.send(Step::Running);
             let t = self.clock.now();
             match runner.run() {
                 Ok(o) => out = o,
@@ -185,7 +221,33 @@ fn wait_for_load(rx: &mpsc::Receiver<Step>, go: &mpsc::Sender<bool>, unit: Unit,
             Ok(d)
         }
         Step::Ran(Err(e)) => Err(timing(unit, Outcome::Failed, None, None, Some(e))),
-        Step::Ran(Ok(_)) | Step::Stopped => Err(timing(unit, Outcome::Failed, None, None, Some("ran before it loaded".into()))),
+        Step::Ran(Ok(_)) | Step::Stopped | Step::Waiting | Step::Running => {
+            Err(timing(unit, Outcome::Failed, None, None, Some("ran before it loaded".into())))
+        }
+    }
+}
+
+/// The runs' result: [`RUN_LIMIT`] on `clock` counts only while a run goes, not while it waits for the app.
+fn wait_for_runs(rx: &mpsc::Receiver<Step>, clock: &dyn Clock) -> Step {
+    let mut since = Some(clock.now());
+    loop {
+        let step = match rx.recv_timeout(POLL) {
+            Ok(step) => step,
+            Err(mpsc::RecvTimeoutError::Disconnected) => return Step::Ran(Err("the run stopped".into())),
+            // (a step sent before the clock moved is taken first)
+            Err(mpsc::RecvTimeoutError::Timeout) => match rx.try_recv() {
+                Ok(step) => step,
+                Err(_) if since.is_some_and(|t| clock.now().saturating_sub(t) > RUN_LIMIT) => {
+                    return Step::Ran(Err("the run did not end".into()));
+                }
+                Err(_) => continue,
+            },
+        };
+        match step {
+            Step::Waiting => since = None,
+            Step::Running => since = Some(clock.now()),
+            other => return other,
+        }
     }
 }
 
@@ -203,12 +265,14 @@ fn one(probe: &Arc<dyn Probe>, clock: &Arc<dyn Clock>, unit: Unit, rules: &Rules
         Ok(d) => d,
         Err(t) => return Some((t, None)),
     };
-    Some(match rx.recv_timeout(RUN_LIMIT) {
-        Ok(Step::Ran(Ok((out, run)))) if out.iter().all(|v| v.is_finite()) => (timing(unit, Outcome::Ok, Some(load), Some(run), None), Some(out)),
-        Ok(Step::Ran(Ok((_, run)))) => (timing(unit, Outcome::Mismatch, Some(load), Some(run), Some("not a number in the output".into())), None),
-        Ok(Step::Ran(Err(e))) => (timing(unit, Outcome::Failed, Some(load), None, Some(e)), None),
-        Ok(Step::Stopped) => return None,
-        Ok(Step::Loaded(_)) | Err(_) => (timing(unit, Outcome::Failed, Some(load), None, Some("the run did not end".into())), None),
+    Some(match wait_for_runs(&rx, clock.as_ref()) {
+        Step::Ran(Ok((out, run))) if out.iter().all(|v| v.is_finite()) => (timing(unit, Outcome::Ok, Some(load), Some(run), None), Some(out)),
+        Step::Ran(Ok((_, run))) => (timing(unit, Outcome::Mismatch, Some(load), Some(run), Some("not a number in the output".into())), None),
+        Step::Ran(Err(e)) => (timing(unit, Outcome::Failed, Some(load), None, Some(e)), None),
+        Step::Stopped => return None,
+        Step::Loaded(_) | Step::Waiting | Step::Running => {
+            (timing(unit, Outcome::Failed, Some(load), None, Some("the run did not end".into())), None)
+        }
     })
 }
 
@@ -251,13 +315,21 @@ pub fn measure(probe: Arc<dyn Probe>, clock: Arc<dyn Clock>, rules: &Rules, done
         if (rules.wait)() {
             return End::Stopped;
         }
-        // (the reference is how the model loads anyway: never left for later)
-        if let Some(skip) = before_option(&out, unit, rules, &mut later).filter(|_| i > 0) {
-            if let Some(t) = skip {
-                out.push(t);
+        match before_option(&out, unit, rules, &mut later) {
+            // a Neural Engine reference must wait too, and nothing can be compared without it
+            Some(None) if i == 0 => {
                 save(&out, false);
+                return End::Later;
             }
-            continue;
+            Some(skip) if i > 0 => {
+                if let Some(t) = skip {
+                    out.push(t);
+                    save(&out, false);
+                }
+                continue;
+            }
+            // (the reference is never "not loaded" for another Neural Engine option's cap)
+            _ => {}
         }
         let Some((mut t, output)) = one(&probe, &clock, unit, rules) else { return End::Stopped };
         match (i, output) {
