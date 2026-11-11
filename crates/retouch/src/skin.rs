@@ -1,53 +1,72 @@
 //! Skin: Smoothness, Texture and Shine. Evens the skin's surface while keeping its pores.
 //!
-//! Frequency separation on the face's Facial Skin mask. The skin inside the mask is split into four bands by
-//! Gaussian blurs whose sizes are fractions of the face ([`FINE`], [`MID`], [`TONE`]):
+//! Frequency separation on the face's Facial Skin mask, in log luminance (a blotch is a change of brightness by a
+//! factor, the same on dark and light skin) and colour ratios (`split`), with sizes that are fractions of the
+//! face:
 //!
-//! - **fine** (pores, fine hairs, grain): the picture less its [`FINE`] blur. Smoothness never touches it, so the
-//!   skin keeps its texture; Texture strengthens it (up to [`TEXTURE_GAIN`] more).
-//! - **mid** (bumps, small marks, fine lines): [`FINE`] blur less [`MID`] blur, taken away by Smoothness (up to
-//!   [`MID_CUT`] of it).
-//! - **tone** (blotches, uneven colour): [`MID`] blur less [`TONE`] blur, taken away by Smoothness (up to
-//!   [`TONE_CUT`]).
-//! - **base** (the face's shape and light): the [`TONE`] blur, never changed by Smoothness.
+//! - **pores** (pores, fine hairs, grain): the skin less its blur at [`PORES`]. Smoothness keeps them as they are;
+//!   Texture strengthens them (up to [`TEXTURE_GAIN`] more) or softens them (up to [`TEXTURE_SOFTEN`] less).
+//! - **the rest** (bumps, small marks, fine lines, blotches, and the face's shape and light): Smoothness evens it
+//!   with a bilateral grid (`grid::Grid`) over [`SMOOTH`] of the face: a pixel is averaged with the skin around it of
+//!   about its own light ([`EDGE`]), so bumps, marks and blotches go while a nostril, a lash line, a fold or the
+//!   face's shading, darker or brighter than the skin beside it, stays sharp with no halo. [`TONE_CUT`] of a wider
+//!   grid ([`TONE`]) takes larger blotches down a little; a change of colour past [`COLOUR_EDGE`] is held back
+//!   (the grid tells edges by light only); and the change fades in over [`FEATHER`] from the mask's edge.
 //!
-//! Each band's change fades out where its contrast is high (an edge such as a nostril or a lash line is not
-//! unevenness), so the face keeps its shape. Shine lowers oily highlights: where the smoothed skin is brighter
-//! than the skin around it ([`SHINE_BASE`] blur) by more than [`SHINE_START`], and paler (light on top of the skin's
-//! colour, unlike the light on one side of a face), the excess is compressed by taking away neutral light, which
-//! gives the skin its colour back; the texture on top is scaled with it.
+//! Shine lowers oily highlights: where the smoothed skin is brighter than the skin around it ([`SHINE_BASE`]
+//! blur) by more than [`SHINE_START`], and paler (light on top of the skin's colour, unlike the light on one side
+//! of a face), the excess is compressed by taking away neutral light, which gives the skin its colour back; the
+//! pores on top keep their contrast.
 //!
 //! Every blur reads only the skin (a blur of the picture weighted by the mask, divided by the blur of the mask), so
 //! no colour from hair, eyes, lips or the background bleeds in: no halo at the mask's edge. The change is weighted
-//! by the mask, so a pixel outside it never changes, and the bands are measured on pixels in the mask's box only.
-//! The blurs run on the region reduced so that each is at least `PER_PIXEL` reduced pixels wide, and are read back
-//! bilinearly, which keeps a slider drag within the draft budget.
+//! by the mask, so a pixel outside it never changes. The wide blurs run on the region reduced so that each is at
+//! least `PER_PIXEL` reduced pixels wide, and are read back bilinearly, which keeps a slider drag within the draft
+//! budget.
 //!
 //! A later Refine brush (#99) paints over the mask: `skin_mask` is where it will be applied.
 
-use lightcraft_raster::blur::{gauss_taps, gaussian, gaussian_taps};
 use lightcraft_raster::{Image, Plane, Rgb32f, par_rows};
 use serde::{Deserialize, Serialize};
 
 use crate::{Control, Feature, Part, Scene, Scope, Spec, Stage};
 
-/// The fine band's blur, a fraction of the face's size: what is finer than it is texture.
-pub const FINE: f64 = 0.008;
-/// The mid band's blur, a fraction of the face's size.
-pub const MID: f64 = 0.03;
-/// The tone band's blur, a fraction of the face's size: what is coarser is the face's shape and light.
+mod grid;
+
+use grid::{Grid, Reduced};
+
+/// The pores' size, a fraction of the face: what is finer (pores, fine hairs, grain) is the skin's texture, which
+/// Smoothness keeps and Texture scales.
+pub const PORES: f64 = 0.002;
+/// The window Smoothness evens the skin over (a Gaussian's sigma), a fraction of the face: bumps, small marks,
+/// fine lines and blotches up to about this size go.
+pub const SMOOTH: f64 = 0.04;
+/// A change of colour (a channel's share of the light, relative) Smoothness keeps half of: blotchy redness, a few
+/// percent, is evened; the colour of a neighbouring area of the same light (a lit nose wing beside a cheek) is not
+/// carried over.
+pub const COLOUR_EDGE: f32 = 0.08;
+/// How far in from the mask's edge Smoothness takes to come to full strength (a Gaussian's sigma, a fraction of
+/// the face): no seam where smoothed skin meets the hair, beard or background beyond the mask.
+pub const FEATHER: f64 = 0.01;
+/// The tone band's coarse end, a fraction of the face's size: what is coarser is the face's shape and light.
 pub const TONE: f64 = 0.07;
 /// The blur Shine measures highlights against, a fraction of the face's size.
 pub const SHINE_BASE: f64 = 0.1;
 
-/// The share of the mid band Smoothness 100 takes away.
-pub const MID_CUT: f32 = 0.9;
-/// The share of the tone band Smoothness 100 takes away.
-pub const TONE_CUT: f32 = 0.6;
-/// How much stronger Texture 100 makes the fine band (0.6: 60 % more).
-pub const TEXTURE_GAIN: f32 = 0.6;
-/// A band's change is halved where its contrast (to the skin around it) is this; the mid, tone and fine bands.
-const EDGE: [f32; 3] = [0.10, 0.15, 0.12];
+/// The share of the grid at [`TONE`] mixed into the grid at [`SMOOTH`]: how much of the blotches between the two
+/// sizes Smoothness 100 takes away.
+pub const TONE_CUT: f32 = 0.15;
+/// The difference of light (natural log) Smoothness tells an edge by: skin within about this of a pixel's own
+/// light is averaged with it, and skin far brighter or darker (the other side of a nostril, a lash line or a
+/// shadow) is not.
+pub const EDGE: f32 = 0.4;
+/// How much stronger Texture +100 makes the pores (1.0: twice their contrast).
+pub const TEXTURE_GAIN: f32 = 1.0;
+/// How much of the pores' contrast Texture −100 takes away.
+pub const TEXTURE_SOFTEN: f32 = 0.8;
+/// Texture changes pores less where their own contrast reaches this (natural log; half at it): an edge's fine
+/// detail, such as a nostril's rim, is not texture.
+const TEXTURE_EDGE: f32 = 0.3;
 /// Shine: skin brighter than the skin around it ([`SHINE_BASE`]) by more than this (natural log: 1.1×) is a
 /// highlight.
 pub const SHINE_START: f32 = 0.1;
@@ -72,7 +91,7 @@ pub const MAX_BOX: usize = 1 << 26;
 pub struct Skin {
     /// 0…100: how much of the skin's unevenness (bumps, blotches) is taken away; 0 is none.
     pub smoothness: f64,
-    /// 0…100: how much the skin's fine texture (pores) is strengthened; 0 is as it is.
+    /// −100…100: how much the skin's pores are softened (below 0) or strengthened (above 0); 0 is as they are.
     pub texture: f64,
     /// 0…100: how much oily highlights are lowered; 0 is none.
     pub shine: f64,
@@ -89,7 +108,7 @@ impl Feature for Skin {
     const REACH: f64 = 0.02;
     const CONTROLS: &'static [Control<Self>] = &[
         Control { spec: Spec::amount("retouch.skin.smoothness", "Smoothness"), get: |s| s.smoothness, set: |s, v| s.smoothness = v },
-        Control { spec: Spec::amount("retouch.skin.texture", "Texture"), get: |s| s.texture, set: |s, v| s.texture = v },
+        Control { spec: Spec::signed("retouch.skin.texture", "Texture"), get: |s| s.texture, set: |s, v| s.texture = v },
         Control { spec: Spec::amount("retouch.skin.shine", "Shine"), get: |s| s.shine, set: |s, v| s.shine = v },
     ];
 
@@ -131,12 +150,12 @@ struct Strength {
 
 impl Strength {
     fn of(s: &Skin) -> Strength {
-        let f = |v: f64| if v.is_finite() { (v.clamp(0.0, 100.0) / 100.0) as f32 } else { 0.0 };
-        Strength { smooth: f(s.smoothness), texture: f(s.texture), shine: f(s.shine) }
+        let f = |v: f64, lo: f64| if v.is_finite() { (v.clamp(lo, 100.0) / 100.0) as f32 } else { 0.0 };
+        Strength { smooth: f(s.smoothness, 0.0), texture: f(s.texture, -100.0), shine: f(s.shine, 0.0) }
     }
 
     fn is_none(&self) -> bool {
-        self.smooth <= 0.0 && self.texture <= 0.0 && self.shine <= 0.0
+        self.smooth <= 0.0 && self.texture == 0.0 && self.shine <= 0.0
     }
 }
 
@@ -208,54 +227,131 @@ fn retouch(mut c: Rgb32f, m: &Plane, size: f64, k: Strength) -> Rgb32f {
         if v.is_finite() { v.max(0.0) } else { 0.0 }
     };
     let w = c.width;
-    let mut weighted = Image::<[f32; 4]>::new(w, c.height);
-    par_rows(&mut weighted.data, w.max(1), |y, row| {
+    // the skin (split) weighted by the mask, then without its pores: [log luminance, red, blue, mask]
+    let mut base = Image::<[f32; 4]>::new(w, c.height);
+    par_rows(&mut base.data, w.max(1), |y, row| {
         for (x, o) in row.iter_mut().enumerate() {
             let i = y * w + x;
             let (p, mv) = (c.data.get(i).copied().unwrap_or_default(), m.data.get(i).copied().unwrap_or(0.0));
-            *o = [p[0] * mv, p[1] * mv, p[2] * mv, mv];
+            let l = split(p);
+            *o = [l[0] * mv, l[1] * mv, l[2] * mv, mv];
         }
     });
-    let fine = Reduced::blurred(&weighted, px(FINE));
-    let wide = Reduced::new(&weighted, px(MID));
-    let (mid, tone, base) = (wide.blur(px(MID)), wide.blur(px(TONE)), wide.blur(px(SHINE_BASE)));
-    par_rows(&mut c.data, w.max(1), |y, row| {
+    let pores = Reduced::blurred(&base, px(PORES));
+    par_rows(&mut base.data, w.max(1), |y, row| {
         for (x, o) in row.iter_mut().enumerate() {
-            let mv = m.data.get(y * w + x).copied().unwrap_or(0.0);
-            if mv <= 0.0 {
+            if o[3] <= 0.0 {
                 continue;
             }
-            let src = *o;
-            let g1 = fine.read(&fine.taps(x, y), src);
-            let t = mid.taps(x, y);
-            let (g2, g3, g4) = (mid.read(&t, src), tone.read(&t, src), base.read(&t, src));
-            let new = pixel(src, g1, g2, g3, g4, k);
-            *o = std::array::from_fn(|c| src[c] + mv * (new[c] - src[c]));
+            let own = [o[0] / o[3], o[1] / o[3], o[2] / o[3]];
+            let p = pores.read(&pores.taps(x, y), own);
+            *o = [p[0], p[1], p[2], o[3]];
+        }
+    });
+    drop(pores);
+    let even = if k.smooth > 0.0 { Even::new(&base, px(SMOOTH), px(TONE), px(FEATHER)) } else { None };
+    let around = if k.shine > 0.0 { Some(Reduced::of_skin(&base, px(SMOOTH)).blur(px(SHINE_BASE))) } else { None };
+    let wide = |x: usize, y: usize, own: [f32; 3]| around.as_ref().map_or(own, |r| r.read(&r.taps(x, y), own));
+    par_rows(&mut c.data, w.max(1), |y, row| {
+        for (x, o) in row.iter_mut().enumerate() {
+            let Some(b) = base.data.get(y * w + x) else { continue };
+            if b[3] <= 0.0 {
+                continue;
+            }
+            let (src, smooth) = (*o, [b[0], b[1], b[2]]);
+            let even = even.as_ref().map(|e| e.at(x, y, smooth));
+            let new = pixel(src, smooth, even, wide(x, y, smooth), k);
+            *o = std::array::from_fn(|c| src[c] + b[3] * (new[c] - src[c]));
         }
     });
     c
 }
 
-/// One pixel: `src` and its blurs at [`FINE`], [`MID`], [`TONE`] and [`SHINE_BASE`].
-fn pixel(src: [f32; 3], g1: [f32; 3], g2: [f32; 3], g3: [f32; 3], g4: [f32; 3], k: Strength) -> [f32; 3] {
-    let sub = |a: [f32; 3], b: [f32; 3]| [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
-    let (fine, mid, tone) = (sub(src, g1), sub(g1, g2), sub(g2, g3));
-    // each band's contrast against the skin around it (its luminance, or half its strongest channel for a change
-    // of colour)
-    let inv = 1.0 / luma(g2).max(DARK);
-    let rel = |d: [f32; 3]| luma(d).abs().max(d[0].abs().max(d[1].abs()).max(d[2].abs()) * 0.5) * inv;
-    let cut_mid = k.smooth * MID_CUT * soft(rel(mid), EDGE[0]);
-    let cut_tone = k.smooth * TONE_CUT * soft(rel(tone), EDGE[1]);
-    let gain = k.texture * TEXTURE_GAIN * soft(rel(fine), EDGE[2]);
-    // the smoothed skin without its fine and mid bands, then its highlights lowered
-    let low: [f32; 3] = std::array::from_fn(|c| g3[c] + tone[c] * (1.0 - cut_tone));
-    let (lit, scale) = deshine(low, g4, k.shine);
-    std::array::from_fn(|c| {
-        let v = lit[c] + scale * (mid[c] * (1.0 - cut_mid) + fine[c] * (1.0 + gain));
-        // never below black, unless the source already was
-        if v.is_finite() { v.max(src[c].min(0.0)) } else { src[c] }
-    })
+/// The even skin Smoothness 100 gives: the pore-free skin through the bilateral grid ([`Grid`]) at [`SMOOTH`],
+/// with [`TONE_CUT`] of the grid at [`TONE`] mixed in (blotches up to that size).
+struct Even {
+    /// The grid at [`SMOOTH`] with [`TONE_CUT`] of the grid at [`TONE`] mixed in.
+    grid: Grid,
+    /// The mask blurred by [`FEATHER`]: Smoothness fades in from the mask's edge over about that much.
+    fade: Reduced,
 }
+
+impl Even {
+    fn new(base: &Image<[f32; 4]>, sigma: f32, tone: f32, feather: f32) -> Option<Even> {
+        let range = EDGE;
+        let grid = Grid::new(base, sigma, range)?;
+        let fade = Reduced::of_skin(base, feather).blur(feather);
+        Some(Even { grid: grid.blurred(sigma, range).mix(&grid.blurred(tone, range), TONE_CUT), fade })
+    }
+
+    /// The even skin at (`x`, `y`) and how much of it to take there (0 at the mask's edge, 1 a [`FEATHER`]
+    /// inside it).
+    fn at(&self, x: usize, y: usize, own: [f32; 3]) -> ([f32; 3], f32) {
+        let even = self.grid.read(x, y, own);
+        let inside = self.fade.weight(&self.fade.taps(x, y));
+        let fade = ((inside - 0.5) / 0.4).clamp(0.0, 1.0);
+        // colour: the grid tells edges by light only, so skin of another colour but the same light (a lit nose
+        // wing beside a cheek) can be averaged in; a change of colour past COLOUR_EDGE is held back
+        let ce = COLOUR_EDGE;
+        let colour = |c: usize| {
+            let d = even[c] - own[c];
+            d * soft(d.abs() / own[c].abs().max(0.05), ce)
+        };
+        ([even[0], own[1] + colour(1), own[2] + colour(2)], fade * fade * (3.0 - 2.0 * fade))
+    }
+}
+
+/// One pixel: `src`, its skin without pores `smooth` ([`split`]), the even skin there
+/// (`None` with Smoothness off) and the skin around it at [`SHINE_BASE`].
+fn pixel(src: [f32; 3], smooth: [f32; 3], even: Option<([f32; 3], f32)>, around: [f32; 3], k: Strength) -> [f32; 3] {
+    if luma(src) <= DARK || src.iter().any(|v| !v.is_finite()) {
+        return src;
+    }
+    let l = split(src);
+    let pores: [f32; 3] = std::array::from_fn(|c| l[c] - smooth[c]);
+    let mut low = smooth;
+    if let Some((even, fade)) = even {
+        low = std::array::from_fn(|c| smooth[c] + k.smooth * fade * (even[c] - smooth[c]));
+    }
+    if k.shine > 0.0 {
+        let (lit, _) = deshine(join(low), join(around), k.shine);
+        low = split(lit);
+    }
+    // Texture: the pores' brightness stronger or softer, less where it is an edge's own fine detail
+    let gain = if k.texture > 0.0 { k.texture * TEXTURE_GAIN } else { k.texture * TEXTURE_SOFTEN } * soft(pores[0].abs(), TEXTURE_EDGE);
+    let out = [(low[0] + pores[0] * (1.0 + gain)).min(l[0] + MOST_LOG), low[1] + pores[1], low[2] + pores[2]];
+    let new = join(out);
+    // never below black, unless the source already was
+    std::array::from_fn(|c| if new[c].is_finite() { new[c].max(src[c].min(0.0)) } else { src[c] })
+}
+
+/// The most a pixel is brightened, in natural log (×20): only a broken input would ask for more.
+const MOST_LOG: f32 = 3.0;
+
+/// Red's and blue's luminance weights; green's is what is left ([`join`]).
+const YR: f32 = Y[0];
+const YB: f32 = Y[2];
+
+/// `p` as the filter works on it: log luminance, and red and blue over luminance (its colour; green's
+/// follows from them). Luminance at or below [`DARK`] reads as [`DARK`]. Log luminance makes a blotch a change by
+/// a factor, the same on dark and light skin; colour as ratios stays calm where a channel is near 0 (the blue of
+/// warm skin in low light), which a log per channel would blow up into noise.
+fn split(p: [f32; 3]) -> [f32; 3] {
+    let y = luma(p);
+    let y = if y.is_finite() { y.max(DARK) } else { DARK };
+    let ratio = |v: f32| if v.is_finite() { (v / y).clamp(-RATIO, RATIO) } else { 0.0 };
+    [y.ln(), ratio(p[0]), ratio(p[2])]
+}
+
+/// Back from [`split`] to light.
+fn join(v: [f32; 3]) -> [f32; 3] {
+    let y = v[0].exp();
+    let g = (1.0 - YR * v[1] - YB * v[2]) / Y[1];
+    [y * v[1], y * g, y * v[2]]
+}
+
+/// The largest ratio of a channel to luminance [`split`] keeps (pure blue is about 17).
+const RATIO: f32 = 32.0;
 
 /// `low` with its shine lowered by `amount` (0…1), against the face's wide average `base`, and the factor its
 /// luminance changed by (the texture on top is scaled by it).
@@ -282,111 +378,4 @@ fn deshine(low: [f32; 3], base: [f32; 3], amount: f32) -> ([f32; 3], f32) {
     let lit: [f32; 3] = std::array::from_fn(|c| (low[c] - neutral).max(low[c] * (1.0 - SHINE_MOST)));
     let scale = (luma(lit) / y).clamp(0.0, 1.0);
     (lit, scale)
-}
-
-/// A mask-weighted blur back to colour; `fallback` where the mask's blur is 0.
-fn unweight(p: [f32; 4], fallback: [f32; 3]) -> [f32; 3] {
-    if p[3] > 1e-6 { [p[0] / p[3], p[1] / p[3], p[2] / p[3]] } else { fallback }
-}
-
-/// The mask-weighted region reduced by `factor` (whole pixels averaged), for blurs of at least about
-/// [`PER_PIXEL`] times the factor; a blur of it is read back bilinearly.
-#[derive(Clone)]
-struct Reduced {
-    img: Image<[f32; 4]>,
-    factor: usize,
-}
-
-/// The smallest blur, in reduced pixels, a reduction is made for (a blur of 2.5 px or more read back bilinearly
-/// differs from the full-size blur by well under a percent of the band).
-const PER_PIXEL: f32 = 2.5;
-
-impl Reduced {
-    /// Reduce `weighted` for blurs of `smallest` full-size pixels or more.
-    fn new(weighted: &Image<[f32; 4]>, smallest: f32) -> Reduced {
-        let (fw, fh) = (weighted.width, weighted.height);
-        let factor = ((smallest / PER_PIXEL).floor() as usize).clamp(1, fw.max(fh).max(1));
-        if factor == 1 {
-            return Reduced { img: weighted.clone(), factor };
-        }
-        let (w, h) = (fw.div_ceil(factor), fh.div_ceil(factor));
-        let mut img = Image::<[f32; 4]>::new(w, h);
-        par_rows(&mut img.data, w.max(1), |sy, row| {
-            let ys = sy * factor..((sy + 1) * factor).min(fh);
-            for (sx, o) in row.iter_mut().enumerate() {
-                let xs = sx * factor..((sx + 1) * factor).min(fw);
-                let mut acc = [0.0f32; 4];
-                for y in ys.clone() {
-                    for p in weighted.data.get(y * fw + xs.start..y * fw + xs.end).unwrap_or(&[]) {
-                        acc = std::array::from_fn(|c| acc[c] + p[c]);
-                    }
-                }
-                let n = (ys.len() * xs.len()).max(1) as f32;
-                *o = acc.map(|v| v / n);
-            }
-        });
-        Reduced { img, factor }
-    }
-
-    /// `weighted` blurred by `sigma` full-size pixels, reduced for it (not copied when it needs no reduction).
-    fn blurred(weighted: &Image<[f32; 4]>, sigma: f32) -> Reduced {
-        if ((sigma / PER_PIXEL).floor() as usize) < 2 {
-            return Reduced { img: blur(weighted, sigma), factor: 1 };
-        }
-        Reduced::new(weighted, sigma).blur(sigma)
-    }
-
-    /// Blurred by `sigma` full-size pixels.
-    fn blur(&self, sigma: f32) -> Reduced {
-        Reduced { img: blur(&self.img, sigma / self.factor as f32), factor: self.factor }
-    }
-
-    /// Where full-size pixel (`x`, `y`) reads this reduction: four samples and their bilinear weights. Every blur
-    /// of one reduction shares them.
-    fn taps(&self, x: usize, y: usize) -> Taps {
-        let (w, h) = (self.img.width, self.img.height);
-        if w == 0 || h == 0 {
-            return Taps { at: [usize::MAX; 4], weight: [0.0; 4] };
-        }
-        if self.factor == 1 {
-            let i = y * w + x;
-            return Taps { at: [i; 4], weight: [1.0, 0.0, 0.0, 0.0] };
-        }
-        let f = self.factor as f32;
-        let fx = ((x as f32 + 0.5) / f - 0.5).clamp(0.0, (w - 1) as f32);
-        let fy = ((y as f32 + 0.5) / f - 0.5).clamp(0.0, (h - 1) as f32);
-        let (x0, y0) = (fx as usize, fy as usize);
-        let (x1, y1) = ((x0 + 1).min(w - 1), (y0 + 1).min(h - 1));
-        let (tx, ty) = (fx - x0 as f32, fy - y0 as f32);
-        Taps {
-            at: [y0 * w + x0, y0 * w + x1, y1 * w + x0, y1 * w + x1],
-            weight: [(1.0 - tx) * (1.0 - ty), tx * (1.0 - ty), (1.0 - tx) * ty, tx * ty],
-        }
-    }
-
-    /// This blur at `taps`, back to colour; `fallback` where the mask's blur is 0.
-    fn read(&self, t: &Taps, fallback: [f32; 3]) -> [f32; 3] {
-        let mut p = [0.0f32; 4];
-        for (i, wt) in t.at.iter().zip(t.weight) {
-            if let Some(v) = self.img.data.get(*i) {
-                p = std::array::from_fn(|c| p[c] + v[c] * wt);
-            }
-        }
-        unweight(p, fallback)
-    }
-}
-
-/// Blurs under this sigma (pixels) use exact Gaussian taps: the three-box blur snaps a small sigma to whole-pixel
-/// boxes, and leaves the image as it is below about 0.58 px, so Texture did nothing on a face under about 72 px.
-const EXACT_BELOW: f32 = 2.0;
-
-/// `img` blurred by Gaussian `sigma` (pixels): exact taps under [`EXACT_BELOW`], three box passes above.
-fn blur(img: &Image<[f32; 4]>, sigma: f32) -> Image<[f32; 4]> {
-    if sigma < EXACT_BELOW && sigma.is_finite() && sigma > 0.0 { gaussian_taps(img, &gauss_taps(sigma)) } else { gaussian(img, sigma) }
-}
-
-/// Four samples of a reduction and their weights ([`Reduced::taps`]).
-struct Taps {
-    at: [usize; 4],
-    weight: [f32; 4],
 }
