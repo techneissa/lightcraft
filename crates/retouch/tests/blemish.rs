@@ -398,7 +398,6 @@ fn a_face_cut_by_the_edge() {
     assert!(dip(&out, at) < dip(&img, at) * 0.3, "the pimple inside the photo is repaired");
 }
 
-
 /// Dark skin (#204): a group of brown marks (what acne leaves on dark skin, or an older face's age spots), one red
 /// pimple, and a field of freckles away from them. On dark skin every spot is brown, so colour can't tell a mark
 /// from a freckle; at 100 with Keep Moles and Freckles on, the marks and the pimple go and the freckle field stays.
@@ -409,7 +408,8 @@ fn on_dark_skin_marks_go_and_a_freckle_field_stays() {
     let field: Vec<(f64, f64)> = (0..36).map(|i| (0.665 + ((i % 6) as f64 - 2.5) * 0.03, 0.55 + ((i / 6) as f64 - 2.5) * 0.03)).collect();
     let n = 400;
     let size = n as f64 * FACE.width();
-    let d = |x: usize, y: usize, at: (f64, f64)| ((x as f64 + 0.5 - at.0 * n as f64).powi(2) + (y as f64 + 0.5 - at.1 * n as f64).powi(2)).sqrt() / size;
+    let d =
+        |x: usize, y: usize, at: (f64, f64)| ((x as f64 + 0.5 - at.0 * n as f64).powi(2) + (y as f64 + 0.5 - at.1 * n as f64).powi(2)).sqrt() / size;
     let img = Rgb32f::from_fn(n, n, |x, y| {
         let shade = 0.9 + 0.2 * (y as f32 / n as f32);
         let pore = 1.0 + 0.04 * (hash(x, y) - 0.5);

@@ -144,6 +144,12 @@ const IN_FIELD: Look = Look { find: FIELD_FIND, stand_out: FIELD_STAND_OUT };
 pub const FIELD_FIND: f32 = 0.03;
 pub const FIELD_STAND_OUT: f32 = 1.2;
 
+/// The donor is looked for this many spot radii away (under [`crate::blemish::MAX_DONOR`]) …
+const DONOR_AT: [f64; 2] = [3.0, 3.5];
+/// … and its pores are weighed this much against how its tone and blemishes compare (a donor with half or twice the
+/// skin's fine texture costs about as much as one 7 % lighter or darker).
+const DONOR_TEXTURE: f32 = 0.1;
+
 /// Most spots kept per face (the strongest; a freckled face has hundreds).
 pub const MAX_SPOTS: usize = 1000;
 /// Most pixels of the mask's box looked at (the box is reduced to the face's [`WORK`] size first).
@@ -580,30 +586,38 @@ fn suppress(prior: &[Found], found: Vec<Found>, most: usize) -> Vec<Found> {
     kept
 }
 
-/// A clean patch of skin next to spot `f` (work pixels): of 16 places 2.6 and 3.4 radii away, the one with skin all
-/// around, clear of every spot, answering least at the spot's size and closest to the skin around the spot in
-/// brightness. `None` when none has skin all around.
+/// A clean patch of skin next to spot `f` (work pixels): of 16 places [`DONOR_AT`] radii away (far enough that the
+/// patch the heal copies never takes in the spot itself), the one with skin all around, clear of every other spot's
+/// heal, answering least at the spot's size, and closest to the skin around the spot in tone and in fine texture
+/// (pores: the smallest size's response). `None` when none has skin all around.
 fn donor(work: &Work, resp: &[Plane], spots: &[Found], f: &Found) -> Option<(f64, f64)> {
     let (cx, cy) = (f.x as f64 + 0.5, f.y as f64 + 0.5);
     let r = f.radius;
-    let resp = resp.get(f.scale)?;
+    let coarse = resp.get(f.scale)?;
+    let fine = resp.first()?;
     let bright = |x: f64, y: f64| {
         let (xi, yi) = (x.max(0.0) as usize, y.max(0.0) as usize);
-        work.weighted.data.get(yi.min(work.h.saturating_sub(1)) * work.w + xi.min(work.w.saturating_sub(1))).map_or(0.0, |p| absorb(p) / p[3].max(1e-3))
+        work.weighted
+            .data
+            .get(yi.min(work.h.saturating_sub(1)) * work.w + xi.min(work.w.saturating_sub(1)))
+            .map_or(0.0, |p| absorb(p) / p[3].max(1e-3))
     };
-    let ring: f32 =
-        (0..8).map(|k| f64::from(k) * std::f64::consts::TAU / 8.0).map(|a| bright(cx + 1.8 * r * a.cos(), cy + 1.8 * r * a.sin())).sum::<f32>() / 8.0;
+    let ring_pts: Vec<(f64, f64)> =
+        (0..8).map(|k| f64::from(k) * std::f64::consts::TAU / 8.0).map(|a| (cx + 1.8 * r * a.cos(), cy + 1.8 * r * a.sin())).collect();
+    let ring = ring_pts.iter().map(|(x, y)| bright(*x, *y)).sum::<f32>() / 8.0;
+    let ring_tex = ring_pts.iter().map(|(x, y)| at(fine, *x as isize, *y as isize).abs()).sum::<f32>() / 8.0;
     let mut best: Option<(f32, (f64, f64))> = None;
-    for dist in [2.6, 3.4] {
+    for (n, dist) in DONOR_AT.iter().enumerate() {
         for k in 0..8 {
-            let a = (f64::from(k) + if dist > 3.0 { 0.5 } else { 0.0 }) * std::f64::consts::TAU / 8.0;
+            let a = (f64::from(k) + if n == 1 { 0.5 } else { 0.0 }) * std::f64::consts::TAU / 8.0;
             let (dx, dy) = (cx + dist * r * a.cos(), cy + dist * r * a.sin());
-            if !skin_all_around(work, dx, dy, r * 1.6 + 1.0) {
+            if !skin_all_around(work, dx, dy, r * crate::blemish::CORE + 1.0) {
                 continue;
             }
             let clear = spots.iter().all(|o| {
-                let d = ((o.x as f64 + 0.5 - dx).powi(2) + (o.y as f64 + 0.5 - dy).powi(2)).sqrt();
-                std::ptr::eq(o, f) || d > (o.radius + r) * 1.3
+                let (ox, oy) = (o.x as f64 + 0.5, o.y as f64 + 0.5);
+                let itself = o.x == f.x && o.y == f.y;
+                itself || ((ox - dx).powi(2) + (oy - dy).powi(2)).sqrt() > o.radius + r * crate::blemish::CORE
             });
             if !clear {
                 continue;
@@ -613,12 +627,14 @@ fn donor(work: &Work, resp: &[Plane], spots: &[Found], f: &Found) -> Option<(f64
                 let rr = if j == 8 { 0.0 } else { r * 0.7 };
                 (dx + rr * b.cos(), dy + rr * b.sin())
             });
-            let (mut busy, mut light) = (0.0f32, 0.0f32);
+            let (mut busy, mut light, mut tex) = (0.0f32, 0.0f32, 0.0f32);
             for (px, py) in pts {
-                busy += at(resp, px as isize, py as isize).abs();
+                busy += at(coarse, px as isize, py as isize).abs();
                 light += bright(px, py);
+                tex += at(fine, px as isize, py as isize).abs();
             }
-            let score = busy / 9.0 + ln_ratio(light / 9.0, ring).abs();
+            let texture = ((tex / 9.0 + 1e-3) / (ring_tex + 1e-3)).ln().abs();
+            let score = busy / 9.0 + ln_ratio(light / 9.0, ring).abs() + DONOR_TEXTURE * texture;
             if best.is_none_or(|(s, _)| score < s) {
                 best = Some((score, (dx, dy)));
             }

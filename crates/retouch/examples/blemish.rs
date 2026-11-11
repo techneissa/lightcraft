@@ -1,7 +1,7 @@
 //! Try the blemish feature on a picture without building the app:
 //!
 //! `cargo run -p lightcraft-retouch --release --example blemish -- in.jpg out.jpg [--amount 100] [--keep 1]
-//! [--mask facialSkin-0.png] [--face x0,y0,x1,y1] [--people people.json] [--fit 2048] [--marks marks.png] [--runs 1]`
+//! [--mask facialSkin-0.png] [--face x0,y0,x1,y1] [--people people.json] [--fit 2048] [--marks marks.png] [--spots spots.csv] [--runs 1]`
 //!
 //! - `--amount` (0…100) and `--keep` (1: Keep Moles and Freckles, the default; 0: remove them too).
 //! - `--mask` is a grey picture of the Facial Skin mask over the whole photo, at any size (white = skin): the
@@ -16,6 +16,7 @@
 //!   (the whole photo when not given), as every render repairs them.
 //! - `--marks` writes the photo with each spot circled: red a blemish, blue a mole, green a freckle; thin when it
 //!   is kept at these settings.
+//! - `--spots` writes each spot (place, radius, kind, weight at these settings) to a CSV file.
 //! - `--runs` repeats the repair (the slider's work) and prints the fastest run.
 //!
 //! Runs Stray Hair's strand search first, as the app does (a spot on a strand is a hair stump or a crease).
@@ -46,7 +47,7 @@ fn main() -> ExitCode {
 const MESH_FIVE: [usize; 5] = [468, 473, 1, 61, 291];
 
 const USAGE: &str = "usage: blemish in.jpg out.jpg [--amount N] [--keep 0|1] [--face x0,y0,x1,y1] [--mask mask.png] [--people people.json] [--fit EDGE] \
-                     [--marks marks.png] [--runs N]";
+                     [--marks marks.png] [--spots spots.csv] [--runs N]";
 
 fn run(args: &[String]) -> Result<(), String> {
     let mut files = Vec::new();
@@ -56,6 +57,7 @@ fn run(args: &[String]) -> Result<(), String> {
     let mut faces: Vec<Face> = Vec::new();
     let (mut fit, mut runs, mut marks) = (0usize, 1usize, None);
     let mut meshes: Vec<Vec<(f64, f64)>> = Vec::new();
+    let mut spots_csv: Option<String> = None;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         let mut value = || it.next().ok_or_else(|| USAGE.to_string());
@@ -103,6 +105,7 @@ fn run(args: &[String]) -> Result<(), String> {
             "--fit" => fit = value()?.parse().map_err(|_| USAGE.to_string())?,
             "--runs" => runs = value()?.parse::<usize>().map_err(|_| USAGE.to_string())?.max(1),
             "--marks" => marks = Some(value()?.clone()),
+            "--spots" => spots_csv = Some(value()?.clone()),
             _ => files.push(a.clone()),
         }
     }
@@ -138,6 +141,9 @@ fn run(args: &[String]) -> Result<(), String> {
     }
     eprintln!("repair: {w}×{h} ({:.1} MP), {best:.2} ms (fastest of {runs})", (w * h) as f64 / 1e6);
     save(&img, output)?;
+    if let Some(path) = spots_csv {
+        write_spots(&input, &settings, &path)?;
+    }
     if let Some(path) = marks {
         save(&marked(&src, &input, &settings), &path)?;
     }
@@ -213,6 +219,19 @@ fn marked(src: &Rgb32f, input: &Input, s: &Blemish) -> Rgb32f {
         }
     }
     img
+}
+
+/// Every face's spots as lines of `face,x,y,radius,kind,weight` (normalised photo coordinates; the radius a fraction
+/// of the face's size; the weight at these settings).
+fn write_spots(input: &Input, s: &Blemish, path: &str) -> Result<(), String> {
+    let mut text = String::from("face,x,y,radius,kind,weight\n");
+    for (i, f) in input.faces.iter().enumerate() {
+        let Some(spots) = &f.spots else { continue };
+        for (p, w) in spots.list.iter().zip(s.weights(&spots.list)) {
+            text.push_str(&format!("{i},{},{},{},{:?},{w}\n", p.at.0, p.at.1, p.radius, p.kind));
+        }
+    }
+    std::fs::write(path, text).map_err(|e| format!("{path}: {e}"))
 }
 
 fn save(img: &Rgb32f, path: &str) -> Result<(), String> {

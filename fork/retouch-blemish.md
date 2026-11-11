@@ -41,20 +41,29 @@ How (`crates/retouch/src/blemish.rs`, `blemish/find.rs`):
 - **Kept with the masks.** The engine finds the spots with the people parse, on the parse's picture (2048 px, in
   linear light, turned like the masks), and keeps them with each face (`Face::spots`). A render, the loupe and an
   export all repair the same spots; the Amount slider only changes each spot's weight.
-- **Repair, every render.** Each spot is filled from a ring of skin samples three radii out (a smooth fill), times
-  the texture of its donor patch (borrowed as a ratio, at whole-pixel offsets, so the pores stay sharp; without a
-  clean donor, as inside a freckle field, the pixel's own fine grain against its 3 × 3 mean), faded in from
-  1.7 to 2.6 radii and weighted by the mask. Every ring sample and donor pixel is weighted by the mask where it is
-  read, and ring samples inside another spot count for nothing, so no colour from hair, brows, lips or the
-  background comes in at the hairline or the jaw. Spots are repaired in parallel and blended in, in order.
+- **Repair, every render** (`blemish/heal.rs`), in two layers split at the pore scale (a Gaussian of 0.2 % of the
+  face, the split Skin Smoothness uses): the **tone** inside the spot is rebuilt from the ring of skin 2.6 radii
+  out, each pixel interpolated along eight lines through it between the two points where each meets the ring,
+  weighted towards lines whose ends match, so a crease or gradient through the spot carries on through it; ring
+  points off the skin or on another spot are filled from their neighbours on the ring. The **texture** (pores,
+  fine lines, grain: the skin over its tone) comes from the donor patch, made as strong as the skin's around the
+  spot (at most 1.25 times either way); without a donor from the finder, the first clean place 3.4 radii away;
+  without any, the spot's own finest grain. The healed skin replaces the spot out to 1.7 radii and its texture
+  fades into the skin's own by 2.6, where its tone meets the ring. The tone is the skin's colour weighted by the
+  mask, and donor pixels count as far as they are skin, so no colour from hair, brows, lips or the background
+  comes in at the hairline or the jaw. Spots whose repairs read apart heal together in parallel; a spot near an
+  earlier one heals from the skin as that one left it, so overlapping repairs never undo each other.
+- **Donor** (found with the spots): of 16 places 3 and 3.5 radii away (so the copied patch never takes in the spot),
+  the one with skin all around, clear of other spots' heals, answering least at the spot's size, and closest to
+  the skin around the spot in tone and in fine texture.
 - **Zoom never changes a repair.** A spot's radius is held to 1.6 % of the face and a donor farther than 3.6 radii
-  is not used, so a repair reads at most 0.11 of the face around a spot; Blemishes declares
+  (plus a pixel and a half for rounding) is not used, so a repair reads at most about 0.11 of the face around a spot; Blemishes declares
   `REACH` 0.14, and a zoomed loupe renders what the face's repairs read (`crates/pipeline/src/retouch_step.rs`).
 
 Speed (a test Mac, release, measured while other builds loaded it, so rough): finding the spots of one face on the
 2048 px parse picture 20–400 ms on the seven CC0 audit portraits (#204; the freckled face, 800 spots, 86–370 ms),
-after Stray Hair's strand search, which the face search runs anyway. Repair (the slider): 0.7–4 ms on a
-1936 px draft of those portraits. The repair walks only each spot's neighbourhood, never the whole face. No model
+after Stray Hair's strand search, which the face search runs anyway. Repair (the slider): 9–15 ms on a 1936 px
+draft of p1, p2 and p4 (180–200 spots), 44 ms for p3's 807 spots with Keep Moles and Freckles off. The repair walks only each spot's neighbourhood, never the whole face. No model
 runs.
 
 A Refine brush per feature comes later (#99): `Blemish::weights` gives one weight per spot, which its strokes will
