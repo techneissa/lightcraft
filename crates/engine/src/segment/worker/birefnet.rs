@@ -68,6 +68,8 @@ pub(super) struct Request<'a> {
     pub dir: &'a Path,
     /// BiRefNet-matting redraws the selection's edge (`fork/hair-edges.md`).
     pub matting: Option<&'a crate::hair_edges::HairEdges>,
+    /// Where the edge refinement shows (fork, issue #240).
+    pub activity: Option<&'a crate::activity::Activity>,
 }
 
 /// The two steps of "SAM 3 + BiRefNet Edges", so the order they run in can be tested without a model.
@@ -100,8 +102,41 @@ impl Steps for Models<'_> {
 
 /// Run a BiRefNet job: SAM 3 alone (asked for `text`, the main subject's instances only when `main`), BiRefNet's
 /// cut-out alone, or SAM 3 deciding what the subject is and BiRefNet drawing its edge; then, with `matting`,
-/// BiRefNet-matting redraws the edge. `Ok(None)`: nothing found.
+/// BiRefNet-matting redraws the edge; then the edge is refined on the photo at a finer size (`hair_edges::refine`,
+/// its finer grids left in `job.detail`). `Ok(None)`: nothing found.
 pub(super) fn run(state: &mut State, shared: &Shared, job: &mut Job, placement: Placement, req: &Request) -> Result<Option<SegMask>, Failure> {
+    let Some(decided) = decide(state, shared, job, placement, req)? else { return Ok(None) };
+    Ok(Some(refined(job, req, decided)?))
+}
+
+/// `decided` with its edge refined on the job's finer render, the finer grids put in `job.detail`; as it is when the
+/// job has no finer render or the refinement can't run (a damaged grid).
+fn refined(job: &mut Job, req: &Request, decided: SegMask) -> Result<SegMask, Failure> {
+    let Some(finer) = job.refine.clone() else { return Ok(decided) };
+    if job.cancel.load(Ordering::Relaxed) {
+        return Err(Failure::Cancelled);
+    }
+    // (a step of its own in the top bar's ring: it takes a second or two after the model)
+    let _row = req.activity.map(|a| a.start_background("refine", "Refining mask edges", crate::activity::Cancel::Flag(job.cancel.clone())));
+    // (the finer render goes through the job's own render step, which says when the photo's file is missing)
+    let saved = job.render.replace(finer);
+    let input = render(job);
+    job.render = saved;
+    let input = input?;
+    let t = web_time::Instant::now();
+    match crate::hair_edges::refine::subject(&decided, &input.rgb, input.w, input.h, &job.cancel) {
+        Some((main, detail)) => {
+            log::info!("mask edges refined at {}×{} in {:?} ({} finer grids)", input.w, input.h, t.elapsed(), detail.len());
+            job.detail = detail;
+            Ok(main)
+        }
+        None if job.cancel.load(Ordering::Relaxed) => Err(Failure::Cancelled),
+        None => Ok(decided),
+    }
+}
+
+/// The selection a BiRefNet job's models decide on, before its edge is refined.
+fn decide(state: &mut State, shared: &Shared, job: &mut Job, placement: Placement, req: &Request) -> Result<Option<SegMask>, Failure> {
     // (the matte renders the photo from the job's render, which SAM 3's encode may take)
     let saved = job.render.clone();
     let base = match req.model {
@@ -202,6 +237,8 @@ mod tests {
             tag: crate::segment::Tag::Wait,
             reply: tx,
             remote: None,
+            refine: None,
+            detail: Vec::new(),
         };
         let mut stub = Stub { matte_saw_render: false };
         let seg = combined(&mut stub, &mut job).unwrap().expect("a selection");

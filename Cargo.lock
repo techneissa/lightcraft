@@ -3878,6 +3878,7 @@ dependencies = [
  "lightcraft-denoise",
  "lightcraft-denoise-core",
  "lightcraft-develop",
+ "lightcraft-edgerefine",
  "lightcraft-faces",
  "lightcraft-fetch",
  "lightcraft-flux",

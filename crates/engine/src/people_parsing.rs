@@ -443,9 +443,11 @@ impl PeopleParsing {
     /// version function: [`Choice::version`] (so [`Self::parse_as`] and [`Self::version`]), the parse-ahead index
     /// ([`Self::ahead_version`]) and the portrait retouching's face store key on it.
     fn version_of(set: ModelSet, matting: Option<&(crate::hair_edges::HairEdges, crate::hair_edges::Edge)>) -> String {
+        // (every parse's people edges are refined: `hair_edges::refine`, issue #240)
+        let refined = crate::hair_edges::refine::VERSION;
         match matting.and_then(|(_, e)| crate::hair_edges::vision::version(*e)) {
-            Some(edge) => format!("{}+{edge}", set.version()),
-            None => set.version(),
+            Some(edge) => format!("{}+{edge}+{refined}", set.version()),
+            None => format!("{}+{refined}", set.version()),
         }
     }
 
@@ -587,6 +589,8 @@ impl PeopleParsing {
                         Some((edges, edge)) => hair_edged(edges, *edge, p, &img, &flag),
                         None => Ok(p),
                     };
+                    // (fork, issue #240: every Entire Person edge snapped to the picture at its own size)
+                    let p = p.and_then(|p| crate::hair_edges::refine::people(p, &img, &flag));
                     lightcraft_parsing::profile::mark("people edges");
                     p
                 }));

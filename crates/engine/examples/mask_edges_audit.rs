@@ -5,8 +5,8 @@
 //! `LIGHTCRAFT_CONFIG_DIR=<scratch> cargo run --release -p lightcraft-engine --features sam --example mask_edges_audit -- OUT_DIR PHOTO...`
 //!
 //! Writes `OUT_DIR/<stem>.photo.png`, `OUT_DIR/<stem>.<subject|background|person>.png` (grey masks, white =
-//! selected) and `OUT_DIR/seconds.json` (how long each mask took to make). `MASK_EDGES=current,birefnet-matting`
-//! picks the Hair Edges settings to try (one set of files per edge after the first, named `<stem>.<mask>.<edge>.png`).
+//! selected) and `OUT_DIR/seconds.json` (how long each mask took to make). `MASK_EDGES=default,current,birefnet-matting`
+//! picks the Hair Edges settings to try (`default`: the ones a new user gets; the default list) (one set of files per edge after the first, named `<stem>.<mask>.<edge>.png`).
 use std::time::Instant;
 
 use lightcraft_engine::Session;
@@ -37,7 +37,7 @@ fn main() {
     let r = s.execute("library.import", &json!({"paths": paths})).expect("import");
     let ids: Vec<PhotoId> = r["imported"].as_array().expect("ids").iter().filter_map(|v| v.as_u64()).map(PhotoId).collect();
     assert_eq!(ids.len(), paths.len(), "every photo imports");
-    let list = std::env::var("MASK_EDGES").unwrap_or_else(|_| "current".into());
+    let list = std::env::var("MASK_EDGES").unwrap_or_else(|_| "default".into());
     let edges: Vec<&str> = list.split(',').map(str::trim).filter(|e| !e.is_empty()).collect();
     let only: Option<Vec<String>> = std::env::var("MASKS").ok().map(|v| v.split(',').map(|s| s.trim().to_string()).collect());
     let wanted = |m: &str| only.as_ref().is_none_or(|o| o.iter().any(|x| x == m));
@@ -53,7 +53,8 @@ fn main() {
             save(&img, &photo, false);
         }
         for (e, &edge) in edges.iter().enumerate() {
-            for kind in ["subject", "people"] {
+            // (`default`: the edges a new user gets)
+            for kind in ["subject", "people"].into_iter().filter(|_| edge != "default") {
                 s.execute("maskEdges.edge", &json!({"kind": kind, "edge": edge})).unwrap_or_else(|err| panic!("{kind} {edge}: {err}"));
             }
             let tag = if e == 0 { String::new() } else { format!(".{edge}") };

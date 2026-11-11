@@ -58,6 +58,8 @@ pub enum Kind {
         main: bool,
         dir: PathBuf,
         matting: Option<crate::hair_edges::HairEdges>,
+        /// Where the edge refinement shows (fork, issue #240).
+        activity: Option<crate::activity::Activity>,
     },
     /// A zoomed-in pass over `region` (normalized) of the photo, rendered by the job's `render`.
     Detail {
@@ -93,6 +95,10 @@ pub struct Job {
     pub tag: Tag,
     pub reply: mpsc::Sender<Outcome>,
     pub remote: Option<String>,
+    /// Renders the photo at the size a Subject or Background selection's edge is refined at (fork, issue #240).
+    pub refine: Option<RenderJob>,
+    /// The finer grids over the selection's edge the job made (fork, issue #240), sent with its result.
+    pub detail: Vec<SegMask>,
 }
 
 /// A finished request: the segmentation (`None`: nothing selected / nothing to report).
@@ -104,6 +110,8 @@ pub struct Outcome {
     pub superseded: bool,
     /// Something the user should know besides the result ([`GPU_FAILED`]).
     pub notice: Option<String>,
+    /// Finer grids over the selection's edge (fork, issue #240: a refined Subject or Background), stored with it.
+    pub detail: Vec<SegMask>,
 }
 
 /// The notice of the job after which the model runs on the CPU.
@@ -338,7 +346,7 @@ fn run(rx: &mpsc::Receiver<Job>, shared: &Shared, idle: Duration, mut placement:
         let done = Done(if is_detail { &shared.detail } else { &shared.pending });
         if job.cancel.load(Ordering::Relaxed) || queue.iter().any(|later| supersedes(later, &job)) {
             drop(done);
-            let _ = job.reply.send(Outcome { id: job.id, tag: job.tag, result: Ok(None), superseded: true, notice: None });
+            let _ = job.reply.send(Outcome { id: job.id, tag: job.tag, result: Ok(None), superseded: true, notice: None, detail: Vec::new() });
             continue;
         }
         // what a retry on the CPU needs (running the job takes them)
@@ -349,7 +357,7 @@ fn run(rx: &mpsc::Receiver<Job>, shared: &Shared, idle: Duration, mut placement:
         if matches!(result, Err(Failure::Cancelled)) {
             shared.loaded.store(state.loaded(), Ordering::SeqCst);
             drop(done);
-            let _ = job.reply.send(Outcome { id: job.id, tag: job.tag, result: Ok(None), superseded: true, notice: None });
+            let _ = job.reply.send(Outcome { id: job.id, tag: job.tag, result: Ok(None), superseded: true, notice: None, detail: Vec::new() });
             continue;
         }
         let gpu_failed = match &result {
@@ -372,7 +380,8 @@ fn run(rx: &mpsc::Receiver<Job>, shared: &Shared, idle: Duration, mut placement:
                 Err(Failure::Cancelled) => {
                     shared.loaded.store(state.loaded(), Ordering::SeqCst);
                     drop(done);
-                    let _ = job.reply.send(Outcome { id: job.id, tag: job.tag, result: Ok(None), superseded: true, notice: None });
+                    let _ =
+                        job.reply.send(Outcome { id: job.id, tag: job.tag, result: Ok(None), superseded: true, notice: None, detail: Vec::new() });
                     continue;
                 }
                 Err(e) => {
@@ -388,7 +397,8 @@ fn run(rx: &mpsc::Receiver<Job>, shared: &Shared, idle: Duration, mut placement:
         }
         shared.loaded.store(state.loaded(), Ordering::SeqCst);
         drop(done);
-        let _ = job.reply.send(Outcome { id: job.id, tag: job.tag, result, superseded: false, notice });
+        let detail = if result.as_ref().is_ok_and(Option::is_some) { std::mem::take(&mut job.detail) } else { Vec::new() };
+        let _ = job.reply.send(Outcome { id: job.id, tag: job.tag, result, superseded: false, notice, detail });
     }
 }
 
@@ -534,8 +544,9 @@ fn run_job(state: &mut State, shared: &Shared, job: &mut Job, placement: Placeme
         return Err(Failure::Cancelled);
     }
     // BiRefNet runs here, whatever worker SAM 3 would use
-    if let Kind::BiRefNet { model, text, main, dir, matting } = job.kind.clone() {
-        return birefnet::run(state, shared, job, placement, &birefnet::Request { model, text: &text, main, dir: &dir, matting: matting.as_ref() });
+    if let Kind::BiRefNet { model, text, main, dir, matting, activity } = job.kind.clone() {
+        let req = birefnet::Request { model, text: &text, main, dir: &dir, matting: matting.as_ref(), activity: activity.as_ref() };
+        return birefnet::run(state, shared, job, placement, &req);
     }
     let remote_target = job.remote.clone().or_else(remote::configured);
     if let Some(endpoint) = remote_target {
@@ -633,6 +644,8 @@ mod tests {
             tag,
             reply: reply.clone(),
             remote: None,
+            refine: None,
+            detail: Vec::new(),
         }
     }
 

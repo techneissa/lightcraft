@@ -285,6 +285,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 let mut shape = shape_from(&kind, p, "mask.add")?;
                 let shape_kind = shape.clone();
                 let later = resolve_ai(s, &mut shape, "mask.add")?;
+                s.segmenter.attach_refined(&mut shape);
                 let name = str_param(p, "name").map(str::to_string);
                 if let Later::Text(text) = &later {
                     let id = s.active().ok_or_else(|| bad("mask.add", "no active photo"))?;
@@ -333,6 +334,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 }
                 let mut shape = shape_from(&kind, p, "mask.addComponent")?;
                 let later = resolve_ai(s, &mut shape, "mask.addComponent")?;
+                s.segmenter.attach_refined(&mut shape);
                 if let Later::Text(text) = &later {
                     let op = p.get("op").and_then(Value::as_str).unwrap_or("add");
                     segment(s, |s| s.segment_text_later(id, Some(mid), op, None, text))?;
@@ -454,6 +456,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 && !s.segmenter.background
             {
                 resolve_ai(s, &mut shape, "mask.update")?;
+                s.segmenter.attach_refined(&mut shape);
             }
             masks_edit(s, "mask.update", "Edit Mask", |masks, _| {
                 let i = find(masks, mid, "mask.update")?;

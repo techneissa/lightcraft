@@ -18,6 +18,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use crate::activity::{Activity, Cancel};
 
 pub mod people;
+pub mod refine;
 pub mod vision;
 
 /// The newest mattes kept in memory (4 MB each).
@@ -152,10 +153,11 @@ impl Matte {
 /// to stop.
 pub type Runner = Arc<dyn Fn(&[u8], usize, usize, &dyn Fn() -> bool) -> Result<Matte, String> + Send + Sync>;
 
+/// The saved choice per kind; `None`: never chosen, so the default ([`HairEdges::chosen`]).
 #[derive(Clone, Copy, Default)]
 struct Choice {
-    people: Edge,
-    subject: Edge,
+    people: Option<Edge>,
+    subject: Option<Edge>,
 }
 
 #[derive(Default)]
@@ -265,13 +267,21 @@ impl HairEdges {
                 .is_some_and(|m| m.is_file() && m.len() == MODEL_BYTES)
     }
 
-    /// The edge chosen for `kind` (saved; Current until the user picks).
+    /// The edge chosen for `kind`: the saved choice, else the default, BiRefNet Matting where its model is installed
+    /// and Current elsewhere (issue #240: the audit of Subject and Person masks at 1:1 found the people parse's edge
+    /// keeping blobs of background and filled gaps that the matte clears).
     pub fn chosen(&self, kind: EdgeKind) -> Edge {
         let c = *lock(&self.inner.choice);
-        match kind {
+        let saved = match kind {
             EdgeKind::People => c.people,
             EdgeKind::Subject => c.subject,
-        }
+        };
+        saved.unwrap_or_else(|| self.default_edge())
+    }
+
+    /// The edge a kind gets until the user picks one.
+    pub fn default_edge(&self) -> Edge {
+        if self.installed() { Edge::Matting } else { Edge::Current }
     }
 
     /// Whether `edge` can draw `kind` masks here (BiRefNet Matting: once downloaded; Apple Vision: on macOS 14 or
@@ -307,8 +317,8 @@ impl HairEdges {
         let mut c = lock(&self.inner.choice);
         let mut next = *c;
         match kind {
-            EdgeKind::People => next.people = edge,
-            EdgeKind::Subject => next.subject = edge,
+            EdgeKind::People => next.people = Some(edge),
+            EdgeKind::Subject => next.subject = Some(edge),
         }
         if let Some(path) = path {
             write_choice(&path, next)?;
@@ -540,10 +550,10 @@ fn pixel_key(rgb: &[u8], w: usize, h: usize) -> u64 {
     s.finish()
 }
 
-/// The saved choice; a missing or damaged file (or an unknown edge) is Current.
+/// The saved choice; a missing or damaged file (or an unknown edge) is no choice.
 fn read_choice(path: &Path) -> Choice {
     let v: Option<serde_json::Value> = std::fs::read_to_string(path).ok().and_then(|t| serde_json::from_str(&t).ok());
-    let edge = |k: EdgeKind| v.as_ref().and_then(|v| v.get(k.id())).and_then(serde_json::Value::as_str).and_then(Edge::parse).unwrap_or_default();
+    let edge = |k: EdgeKind| v.as_ref().and_then(|v| v.get(k.id())).and_then(serde_json::Value::as_str).and_then(Edge::parse);
     Choice { people: edge(EdgeKind::People), subject: edge(EdgeKind::Subject) }
 }
 
@@ -553,7 +563,13 @@ fn write_choice(path: &Path, c: Choice) -> Result<(), String> {
         std::fs::create_dir_all(dir).map_err(|e| format!("could not keep the choice: {e}"))?;
     }
     let tmp = path.with_extension("json.part");
-    let body = serde_json::json!({ EdgeKind::People.id(): c.people.id(), EdgeKind::Subject.id(): c.subject.id() }).to_string();
+    let mut body = serde_json::Map::new();
+    for (k, e) in [(EdgeKind::People, c.people), (EdgeKind::Subject, c.subject)] {
+        if let Some(e) = e {
+            body.insert(k.id().into(), e.id().into());
+        }
+    }
+    let body = serde_json::Value::Object(body).to_string();
     std::fs::write(&tmp, body).and_then(|()| std::fs::rename(&tmp, path)).map_err(|e| format!("could not keep the choice: {e}"))
 }
 
@@ -581,10 +597,11 @@ mod tests {
         for text in ["", "{", "[]", r#"{"people": 3}"#, r#"{"people": "lasso"}"#] {
             std::fs::write(&f, text).unwrap();
             let c = read_choice(&f);
-            assert_eq!((c.people, c.subject), (Edge::Current, Edge::Current), "{text:?}");
+            assert_eq!((c.people, c.subject), (None, None), "{text:?}");
         }
-        write_choice(&f, Choice { people: Edge::Matting, subject: Edge::Current }).unwrap();
-        assert_eq!(read_choice(&f).people, Edge::Matting);
+        write_choice(&f, Choice { people: Some(Edge::Matting), subject: Some(Edge::Current) }).unwrap();
+        assert_eq!(read_choice(&f).people, Some(Edge::Matting));
+        assert_eq!(read_choice(&f).subject, Some(Edge::Current), "an explicit Current is kept");
         let _ = std::fs::remove_dir_all(dir);
     }
 

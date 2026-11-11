@@ -24,7 +24,8 @@ impl ClicksRequest {
     #[cfg(all(test, feature = "sam"))]
     pub(crate) fn answered(seg: Option<SegMask>) -> ClicksRequest {
         let (tx, rx) = std::sync::mpsc::channel();
-        let _ = tx.send(super::worker::Outcome { id: 0, tag: super::Tag::Wait, result: Ok(seg), superseded: false, notice: None });
+        let _ =
+            tx.send(super::worker::Outcome { id: 0, tag: super::Tag::Wait, result: Ok(seg), superseded: false, notice: None, detail: Vec::new() });
         ClicksRequest { cancel: Arc::default(), rx }
     }
 

@@ -107,7 +107,7 @@ fn no_model_a_failing_run_and_a_damaged_cache_file_are_messages() {
     assert!(matches!(p.parse(picture(4), Vec::new(), true), Outcome::Failed(_)));
     // a damaged file in the cache is parsed again, and replaced
     p.set_runner(Some(fake_runner()));
-    let key = cache::key(&picture(5), &[], &p.model_set().version());
+    let key = cache::key(&picture(5), &[], &p.version());
     std::fs::create_dir_all(dir.join("cache")).unwrap();
     std::fs::write(cache::path(&dir.join("cache"), &key), b"LCPARSE1 broken").unwrap();
     assert!(matches!(p.parse(picture(5), Vec::new(), true), Outcome::Ready { cached: false, .. }));
@@ -315,7 +315,7 @@ fn many_finished_runs_keep_the_newest_and_a_late_waiter_gets_the_cached_parse() 
     // only the oldest go, never all of them at once
     assert_eq!(p.finished_kept(), 16);
     // the first run is no longer filed, and memory holds the last four only: its waiter reads the disk cache
-    let key = cache::key(&picture(100), &[], &p.model_set().version());
+    let key = cache::key(&picture(100), &[], &p.version());
     let Outcome::Ready { parsing, cached: true } = p.wait_for(&key) else { panic!("the first run was dropped") };
     assert_eq!(parsing.people.len(), 1);
 }
