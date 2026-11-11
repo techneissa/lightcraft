@@ -32,6 +32,8 @@ struct Drive {
     /// Every file the loader was asked for, on any thread (the search's, the grid's thumbnails').
     loaded: Arc<Mutex<Vec<String>>>,
     on_ui: Arc<AtomicUsize>,
+    /// The thread named `grid-thumbnail` (a test's own) is inside the loader.
+    grid_in: Arc<AtomicBool>,
 }
 
 impl Drive {
@@ -67,8 +69,10 @@ fn app_on_a_slow_drive(guard: Duration) -> (Headless, Drive) {
         paths: Arc::new(Mutex::new(Vec::new())),
         loaded: Arc::new(Mutex::new(Vec::new())),
         on_ui: Arc::new(AtomicUsize::new(0)),
+        grid_in: Arc::new(AtomicBool::new(false)),
     };
     let (ui, open, reads, on_ui) = (std::thread::current().id(), drive.open.clone(), drive.reads.clone(), drive.on_ui.clone());
+    let grid_in = drive.grid_in.clone();
     let (paths, loaded) = (drive.paths.clone(), drive.loaded.clone());
     let deadline = Instant::now() + guard;
     app.session.media.file_loader = Some(Arc::new(move |path: &str, _, _, _| {
@@ -81,6 +85,9 @@ fn app_on_a_slow_drive(guard: Duration) -> (Headless, Drive) {
         }
         if thread.id() == ui {
             on_ui.fetch_add(1, Ordering::SeqCst);
+        }
+        if thread.name() == Some("grid-thumbnail") {
+            grid_in.store(true, Ordering::SeqCst);
         }
         // (a hang guard: the read goes on after it, so a regression fails the test instead of hanging it)
         while !open.load(Ordering::SeqCst) && Instant::now() < deadline {
@@ -163,16 +170,32 @@ fn a_search_from_the_menu_reads_off_the_ui_thread_and_the_window_goes_on() {
 
 /// Issue #257: a photo the grid is already reading for its thumbnail is that read, shared (#221): the search takes
 /// the running decode instead of reading the file again, so what the search read itself is one short of the photos
-/// while every file was read. (On a loaded machine the grid's thumbnail reads start before the search's.)
+/// while every file was read.
+///
+/// The order is forced, not hoped for: the grid's read is held inside the loader (the drive is closed) until the
+/// search has joined it, and the window takes no frame meanwhile (its own grid would read photos too, and could be the
+/// one that joins).
 #[test]
 fn a_photo_the_grid_is_already_reading_is_not_read_again_for_the_search() {
     let (mut h, drive) = app_on_a_slow_drive(GUARD);
     let photo = h.app.session.catalog.photo(PhotoId(1)).expect("the searched photo");
     let source = h.app.session.media.source_ref(photo, SourceLevel::Thumb);
-    let grid = std::thread::Builder::new().name("grid-thumbnail".into()).spawn(move || source.load_source().map(|_| ())).expect("a thread");
-    // (inside the loader: the decode is running, and the search's read of the same file joins it)
-    assert!(h.step_until(T, |_| drive.files_read() == 1), "the grid's read never started");
+    let grid = {
+        let source = source.clone();
+        std::thread::Builder::new().name("grid-thumbnail".into()).spawn(move || source.load_source().map(|_| ())).expect("a thread")
+    };
+    let until = |what: &str, done: &dyn Fn() -> bool| {
+        let by = Instant::now() + T;
+        while !done() && Instant::now() < by {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(done(), "{what}");
+    };
+    // (inside the loader: the decode is registered and running, held at the closed drive)
+    until("the grid's read never started", &|| drive.grid_in.load(Ordering::SeqCst));
     h.app.run("library.findSimilar", json!({"id": 1})).unwrap();
+    // (the search reads the searched photo first: it joins the grid's decode, or, if the join failed, reads the file)
+    until("the search never joined the grid's read", &|| source.decode_joins() >= 1 || drive.reads.load(Ordering::SeqCst) >= 1);
     drive.open.store(true, Ordering::SeqCst);
     until_done(&mut h);
     assert_eq!(grid.join().expect("the grid's read"), Ok(()));

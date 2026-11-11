@@ -372,6 +372,12 @@ impl SourceRef {
         h.finish().0
     }
 
+    /// How many jobs joined the decode of this file that is running now instead of decoding it (0: none is running, or
+    /// nothing joined it). For tests that must know a second job has found the first one's decode.
+    pub fn decode_joins(&self) -> usize {
+        super::shared_decode::waiting(self.decode_key())
+    }
+
     pub fn load(&self) -> Result<Arc<Rgb32f>, String> {
         self.load_source().map(|s| s.image)
     }

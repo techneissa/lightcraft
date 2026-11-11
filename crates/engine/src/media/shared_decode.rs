@@ -25,8 +25,7 @@ struct Running {
     finished: Condvar,
     /// Run as background work: it may wait at the memory gate, so an interactive job doesn't wait for it.
     background: bool,
-    /// Jobs waiting for it (tests).
-    #[cfg(test)]
+    /// Jobs that joined it.
     waiting: std::sync::atomic::AtomicUsize,
 }
 
@@ -59,7 +58,6 @@ pub(super) fn decode_shared(key: u128, decode: impl FnOnce() -> Result<DecodedSo
     };
     if !mine {
         let mut done = running.done.lock().unwrap_or_else(PoisonError::into_inner);
-        #[cfg(test)]
         running.waiting.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         while done.is_none() {
             done = running.finished.wait(done).unwrap_or_else(PoisonError::into_inner);
@@ -78,9 +76,8 @@ pub(super) fn decode_shared(key: u128, decode: impl FnOnce() -> Result<DecodedSo
     r
 }
 
-/// Jobs waiting for the decode running under `key` (tests).
-#[cfg(test)]
-fn waiting(key: u128) -> usize {
+/// Jobs that joined the decode running under `key` (0 once it has ended).
+pub(super) fn waiting(key: u128) -> usize {
     let all = RUNNING.lock().unwrap_or_else(PoisonError::into_inner);
     all.iter().find(|(k, _)| *k == key).map_or(0, |(_, r)| r.waiting.load(std::sync::atomic::Ordering::SeqCst))
 }
