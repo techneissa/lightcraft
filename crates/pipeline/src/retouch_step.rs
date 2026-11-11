@@ -227,6 +227,8 @@ fn place_of(p: &Plan<'_>) -> Place {
 struct FrameView {
     to_norm: Affine,
     to_out: Affine,
+    /// Where the image's top-left pixel lies in the frame's `w × h` pixels ([`Mapping`]).
+    at: (f64, f64),
     keys: FrameKeyMap,
     place: Place,
     analysis: Option<Arc<Analysis>>,
@@ -237,22 +239,28 @@ impl FrameView {
         FrameView {
             to_norm: frame.out_to_norm(w, h),
             to_out: frame.norm_to_out(w, h),
+            at: (0.0, 0.0),
             keys: FrameKeyMap::new(frame, orient),
             place: Place { x: 0, y: 0, width: w, height: h },
             analysis: None,
         }
     }
+
+    fn of(m: &Mapping<'_>, orient: Orientation) -> FrameView {
+        FrameView { at: m.at, ..FrameView::new(m.frame, m.w, m.h, orient) }
+    }
 }
 
 impl View for FrameView {
     fn to_norm(&self, x: f64, y: f64) -> (f64, f64) {
-        let p = self.to_norm.apply(Point::new(x, y));
+        let p = self.to_norm.apply(Point::new(shift(x, self.at.0), shift(y, self.at.1)));
         (p.x, p.y)
     }
 
     fn to_px(&self, nx: f64, ny: f64) -> Option<(f64, f64)> {
         let p = self.to_out.apply(Point::new(nx, ny));
-        (p.x.is_finite() && p.y.is_finite()).then_some((p.x, p.y))
+        let p = (shift(p.x, -self.at.0), shift(p.y, -self.at.1));
+        (p.0.is_finite() && p.1.is_finite()).then_some(p)
     }
 
     fn key_map(&self) -> Option<&dyn KeyMap> {
@@ -273,6 +281,8 @@ impl View for FrameView {
 struct PhotoView {
     to_photo: crate::geometry::MaskMap,
     to_out: Box<dyn Fn(Point) -> Option<Point> + Sync>,
+    /// As [`FrameView::at`].
+    at: (f64, f64),
     /// The frame Refine strokes are in (after lens corrections and transform, as [`FrameView`]).
     edit: FrameView,
     place: Place,
@@ -286,6 +296,7 @@ impl PhotoView {
         PhotoView {
             to_photo: frame.out_to_mask(w, h),
             to_out: Box::new(frame.mask_to_out(w, h)),
+            at: (0.0, 0.0),
             edit,
             place: Place { x: 0, y: 0, width: w, height: h },
             analysis: None,
@@ -293,14 +304,22 @@ impl PhotoView {
     }
 }
 
+impl PhotoView {
+    fn of(m: &Mapping<'_>, orient: Orientation) -> PhotoView {
+        let mut v = PhotoView::new(m.frame, m.w, m.h, orient);
+        (v.at, v.edit.at) = (m.at, m.at);
+        v
+    }
+}
+
 impl View for PhotoView {
     fn to_norm(&self, x: f64, y: f64) -> (f64, f64) {
-        let p = self.to_photo.apply(Point::new(x, y));
+        let p = self.to_photo.apply(Point::new(shift(x, self.at.0), shift(y, self.at.1)));
         (p.x, p.y)
     }
 
     fn to_px(&self, nx: f64, ny: f64) -> Option<(f64, f64)> {
-        (self.to_out)(Point::new(nx, ny)).filter(|p| p.x.is_finite() && p.y.is_finite()).map(|p| (p.x, p.y))
+        (self.to_out)(Point::new(nx, ny)).map(|p| (shift(p.x, -self.at.0), shift(p.y, -self.at.1))).filter(|(x, y)| x.is_finite() && y.is_finite())
     }
 
     fn key_map(&self) -> Option<&dyn KeyMap> {
@@ -324,6 +343,42 @@ impl View for PhotoView {
     }
 }
 
+/// `v` moved by `d` pixels; `v` itself, to the bit, when `d` is 0.
+fn shift(v: f64, d: f64) -> f64 {
+    if d == 0.0 { v } else { v + d }
+}
+
+/// What a plan's pixels map through: the frame of `w × h` output pixels and where the image's top-left pixel lies
+/// in it. A window maps through the whole frame and is moved by its whole-pixel offset, so its pixel positions are
+/// exactly the whole frame's less a whole number, and a feature that rounds a position to a pixel (a mask's box, a
+/// grid's first cell) rounds it as the whole frame does. The window's own frame maps the same points a few bits
+/// differently: a mask's top edge at 71.99999999999999 in the whole frame came to 7.0 in a window 65 pixels down, so
+/// Even Tone's grid started a row lower there and its cells fell elsewhere (#238).
+struct Mapping<'a> {
+    frame: &'a crate::geometry::Frame,
+    w: usize,
+    h: usize,
+    at: (f64, f64),
+}
+
+impl<'a> Mapping<'a> {
+    fn of(p: &'a Plan<'_>) -> Mapping<'a> {
+        let (full, fw, fh) = &p.full;
+        let whole = |v: f64| v.is_finite() && v >= 0.0 && v.fract() == 0.0;
+        match p.frame.view {
+            // (only for a window of that whole frame, at a whole pixel)
+            Some(v) if full.view.is_none() && (v.full_w, v.full_h) == (*fw as f64, *fh as f64) && whole(v.x) && whole(v.y) => {
+                Mapping { frame: full, w: *fw, h: *fh, at: (v.x, v.y) }
+            }
+            _ => Mapping { frame: &p.frame, w: p.w, h: p.h, at: (0.0, 0.0) },
+        }
+    }
+
+    fn view(&self, on_photo: bool, orient: Orientation) -> Box<dyn View> {
+        if on_photo { Box::new(PhotoView::of(self, orient)) } else { Box::new(FrameView::of(self, orient)) }
+    }
+}
+
 /// Retouch `img` (the plan's output pixels) in place: the retouch stage, then the background stage.
 pub fn apply(img: &mut Rgb32f, info: &SourceInfo, p: &Plan<'_>) {
     apply_with(img, info, p, &p.settings);
@@ -340,10 +395,11 @@ pub(crate) fn apply_with(img: &mut Rgb32f, info: &SourceInfo, p: &Plan<'_>, s: &
     let o = s.orientation;
     let place = place_of(p);
     let analysis = p.retouch_analysis.clone();
+    let m = Mapping::of(p);
     let view: Box<dyn View> = if input.on_photo {
-        Box::new(PhotoView { place, analysis, ..PhotoView::new(&p.frame, p.w, p.h, o) })
+        Box::new(PhotoView { place, analysis, ..PhotoView::of(&m, o) })
     } else {
-        Box::new(FrameView { place, analysis, ..FrameView::new(&p.frame, p.w, p.h, o) })
+        Box::new(FrameView { place, analysis, ..FrameView::of(&m, o) })
     };
     crate::timed("retouch", || {
         for stage in [Stage::Retouch, Stage::Background] {
@@ -442,9 +498,7 @@ pub fn write_boxes(info: &SourceInfo, p: &Plan<'_>) -> Option<Vec<crate::spots_k
     }
     let (Some(input), Some(reads)) = (info.retouch.as_deref(), s.retouch.reads()) else { return Some(Vec::new()) };
     let Reads { reach: _, parts: _ } = &reads;
-    let o = s.orientation;
-    let view: Box<dyn View> =
-        if input.on_photo { Box::new(PhotoView::new(&p.frame, p.w, p.h, o)) } else { Box::new(FrameView::new(&p.frame, p.w, p.h, o)) };
+    let view = Mapping::of(p).view(input.on_photo, s.orientation);
     let (w, h) = (p.w as f64, p.h as f64);
     let mut out = Vec::new();
     for face in input.faces.iter().take(MAX_FACES) {
@@ -915,47 +969,81 @@ mod tests {
         (src, SourceInfo { retouch: Some(Arc::new(Input::new(vec![face]))), ..SourceInfo::default() })
     }
 
-    /// Zoom never changes a retouch: a zoomed render of a window holding part of one eye (or part of a cheek) gives
-    /// the pixels the whole frame's render has there.
+    /// `info`'s faces with a face mesh (as the face mesh model gives it) after their five points.
+    fn with_mesh(info: &SourceInfo) -> SourceInfo {
+        let faces = info.retouch.iter().flat_map(|i| i.faces.iter()).map(|f| {
+            let r = f.bounds;
+            let at = |(fx, fy): (f64, f64)| (r.x0 + fx * r.width(), r.y0 + fy * r.height());
+            let mesh = (0..478).map(|i| at(lightcraft_develop::retouch::wrinkles::areas::frontal(i)));
+            Face { landmarks: f.landmarks.iter().copied().chain(mesh).collect(), ..f.clone() }
+        });
+        SourceInfo { retouch: Some(Arc::new(Input::new(faces.collect()))), ..SourceInfo::default() }
+    }
+
+    /// Zoom never changes a retouch: for each feature on its own, on a face with five points and on one with a face
+    /// mesh, a zoomed render of a window holding part of what it changes gives the whole frame's pixels there. Every
+    /// feature is checked and every failure listed (#238: Even Tone's grid started a row lower in a window, 4 to 5
+    /// levels off). Blemishes, Teeth and Lips, Glasses Glare, Stray Hair, Background and Refine strokes have their
+    /// own zoom tests, on photos that have what they repair.
     #[test]
     fn a_zoomed_window_gives_the_whole_frames_retouch() {
         let (w, h) = (480, 360);
-        let (src, info) = face_photo(w, h);
-        let mut s = DevelopSettings::default();
-        s.detail.nr_color = 0.0;
-        let mut eyes = s.clone();
-        for id in ["whites", "iris", "darkCircles", "eyeBags"] {
-            controls::set(&mut eyes, &format!("retouch.eyes.{id}"), 100.0);
-        }
-        let mut skin = s.clone();
-        controls::set(&mut skin, "retouch.skin.smoothness", 100.0);
-        controls::set(&mut skin, "retouch.skin.shine", 100.0);
-        let mut tone = s.clone();
-        controls::set(&mut tone, "retouch.skinTone.evenTone", 100.0);
-        controls::set(&mut tone, "retouch.skinTone.redness", 100.0);
-        controls::set(&mut tone, "retouch.skinTone.faceLight", 50.0);
+        let (src, five) = face_photo(w, h);
+        let mesh = with_mesh(&five);
+        let mut base = DevelopSettings::default();
+        base.detail.nr_color = 0.0;
         let req = RenderRequest::fit(w, h);
-        // (the left eye's outer half and the skin under it; a patch of cheek)
-        let eye_win = crate::PixelWindow { x: 170, y: 136, w: 30, h: 40 };
-        let cheek_win = crate::PixelWindow { x: 200, y: 220, w: 40, h: 30 };
-        // (Skin Tone: a window over part of a cheek, under the dark circle Even Tone evens)
-        let tone_win = crate::PixelWindow { x: 180, y: 150, w: 30, h: 30 };
-        for (name, st, win) in [("eyes", &eyes, eye_win), ("skin", &skin, cheek_win), ("skin tone", &tone, tone_win)] {
-            let full = render(&src, &info, st, &req).image;
-            let plain = render(&src, &SourceInfo::default(), &s, &req).image;
-            let zoomed = render(&src, &info, st, &RenderRequest { window: Some(win), ..req }).image;
-            assert_eq!((zoomed.width, zoomed.height), (win.w, win.h));
-            let (mut worst, mut changed) = (0u8, 0);
-            for y in 0..win.h {
-                for x in 0..win.w {
-                    let (a, b, c) = (full.get(win.x + x, win.y + y), zoomed.get(x, y), plain.get(win.x + x, win.y + y));
-                    worst = worst.max((0..3).map(|k| a[k].abs_diff(b[k])).max().unwrap_or(0));
-                    changed += usize::from(a != c);
+        let win = |x, y, w, h| crate::PixelWindow { x, y, w, h };
+        // (the left eye's outer half and the skin under it; a patch of cheek; part of the cheek under the dark
+        // circle Even Tone evens)
+        let (eye, cheek, under) = (win(170, 136, 30, 40), win(200, 220, 40, 30), win(180, 150, 30, 30));
+        let cases: [(&str, &[(&str, f64)], crate::PixelWindow); 13] = [
+            ("eye whites", &[("eyes.whites", 100.0)], eye),
+            ("iris", &[("eyes.iris", 100.0)], eye),
+            ("dark circles", &[("eyes.darkCircles", 100.0)], under),
+            ("eye bags", &[("eyes.eyeBags", 100.0)], under),
+            ("smoothness", &[("skin.smoothness", 100.0)], cheek),
+            ("shine", &[("skin.shine", 100.0)], cheek),
+            ("texture", &[("skin.texture", 100.0)], cheek),
+            ("even tone", &[("skinTone.evenTone", 100.0)], under),
+            ("redness", &[("skinTone.redness", 100.0)], under),
+            ("face light", &[("skinTone.faceLight", 50.0)], under),
+            ("wrinkles", &[("wrinkles.forehead", 100.0), ("wrinkles.crowsFeet", 100.0), ("wrinkles.smileLines", 100.0)], cheek),
+            ("slim face", &[("reshape.slimFace", 100.0)], cheek),
+            ("eye size", &[("reshape.eyeSize", 100.0)], eye),
+        ];
+        let plain = render(&src, &five, &base, &req).image;
+        let mut failures = Vec::new();
+        for (name, set, win) in &cases {
+            // (wrinkles and reshape need the mesh; the eyes' features read the eyes the picture has, which the
+            // made-up mesh misses)
+            let mut reached = false;
+            for (with, info) in [("five points", &five), ("a mesh", &mesh)] {
+                let mut s = base.clone();
+                for (id, v) in *set {
+                    controls::set(&mut s, &format!("retouch.{id}"), *v);
+                }
+                let full = render(&src, info, &s, &req).image;
+                let zoomed = render(&src, info, &s, &RenderRequest { window: Some(*win), ..req }).image;
+                assert_eq!((zoomed.width, zoomed.height), (win.w, win.h));
+                let (mut worst, mut changed) = (0u8, 0);
+                for y in 0..win.h {
+                    for x in 0..win.w {
+                        let (a, b, c) = (full.get(win.x + x, win.y + y), zoomed.get(x, y), plain.get(win.x + x, win.y + y));
+                        worst = worst.max((0..3).map(|k| a[k].abs_diff(b[k])).max().unwrap_or(0));
+                        changed += usize::from(a != c);
+                    }
+                }
+                reached |= changed > 0;
+                if worst > 1 {
+                    failures.push(format!("{name} ({with}): the zoomed window differs from the whole frame by {worst}"));
                 }
             }
-            assert!(changed > win.w * win.h / 4, "{name}: the retouch reaches the window ({changed} changed)");
-            assert!(worst <= 1, "{name}: the zoomed window differs from the whole frame by {worst}");
+            if !reached {
+                failures.push(format!("{name}: the retouch does not reach the window"));
+            }
         }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 
     /// Stray Hair reads furthest (a band half a face past the hair): a zoomed window on a flyaway against the sky
