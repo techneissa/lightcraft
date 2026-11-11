@@ -36,6 +36,8 @@ pub const FACE_LIGHT_STOPS: f32 = 0.6;
 /// and its mask can be many faces large). A cell is never smaller than a pixel.
 pub const CELLS_PER_FACE: f64 = 160.0;
 pub const BODY_CELLS_PER_FACE: f64 = 64.0;
+/// Even Tone and Redness: the curve of their sliders ([`response`]).
+const SLIDER_CURVE: f32 = 1.5;
 /// Face Light: the soft edge's width, a fraction of the face.
 pub const LIGHT_EDGE: f64 = 0.035;
 /// Face Light: cells across the face's size (the light is smooth, so its grid is coarser).
@@ -85,7 +87,7 @@ impl Feature for SkinTone {
             return;
         }
         let unit = |v: f64, lo: f64| if v.is_finite() { (v.clamp(lo, 100.0) / 100.0) as f32 } else { 0.0 };
-        let (even, red, light) = (unit(self.even_tone, 0.0), unit(self.redness, 0.0), unit(self.face_light, -100.0));
+        let (even, red, light) = (response(unit(self.even_tone, 0.0)), response(unit(self.redness, 0.0)), unit(self.face_light, -100.0));
         if even > 0.0 || red > 0.0 {
             // the face and the body each against their own skin (a neck or a hand is often paler than the face)
             for part in SKIN {
@@ -96,6 +98,12 @@ impl Feature for SkinTone {
             face_light(img, scene, face, size, light);
         }
     }
+}
+
+/// How strongly Even Tone and Redness work at slider value `v` (0…1): 0 and 1 as they are, the middle stronger
+/// (50 gives 65 % of the top's change), so the middle of the slider is a plainly visible retouch.
+fn response(v: f32) -> f32 {
+    1.0 - (1.0 - v.clamp(0.0, 1.0)).powf(SLIDER_CURVE)
 }
 
 /// The masks of `parts` a face has.

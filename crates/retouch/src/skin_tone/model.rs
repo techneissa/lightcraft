@@ -21,9 +21,10 @@
 //!    of a highlight ([`EVEN_HIGHLIGHT`]).
 //! 5. **Colour** (with the shading's colour taken out) moves towards the skin's colour over [`EVEN_COLOUR`] of the
 //!    face.
-//! 6. **Redness**: colour with half the shading's colour taken out ([`RED_SHADING`]) is compared with the skin
-//!    around ([`RED_AROUND`]) and with the face's own calm skin ([`RED_REFERENCE`]), whichever is less red; a
-//!    redder cell moves towards it, fully from [`RED_FULL`] redder. Its brightness stays.
+//! 6. **Redness**: colour with a quarter of the shading's colour taken out ([`RED_SHADING`]). A cell redder than
+//!    the skin around it ([`RED_AROUND`]) takes that skin's colour (a red spot); then, where it is still redder than
+//!    the face's own calm skin ([`RED_REFERENCE`]), it moves [`RED_MOST`] of the way to it (flushed cheeks, a red
+//!    nose); fully from [`RED_FULL`] redder. Its brightness stays.
 //!
 //! The result is a gain per cell and channel, read back bilinearly and multiplied in by the caller: texture finer
 //! than a cell (pores, freckles, stubble) keeps its contrast.
@@ -63,14 +64,18 @@ pub const FORM_COHERENCE: [f32; 2] = [0.25, 0.65];
 /// texture starts to keep the skin as it is (stubble), fully from the second.
 pub const TEXTURE_SCALE: f64 = 0.02;
 pub const TEXTURE_KEEP: [f32; 2] = [2.5, 4.5];
-/// Redness: the share of the shading's colour that counts as redness (the rest is the photo's tone curve).
-pub const RED_SHADING: f32 = 0.5;
+/// Redness: the share of the shading's colour that counts as redness (the rest is the photo's tone curve, and
+/// keeps shadows warm).
+pub const RED_SHADING: f32 = 0.75;
 /// Redness: the skin a spot is compared with, a fraction of the face.
 pub const RED_AROUND: f64 = 0.12;
-/// Redness: the face's calm skin, the cells between these percentiles of redness.
-pub const RED_REFERENCE: [f32; 2] = [35.0, 55.0];
+/// Redness: the face's calm skin, the cells between these percentiles of redness (its less red skin).
+pub const RED_REFERENCE: [f32; 2] = [10.0, 30.0];
 /// Redness: how much redder (natural log of red over green) than its reference a cell moves fully at 100.
 pub const RED_FULL: f32 = 0.03;
+/// Redness: how far towards its reference a red cell moves at 100 (all the way greys the skin: the least red skin
+/// is also the least saturated).
+pub const RED_MOST: f32 = 0.6;
 /// The largest change per channel (natural log), so a cell never jumps.
 const MAX_LOG: f32 = 0.7;
 
@@ -190,9 +195,14 @@ fn redness(c: &Cells, w: &[f32], fine: &[V3], even: &[V3], sd: V3, inp: &Inputs<
     let skin = blur3(&q, w, c.gw, c.gh, around);
     for (i, k) in corr.iter_mut().enumerate() {
         let (Some(q), Some(s)) = (q.get(i), skin.get(i)) else { continue };
-        let target = if redness(&face) < redness(s) { face } else { *s };
-        let g = inp.red * smoothstep(0.0, RED_FULL, redness(q) - redness(&target)) * (1.0 - inp.red_zone.get(i).copied().unwrap_or(0.0));
-        *k = std::array::from_fn(|ch| k[ch] - g * (q[ch] - target[ch]));
+        let open = inp.red * (1.0 - inp.red_zone.get(i).copied().unwrap_or(0.0));
+        // a red spot: all the way to the skin around it
+        let g = open * smoothstep(0.0, RED_FULL, redness(q) - redness(s));
+        let near: V3 = std::array::from_fn(|ch| q[ch] - g * (q[ch] - s[ch]));
+        // red skin: part of the way to the face's calm skin
+        let g = open * RED_MOST * smoothstep(0.0, RED_FULL, redness(&near) - redness(&face));
+        let to: V3 = std::array::from_fn(|ch| near[ch] - g * (near[ch] - face[ch]));
+        *k = std::array::from_fn(|ch| k[ch] + to[ch] - q[ch]);
     }
 }
 
