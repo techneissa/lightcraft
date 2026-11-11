@@ -16,10 +16,11 @@ slider redid all of it and everything after it:
 - **The image before the step.** The GPU read the resampled frame back, ran white balance, defringe, spots and red eye on
   the CPU, then the step, and uploaded the frame. The image before the step is now kept, keyed by
   `Plan::pre_retouch_key` (`Plan::pre_nr_key` without the retouching): on the CPU in the `StageCache` entry, on the GPU
-  on the host and on the device (`crates/gpu/src/pre_retouch.rs`). A tick copies it, runs the step, and uploads only
-  the rows of the boxes the step may write (a box whose rows are not in the image uploads it whole).
+  on the device (`crates/gpu/src/pre_retouch.rs`; made there and kept without a host copy since issue #241,
+  `fork/perf-portrait-gpu.md`). A tick reads back the band of rows the step reads, runs the step on it, and uploads
+  only the rows of the boxes the step may write.
 - **Memory.** Kept images count against byte budgets across every view (`crates/pipeline/src/kept_budget.rs`): 512 MB
-  on the host (both renderers) and 512 MB on the device. Past a budget, the image used longest ago is let go (the
+  on the host (the CPU renderer) and 512 MB on the device. Past a budget, the image used longest ago is let go (the
   next tick of its view makes it again); one larger than a budget is not kept. A stage cache that drops its entry
   (`StageCache::clear`, the trim, an entry pushed out) frees its image, and a render of another photo lets the
   other photo's kept image go at once (the loupe's cache lives across photos).
