@@ -3,7 +3,7 @@
 
 use std::path::Path;
 
-use crate::{Error, MAX_ELEMENTS, MAX_RANK, Result};
+use crate::{Error, MAX_ELEMENTS, MAX_RANK, MAX_TENSORS, Result, Tensor};
 
 /// How the numbers of a Core ML tensor are stored.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -34,6 +34,35 @@ pub(crate) fn check_shape(shape: &[usize], len: usize) -> Result<usize> {
         Some(n) if n <= MAX_ELEMENTS => Err(Error::Input(format!("shape {shape:?} holds {n} numbers, {len} given"))),
         _ => Err(Error::Input(format!("shape {shape:?} is empty or too large"))),
     }
+}
+
+/// The tensors of one call against the model's input and output names (`have_in`, `have_out`): every input of the
+/// model given once with a shape that fits its numbers, every output asked for known and asked for once.
+pub(crate) fn check_io(have_in: &[String], have_out: &[String], inputs: &[Tensor<'_>], outputs: &[&str]) -> Result<()> {
+    if inputs.is_empty() || inputs.len() > MAX_TENSORS || outputs.is_empty() || outputs.len() > MAX_TENSORS {
+        return Err(Error::Input(format!("a call takes 1 to {MAX_TENSORS} inputs and outputs, not {} and {}", inputs.len(), outputs.len())));
+    }
+    for (i, t) in inputs.iter().enumerate() {
+        if !have_in.iter().any(|n| n == t.name) {
+            return Err(Error::Input(format!("the model has no input `{}` (it has {})", t.name, have_in.join(", "))));
+        }
+        if inputs.get(..i).is_some_and(|before| before.iter().any(|b| b.name == t.name)) {
+            return Err(Error::Input(format!("`{}` is given twice", t.name)));
+        }
+        check_shape(t.shape, t.data.len()).map_err(|e| Error::Input(format!("`{}`: {e}", t.name)))?;
+    }
+    if let Some(missing) = have_in.iter().find(|n| !inputs.iter().any(|t| t.name == n.as_str())) {
+        return Err(Error::Input(format!("the model needs `{missing}` too")));
+    }
+    for (i, o) in outputs.iter().enumerate() {
+        if !have_out.iter().any(|n| n == o) {
+            return Err(Error::Output(format!("the model has no output `{o}` (it has {})", have_out.join(", "))));
+        }
+        if outputs.get(..i).is_some_and(|before| before.contains(o)) {
+            return Err(Error::Output(format!("`{o}` is asked for twice")));
+        }
+    }
+    Ok(())
 }
 
 /// Row-major strides of `shape`, in elements.

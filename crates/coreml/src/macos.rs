@@ -25,7 +25,7 @@ use objc2_core_ml::{
 use objc2_foundation::{NSArray, NSDictionary, NSError, NSInteger, NSNumber, NSOperatingSystemVersion, NSProcessInfo, NSString, NSURL};
 
 use crate::layout::{Elem, contiguous, gather};
-use crate::{ComputeUnits, Error, Output, Result};
+use crate::{ComputeUnits, Data, Error, Output, Result, Tensor};
 
 /// A loaded `MLModel`.
 pub(crate) struct Handle(Retained<MLModel>);
@@ -171,35 +171,40 @@ fn usizes(values: &NSArray<NSNumber>) -> Result<Vec<usize>> {
     values.iter().map(|n| usize::try_from(n.integerValue()).map_err(|_| Error::Output(format!("{} is not a size", n.integerValue())))).collect()
 }
 
-/// A Float32 `MLMultiArray` of `shape` holding `data` (checked by the caller: `shape`'s product is `data.len()`).
-fn multi_array(shape: &[usize], data: &[f32]) -> Result<Retained<MLMultiArray>> {
+/// An `MLMultiArray` of `shape` holding `data` (Float32 or Int32; checked by the caller: `shape`'s product is
+/// `data.len()`).
+fn multi_array(shape: &[usize], data: Data<'_>) -> Result<Retained<MLMultiArray>> {
     let dims = numbers(shape)?;
+    // both element types are 4 bytes, so the row-major strides in elements are the same
+    let (src, bytes, kind): (*const u8, usize, MLMultiArrayDataType) = match data {
+        Data::F32(d) => (d.as_ptr().cast(), std::mem::size_of_val(d), MLMultiArrayDataType::Float32),
+        Data::I32(d) => (d.as_ptr().cast(), std::mem::size_of_val(d), MLMultiArrayDataType::Int32),
+    };
     let mut err: Option<Retained<NSError>> = None;
     // SAFETY: `initWithShape:dataType:error:` (checked in `available`) on a fresh allocation, with a non-empty shape of
     // positive sizes and a documented data type; received as optional, with an NSError out-parameter.
-    let array: Option<Retained<MLMultiArray>> =
-        unsafe { msg_send![MLMultiArray::alloc(), initWithShape: &*dims, dataType: MLMultiArrayDataType::Float32, error: &mut err] };
+    let array: Option<Retained<MLMultiArray>> = unsafe { msg_send![MLMultiArray::alloc(), initWithShape: &*dims, dataType: kind, error: &mut err] };
     let array = array.ok_or_else(|| Error::Input(describe(err)))?;
     let want = contiguous(shape);
     let written: RefCell<Result<()>> = RefCell::new(Err(Error::Input("Core ML gave no buffer".into())));
     let handler = StackBlock::new(|ptr: NonNull<c_void>, size: NSInteger, strides: NonNull<NSArray<NSNumber>>| {
         // SAFETY: Core ML passes its strides array, valid for the handler's duration.
         let strides = usizes(unsafe { strides.as_ref() });
-        let fits = usize::try_from(size).is_ok_and(|s| s == std::mem::size_of_val(data));
+        let fits = usize::try_from(size).is_ok_and(|s| s == bytes);
         *written.borrow_mut() = match strides {
             Ok(s) if s == want && fits => {
-                let bytes = std::mem::size_of_val(data);
-                // SAFETY: Core ML's buffer is `size` bytes, writable for the handler's duration and Float32 (asked for
-                // above); `size` equals `data`'s byte length, so the copy stays inside it. Copied as bytes, so the
-                // buffer's alignment does not matter.
-                unsafe { std::ptr::copy_nonoverlapping(data.as_ptr().cast::<u8>(), ptr.as_ptr().cast::<u8>(), bytes) };
+                // SAFETY: Core ML's buffer is `size` bytes, writable for the handler's duration and of the type asked
+                // for above; `size` equals `data`'s byte length (`bytes`, from the live slice `src` points into), so
+                // the copy stays inside both. Copied as bytes, so the buffer's alignment does not matter.
+                unsafe { std::ptr::copy_nonoverlapping(src, ptr.as_ptr().cast::<u8>(), bytes) };
                 Ok(())
             }
             Ok(s) => Err(Error::Input(format!("Core ML laid the input out as {s:?} in {size} bytes"))),
             Err(e) => Err(e),
         };
     });
-    // SAFETY: checked in `available`; the handler runs synchronously, before this call returns.
+    // SAFETY: checked in `available`; the handler runs synchronously, before this call returns, while `data` is
+    // borrowed.
     unsafe { array.getMutableBytesWithHandler(&handler) };
     written.into_inner().map(|()| array)
 }
@@ -230,13 +235,19 @@ fn read(array: &MLMultiArray) -> Result<Output> {
     Ok(Output { shape, data })
 }
 
-pub(crate) fn predict(handle: &Handle, input: &str, shape: &[usize], data: &[f32], output: &str) -> Result<Output> {
+pub(crate) fn predict(handle: &Handle, inputs: &[Tensor<'_>], outputs: &[&str]) -> Result<Vec<Output>> {
     autoreleasepool(|_| {
-        let array = multi_array(shape, data)?;
-        // SAFETY: wraps a valid multi-array (checked in `available`); never nil.
-        let value = unsafe { MLFeatureValue::featureValueWithMultiArray(&array) };
-        let key = NSString::from_str(input);
-        let dict: Retained<NSDictionary<NSString, AnyObject>> = NSDictionary::from_slices(&[&*key], &[value.as_ref()]);
+        let mut keys: Vec<Retained<NSString>> = Vec::with_capacity(inputs.len());
+        let mut values: Vec<Retained<MLFeatureValue>> = Vec::with_capacity(inputs.len());
+        for t in inputs {
+            let array = multi_array(t.shape, t.data)?;
+            // SAFETY: wraps a valid multi-array (checked in `available`); never nil.
+            values.push(unsafe { MLFeatureValue::featureValueWithMultiArray(&array) });
+            keys.push(NSString::from_str(t.name));
+        }
+        let key_refs: Vec<&NSString> = keys.iter().map(|k| &**k).collect();
+        let value_refs: Vec<&AnyObject> = values.iter().map(|v| v.as_ref()).collect();
+        let dict: Retained<NSDictionary<NSString, AnyObject>> = NSDictionary::from_slices(&key_refs, &value_refs);
         let mut err: Option<Retained<NSError>> = None;
         // SAFETY: `initWithDictionary:error:` (checked in `available`) with string keys and `MLFeatureValue` values, as
         // documented; received as optional.
@@ -250,13 +261,18 @@ pub(crate) fn predict(handle: &Handle, input: &str, shape: &[usize], data: &[f32
         let result: Option<Retained<ProtocolObject<dyn MLFeatureProvider>>> =
             unsafe { msg_send![&*handle.0, predictionFromFeatures: provider, error: &mut err] };
         let result = result.ok_or_else(|| Error::Predict(describe(err)))?;
-        let name = NSString::from_str(output);
-        // SAFETY: `featureValueForName:` is required by the MLFeatureProvider protocol; nil for an unknown name.
-        let value: Option<Retained<MLFeatureValue>> = unsafe { msg_send![&*result, featureValueForName: &*name] };
-        let value = value.ok_or_else(|| Error::Output(format!("the result has no `{output}`")))?;
-        // SAFETY: a getter that returns nil when the value is not a multi-array; received as optional.
-        let array: Option<Retained<MLMultiArray>> = unsafe { msg_send![&*value, multiArrayValue] };
-        let array = array.ok_or_else(|| Error::Output(format!("`{output}` is not a tensor")))?;
-        read(&array)
+        outputs.iter().map(|output| read_named(&result, output)).collect()
     })
+}
+
+/// The tensor `output` of a prediction's result.
+fn read_named(result: &ProtocolObject<dyn MLFeatureProvider>, output: &str) -> Result<Output> {
+    let name = NSString::from_str(output);
+    // SAFETY: `featureValueForName:` is required by the MLFeatureProvider protocol; nil for an unknown name.
+    let value: Option<Retained<MLFeatureValue>> = unsafe { msg_send![result, featureValueForName: &*name] };
+    let value = value.ok_or_else(|| Error::Output(format!("the result has no `{output}`")))?;
+    // SAFETY: a getter that returns nil when the value is not a multi-array; received as optional.
+    let array: Option<Retained<MLMultiArray>> = unsafe { msg_send![&*value, multiArrayValue] };
+    let array = array.ok_or_else(|| Error::Output(format!("`{output}` is not a tensor")))?;
+    read(&array)
 }

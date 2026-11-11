@@ -1,6 +1,7 @@
 //! Runs converted AI models through Apple's Core ML, which spreads a model over the Neural Engine, the GPU and the
 //! CPU. A model is converted once from its PyTorch original (a script in `tools/`, issue #105), compiled once on
-//! this Mac ([`compile`]), loaded ([`Model::load`]) and run on `f32` tensors ([`Model::predict`]).
+//! this Mac ([`compile`]), loaded ([`Model::load`]) and run on `f32` tensors ([`Model::predict`]), or on several named
+//! `f32` and `i32` tensors at once with several outputs read ([`Model::predict_many`]).
 //!
 //! The candle port of each model stays the reference and the fallback: callers try Core ML, and on any [`Error`] use
 //! candle. All `unsafe` (the Objective-C calls) lives in the `macos` module; the API is safe. Elsewhere (Windows,
@@ -136,6 +137,44 @@ impl std::error::Error for Error {}
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// Most tensors passed in or read out in one call.
+pub const MAX_TENSORS: usize = 16;
+
+/// The numbers of a tensor passed in, row-major.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Data<'a> {
+    F32(&'a [f32]),
+    /// Whole numbers (token ids, click labels).
+    I32(&'a [i32]),
+}
+
+impl Data<'_> {
+    pub(crate) fn len(&self) -> usize {
+        match self {
+            Data::F32(d) => d.len(),
+            Data::I32(d) => d.len(),
+        }
+    }
+}
+
+/// A named tensor passed in: its shape and its numbers.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Tensor<'a> {
+    pub name: &'a str,
+    pub shape: &'a [usize],
+    pub data: Data<'a>,
+}
+
+impl<'a> Tensor<'a> {
+    pub fn f32(name: &'a str, shape: &'a [usize], data: &'a [f32]) -> Self {
+        Self { name, shape, data: Data::F32(data) }
+    }
+
+    pub fn i32(name: &'a str, shape: &'a [usize], data: &'a [i32]) -> Self {
+        Self { name, shape, data: Data::I32(data) }
+    }
+}
+
 /// A tensor read out of a model: its shape and its numbers in row-major order.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Output {
@@ -207,15 +246,16 @@ impl Model {
 
     /// Run the model on one `f32` tensor `input` of `shape` and read the tensor `output`.
     pub fn predict(&self, input: &str, shape: &[usize], data: &[f32], output: &str) -> Result<Output> {
-        if !self.inputs.iter().any(|n| n == input) {
-            return Err(Error::Input(format!("the model has no input `{input}` (it has {})", self.inputs.join(", "))));
-        }
-        if !self.outputs.iter().any(|n| n == output) {
-            return Err(Error::Output(format!("the model has no output `{output}` (it has {})", self.outputs.join(", "))));
-        }
-        layout::check_shape(shape, data.len())?;
+        let mut out = self.predict_many(&[Tensor::f32(input, shape, data)], &[output])?;
+        out.pop().ok_or_else(|| Error::Output(format!("the result has no `{output}`")))
+    }
+
+    /// Run the model on `inputs` (each of its inputs once) and read `outputs`, in the order asked for. Names and
+    /// shapes are checked before Core ML is called.
+    pub fn predict_many(&self, inputs: &[Tensor<'_>], outputs: &[&str]) -> Result<Vec<Output>> {
+        layout::check_io(&self.inputs, &self.outputs, inputs, outputs)?;
         let handle = self.handle.lock().unwrap_or_else(PoisonError::into_inner);
-        imp::predict(&handle, input, shape, data, output)
+        imp::predict(&handle, inputs, outputs)
     }
 }
 
