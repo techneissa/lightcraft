@@ -292,7 +292,8 @@ impl crate::Session {
             if model.uses_sam3() {
                 self.segmenter.model_dir()?;
             }
-            super::worker::Kind::BiRefNet { model, text, main: concept.main_only, dir, matting, activity: Some(self.activity.clone()) }
+            let runtime = self.model_runtimes.get(crate::model_runtime::BIREFNET);
+            super::worker::Kind::BiRefNet { model, text, main: concept.main_only, dir, matting, activity: Some(self.activity.clone()), runtime }
         } else {
             self.segmenter.model_dir()?;
             super::worker::Kind::Concept(text, concept.main_only)

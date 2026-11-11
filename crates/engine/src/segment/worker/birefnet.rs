@@ -21,29 +21,39 @@ impl From<lightcraft_birefnet::Error> for Failure {
                 Failure::Other(format!("{e}. If the file is damaged, delete model.safetensors from the BiRefNet folder and download it again."))
             }
             lightcraft_birefnet::Error::Candle(_) => Failure::Model(e.to_string()),
+            // (Core ML only, as Settings asked: candle would not help)
+            lightcraft_birefnet::Error::CoreMl(_) => Failure::Other(e.to_string()),
         }
     }
 }
 
-/// The BiRefNet model for `dir`, loading it on `placement` when needed.
-fn model<'a>(state: &'a mut State, shared: &Shared, dir: &Path, placement: Placement) -> Result<&'a mut BiRefNet, Failure> {
-    if state.birefnet.as_ref().is_none_or(|(d, _)| d != dir) {
+/// The BiRefNet model for `dir`, loading it on `placement` when needed: on the GPU through `runtime` (Core ML when its
+/// package is there and loads, issue #264), on the CPU through candle.
+fn model<'a>(
+    state: &'a mut State,
+    shared: &Shared,
+    dir: &Path,
+    runtime: lightcraft_coreml::Runtime,
+    placement: Placement,
+) -> Result<&'a mut BiRefNet, Failure> {
+    if state.birefnet.as_ref().is_none_or(|(d, r, _)| d != dir || *r != runtime) {
         state.birefnet = None;
         let _busy = Flag::raise(&shared.encoding);
         let t = web_time::Instant::now();
+        let variant = lightcraft_birefnet::Variant::General;
         let m = match placement {
-            Placement::Gpu => BiRefNet::load(dir, lightcraft_birefnet::Variant::General)?,
-            Placement::Cpu => BiRefNet::load_cpu(dir, lightcraft_birefnet::Variant::General)?,
+            Placement::Gpu => BiRefNet::load_with(dir, variant, runtime, lightcraft_birefnet::best_device())?,
+            Placement::Cpu => BiRefNet::load_cpu(dir, variant)?,
         };
-        log::info!("BiRefNet loaded in {:?} ({})", t.elapsed(), if m.device().is_cpu() { "CPU" } else { "GPU" });
-        state.birefnet = Some((dir.to_path_buf(), m));
+        log::info!("BiRefNet loaded in {:?} ({}, {})", t.elapsed(), m.backend(), if m.device().is_cpu() { "CPU" } else { "GPU" });
+        state.birefnet = Some((dir.to_path_buf(), runtime, m));
         shared.loaded.store(true, Ordering::SeqCst);
     }
-    state.birefnet.as_mut().map(|(_, m)| m).ok_or_else(|| "the BiRefNet model did not load".into())
+    state.birefnet.as_mut().map(|(_, _, m)| m).ok_or_else(|| "the BiRefNet model did not load".into())
 }
 
 /// BiRefNet's cut-out of the job's photo.
-fn matte(state: &mut State, shared: &Shared, job: &mut Job, dir: &Path, placement: Placement) -> Result<Matte, Failure> {
+fn matte(state: &mut State, shared: &Shared, job: &mut Job, req: &Request, placement: Placement) -> Result<Matte, Failure> {
     // (SAM 3's encode renders the photo too when it must; keep the render job for it)
     let saved = job.render.clone();
     let input = render(job)?;
@@ -51,12 +61,15 @@ fn matte(state: &mut State, shared: &Shared, job: &mut Job, dir: &Path, placemen
     if job.cancel.load(Ordering::Relaxed) {
         return Err(Failure::Cancelled);
     }
-    let m = model(state, shared, dir, placement)?;
+    let m = model(state, shared, req.dir, req.runtime, placement)?;
     m.set_cancel(Some(job.cancel.clone()));
     let _busy = Flag::raise(&shared.encoding);
     let t = web_time::Instant::now();
-    let matte = m.matte(&input.rgb, input.w, input.h)?;
-    log::info!("BiRefNet cut out {}×{} in {:?}", input.w, input.h, t.elapsed());
+    let matte = m.matte(&input.rgb, input.w, input.h);
+    // (Automatic hands a failed Core ML run to candle: the engine is read after the run)
+    *shared.birefnet_backend.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(m.backend());
+    let matte = matte?;
+    log::info!("BiRefNet cut out {}×{} in {:?} ({})", input.w, input.h, t.elapsed(), m.backend());
     Ok(matte)
 }
 
@@ -71,6 +84,8 @@ pub(super) struct Request<'a> {
     pub matting: Option<&'a crate::hair_edges::HairEdges>,
     /// Where the edge refinement shows (fork, issue #240).
     pub activity: Option<&'a crate::activity::Activity>,
+    /// The engine BiRefNet runs on (issue #264).
+    pub runtime: lightcraft_coreml::Runtime,
 }
 
 /// The two steps of "SAM 3 + BiRefNet Edges", so the order they run in can be tested without a model.
@@ -97,7 +112,7 @@ impl Steps for Models<'_> {
     }
 
     fn matte(&mut self, job: &mut Job) -> Result<Matte, Failure> {
-        matte(self.state, self.shared, job, self.req.dir, self.placement)
+        matte(self.state, self.shared, job, self.req, self.placement)
     }
 }
 
@@ -153,7 +168,7 @@ fn decide(state: &mut State, shared: &Shared, job: &mut Job, placement: Placemen
     // (the matte renders the photo from the job's render, which SAM 3's encode may take)
     let saved = job.render.clone();
     let base = match req.model {
-        SelectionModel::BiRefNet => stand_alone(&matte(state, shared, job, req.dir, placement)?),
+        SelectionModel::BiRefNet => stand_alone(&matte(state, shared, job, req, placement)?),
         SelectionModel::Combined => combined(&mut Models { state, shared, placement, req }, job)?,
         SelectionModel::Sam3 => {
             let (m, enc) = encoded(state, shared, job, placement)?;

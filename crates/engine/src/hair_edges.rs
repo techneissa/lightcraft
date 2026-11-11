@@ -169,6 +169,8 @@ struct Paths {
 #[cfg(feature = "sam")]
 struct Loaded {
     model: lightcraft_birefnet::BiRefNet,
+    /// The engine asked for when it loaded.
+    runtime: lightcraft_coreml::Runtime,
     last_used: std::time::Instant,
 }
 
@@ -191,6 +193,10 @@ struct Inner {
     gpu_refused: AtomicBool,
     /// The kind whose BiRefNet Matting was asked for with the download: chosen when the download has finished.
     pending: Mutex<Option<EdgeKind>>,
+    /// The engine the model runs on (issue #264): Core ML when its package is there and loads, else candle.
+    runtime: Mutex<lightcraft_coreml::Runtime>,
+    /// The engine the last run used (`coreml` or `candle`); `None` before one.
+    backend: Mutex<Option<&'static str>>,
 }
 
 /// The hair edges of a session. Cheap to clone; every clone is the same.
@@ -226,6 +232,8 @@ impl HairEdges {
                 download: Default::default(),
                 gpu_refused: AtomicBool::new(false),
                 pending: Mutex::new(None),
+                runtime: Mutex::new(lightcraft_coreml::Runtime::Automatic),
+                backend: Mutex::new(None),
             }),
         }
     }
@@ -249,6 +257,34 @@ impl HairEdges {
     /// `<models>/birefnet-matting`.
     pub fn model_dir(&self) -> Option<PathBuf> {
         self.models_dir().map(|d| d.join(MODEL_DIR))
+    }
+
+    /// Run the model on `runtime` from the next run on (the loaded model is dropped, or reloaded at the next run when
+    /// one is going: this never waits for it).
+    pub fn set_runtime(&self, runtime: lightcraft_coreml::Runtime) {
+        *lock(&self.inner.runtime) = runtime;
+        #[cfg(feature = "sam")]
+        if let Ok(mut slot) = self.inner.loaded.try_lock() {
+            *slot = None;
+        }
+    }
+
+    /// The engine chosen for the model.
+    pub fn runtime(&self) -> lightcraft_coreml::Runtime {
+        *lock(&self.inner.runtime)
+    }
+
+    /// The engine the last run used (`coreml` or `candle`); `None` before one.
+    pub fn backend(&self) -> Option<&'static str> {
+        *lock(&self.inner.backend)
+    }
+
+    /// Whether the model's Core ML version is in its folder (`tools/convert-coreml-birefnet.py`).
+    pub fn coreml_installed(&self) -> bool {
+        #[cfg(feature = "sam")]
+        return self.model_dir().is_some_and(|d| lightcraft_birefnet::coreml::installed(&d, lightcraft_birefnet::Variant::Matting));
+        #[cfg(not(feature = "sam"))]
+        false
     }
 
     /// Whether this build can run the model at all.

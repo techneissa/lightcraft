@@ -10,7 +10,7 @@ use lightcraft_birefnet::{BiRefNet, Variant};
 fn main() {
     let a: Vec<String> = std::env::args().skip(1).collect();
     assert!(a.len() >= 4, "usage: matte_dump MODEL_DIR MODEL_ID OUT_DIR PHOTO...");
-    let model = BiRefNet::load(std::path::Path::new(&a[0]), Variant::General).expect("load");
+    let mut model = BiRefNet::load(std::path::Path::new(&a[0]), Variant::General).expect("load");
     std::fs::create_dir_all(&a[2]).expect("out dir");
     for (n, photo) in a[3..].iter().enumerate() {
         let img = image::open(photo).expect("photo").to_rgb8();

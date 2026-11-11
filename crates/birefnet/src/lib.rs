@@ -4,7 +4,8 @@
 //!
 //! The weights are not part of LightCraft: they are the safetensors files of
 //! `ZhengPeng7/BiRefNet` and its siblings on Hugging Face (MIT), read from a directory the user
-//! downloads them to ([`BiRefNet::load`]). On macOS the model runs on the GPU through Metal,
+//! downloads them to ([`BiRefNet::load`]). On macOS the model runs on the GPU through Core ML when its converted
+//! package is in the model's folder ([`coreml`], issue #264), else through Metal;
 //! elsewhere on the CPU. No UI dependencies (L3).
 //!
 //! Ported from <https://github.com/ZhengPeng7/BiRefNet> (MIT, Copyright 2024 Peng Zheng) and the
@@ -15,6 +16,8 @@
 #[cfg(not(target_arch = "wasm32"))]
 mod blocks;
 pub mod combine;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod coreml;
 #[cfg(not(target_arch = "wasm32"))]
 mod deform;
 #[cfg(not(target_arch = "wasm32"))]
@@ -34,7 +37,7 @@ pub use fetch::Variant;
 #[cfg(not(target_arch = "wasm32"))]
 mod run;
 #[cfg(not(target_arch = "wasm32"))]
-pub use run::{BiRefNet, best_device};
+pub use run::{BiRefNet, Runtime, best_device};
 
 use std::path::PathBuf;
 
@@ -44,6 +47,9 @@ pub enum Error {
     Model(String),
     #[error("BiRefNet model file not found in {0} (expected model.safetensors)")]
     Missing(PathBuf),
+    /// The model asked to run on Core ML only could not (missing package, failed load or run).
+    #[error("BiRefNet on Core ML: {0}")]
+    CoreMl(String),
     #[error("BiRefNet cancelled")]
     Cancelled,
     #[cfg(not(target_arch = "wasm32"))]

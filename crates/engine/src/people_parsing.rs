@@ -851,6 +851,7 @@ impl crate::Session {
         // (the hair edges share the models folder; `fork/hair-edges.md`)
         let models = std::env::var_os("LIGHTCRAFT_BIREFNET_DIR").filter(|v| !v.is_empty()).map(PathBuf::from).or_else(default_models_dir);
         self.hair_edges.set_paths(models, crate::config::config_dir().map(|d| d.join(crate::hair_edges::CHOICE_FILE)));
+        self.hair_edges.set_runtime(self.model_runtimes.get(crate::hair_edges::MODEL_DIR));
         self
     }
 }

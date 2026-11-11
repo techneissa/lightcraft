@@ -362,6 +362,22 @@ impl Segmenter {
         false
     }
 
+    /// Whether BiRefNet's Core ML version is in its folder (`tools/convert-coreml-birefnet.py`, issue #264).
+    pub fn birefnet_coreml_installed(&self) -> bool {
+        #[cfg(feature = "sam")]
+        return self.birefnet_dir().is_some_and(|d| lightcraft_birefnet::coreml::installed(&d, lightcraft_birefnet::Variant::General));
+        #[cfg(not(feature = "sam"))]
+        false
+    }
+
+    /// The engine BiRefNet ran on last (`coreml` or `candle`, issue #264); `None` before its first run.
+    pub fn birefnet_backend(&self) -> Option<&'static str> {
+        #[cfg(feature = "sam")]
+        return self.worker.birefnet_backend();
+        #[cfg(not(feature = "sam"))]
+        None
+    }
+
     /// Clicks waiting for their segmentation.
     pub fn pending_clicks(&self) -> Option<&PendingClicks> {
         self.pending.as_ref()
