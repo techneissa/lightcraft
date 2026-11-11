@@ -291,3 +291,44 @@ fn zips_and_camera_raw_xmp_presets_import() {
     assert!(s.execute("mask.importEffects", &json!({})).is_err());
     let _ = std::fs::remove_dir_all(&lib);
 }
+
+#[test]
+fn copying_a_mask_effect_and_pasting_it_into_another_mask() {
+    let mut s = Session::with_demo();
+    let ids: Vec<u64> = s.catalog.photos().take(2).map(|p| p.id.0).collect();
+    s.execute("library.select", &json!({"ids": [ids[0]], "active": ids[0]})).unwrap();
+    assert!(s.execute("mask.pasteEffect", &json!({})).is_err(), "nothing copied yet");
+    s.execute("mask.add", &json!({"kind": "radial", "name": "Source"})).unwrap();
+    let a = s.active_mask.unwrap();
+    s.execute("mask.adjust", &json!({"values": {"exposure": 1.0, "shadows": 30, "amount": 60}})).unwrap();
+    s.execute("mask.add", &json!({"kind": "linear", "name": "Target"})).unwrap();
+    let b = s.active_mask.unwrap();
+    s.execute("mask.adjust", &json!({"values": {"clarity": 20, "amount": 80}})).unwrap();
+    s.execute("mask.invert", &json!({"id": b})).unwrap();
+    let mask = |s: &Session, id: u32| s.develop_of(s.active().unwrap()).unwrap().masks.iter().find(|m| m.id == id).cloned().unwrap();
+    let before = mask(&s, b);
+
+    // same photo: B gets A's sliders and keeps its shape, name, invert, visibility and Amount
+    assert!(s.execute("mask.copyEffect", &json!({"id": 9999})).is_err());
+    s.execute("mask.copyEffect", &json!({"id": a})).unwrap();
+    assert!(s.execute("mask.pasteEffect", &json!({"id": 9999})).is_err(), "no such mask");
+    s.execute("mask.pasteEffect", &json!({"id": b})).unwrap();
+    let after = mask(&s, b);
+    assert_eq!((after.adjust.exposure, after.adjust.shadows, after.adjust.clarity, after.adjust.amount), (1.0, 30.0, 0.0, 80.0));
+    assert_eq!(format!("{:?}", after.components), format!("{:?}", before.components));
+    assert_eq!((&after.name, after.invert, after.visible), (&before.name, before.invert, before.visible));
+    // one undo step
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(format!("{:?}", mask(&s, b)), format!("{before:?}"));
+
+    // another photo: the copied effect is still there
+    s.execute("library.select", &json!({"ids": [ids[1]], "active": ids[1]})).unwrap();
+    s.execute("mask.add", &json!({"kind": "brush", "name": "Other"})).unwrap();
+    let c = s.active_mask.unwrap();
+    let c_before = mask(&s, c);
+    s.execute("mask.pasteEffect", &json!({"id": c})).unwrap();
+    let c_after = mask(&s, c);
+    assert_eq!((c_after.adjust.exposure, c_after.adjust.shadows), (1.0, 30.0));
+    assert_eq!(format!("{:?}", c_after.components), format!("{:?}", c_before.components));
+    assert_eq!(c_after.name, "Other");
+}

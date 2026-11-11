@@ -351,6 +351,15 @@ fn masks_named(d: &DevelopSettings, names: &[String]) -> Vec<u32> {
     d.masks.iter().filter(|m| names.iter().any(|n| n.eq_ignore_ascii_case(&m.name))).map(|m| m.id).collect()
 }
 
+/// `d` with `effect` set on its masks `ids` (their shape, name, visibility and invert stay).
+fn with_effect(d: &DevelopSettings, ids: &[u32], effect: &MaskEffect) -> DevelopSettings {
+    let mut d = d.clone();
+    for m in d.masks.iter_mut().filter(|m| ids.contains(&m.id)) {
+        m.adjust = super::masks::clamp_local(effect.apply(&m.adjust));
+    }
+    d
+}
+
 fn apply_effect(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "mask.applyEffect";
     let name = name_param(p, C)?;
@@ -373,13 +382,7 @@ fn apply_effect(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(missing) = ids.iter().find(|m| !d.masks.iter().any(|x| x.id == **m)) {
         return Err(bad(C, format!("no mask {missing}")));
     }
-    let set_masks = |d: &DevelopSettings, ids: &[u32]| {
-        let mut d = d.clone();
-        for m in d.masks.iter_mut().filter(|m| ids.contains(&m.id)) {
-            m.adjust = super::masks::clamp_local(effect.apply(&m.adjust));
-        }
-        d
-    };
+    let set_masks = |d: &DevelopSettings, ids: &[u32]| with_effect(d, ids, &effect);
     let label = format!("Mask Effect: {}", effect.name);
     // with `photos: "selected"`, the other selected photos' masks of the same names too
     let others: Vec<(PhotoId, DevelopSettings)> = if str_param(p, "photos") == Some("selected") {
@@ -417,6 +420,35 @@ fn apply_effect(s: &mut Session, p: &Value) -> Result<Value> {
         s.save_prefs()?;
     }
     Ok(json!({"name": effect.name, "masks": ids, "photos": photos, "brush": effect.brush}))
+}
+
+/// Keep the selected mask's sliders in the session (what a preset saved with All sliders holds), for
+/// [`paste_mask_effect`], on this photo or another.
+fn copy_mask_effect(s: &mut Session, p: &Value) -> Result<Value> {
+    const C: &str = "mask.copyEffect";
+    let adjust = selected_mask(s, p, C)?.adjust;
+    s.mask_effect_clipboard = Some(MaskEffect { adjust, ..Default::default() }.normalized());
+    Ok(json!({"copied": true}))
+}
+
+/// Set a mask's sliders to the copied ones, as `mask.applyEffect` does: one undo step.
+fn paste_mask_effect(s: &mut Session, p: &Value) -> Result<Value> {
+    const C: &str = "mask.pasteEffect";
+    let effect = s.mask_effect_clipboard.clone().ok_or_else(|| bad(C, "no mask effect copied (use mask.copyEffect first)"))?;
+    let photo = s.active().ok_or_else(|| bad(C, "no active photo"))?;
+    let d = s.develop_of(photo).unwrap_or_default();
+    let mid = super::masks::mask_id(p, s.active_mask, C)?;
+    if !d.masks.iter().any(|m| m.id == mid) {
+        return Err(bad(C, format!("no mask {mid}")));
+    }
+    s.set_develop(photo, with_effect(&d, &[mid], &effect), "Paste Mask Effect")?;
+    Ok(json!({"id": mid}))
+}
+
+/// Paste is available once a mask effect is copied.
+fn has_mask_effect(s: &Session) -> std::result::Result<(), String> {
+    has_active(s)?;
+    if s.mask_effect_clipboard.is_none() { Err("no mask effect copied".into()) } else { Ok(()) }
 }
 
 /// The fields a save keeps: `fields: [..]` | `"changed"` | `"all"` (default).
@@ -647,6 +679,24 @@ pub fn specs() -> Vec<CommandSpec> {
             "{name, id?, fields?, amount?, brush?} — overwrite the effect with the selected mask's sliders (keeps its group, star and which sliders it carries unless given)",
             has_active,
             update_effect
+        ),
+        cmd!(
+            "mask.copyEffect",
+            "Copy Mask Effect",
+            [],
+            None,
+            "{id?} — keep the mask's sliders (not its shape or Amount) in the session, to paste into a mask of this or another photo",
+            has_active,
+            copy_mask_effect
+        ),
+        cmd!(
+            "mask.pasteEffect",
+            "Paste Mask Effect",
+            [],
+            None,
+            "{id?} — set the mask's sliders to the copied ones (as mask.applyEffect; shape, name, visibility, invert and Amount stay), one undo step → {id}; an error when nothing is copied",
+            has_mask_effect,
+            paste_mask_effect
         ),
         cmd!("mask.renameEffect", "Rename Mask Effect", [], None, "{name, to}", always, rename_effect),
         cmd!(
