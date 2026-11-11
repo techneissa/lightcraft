@@ -89,6 +89,10 @@ name = "hair_edges"
 required-features = ["sam"]
 
 [[example]]
+name = "mask_edges_audit"
+required-features = ["sam"]
+
+[[example]]
 name = "decontam_compare"
 required-features = ["sam"]
 

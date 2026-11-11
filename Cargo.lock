@@ -3851,6 +3851,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "lightcraft-edgerefine"
+version = "0.18.0"
+dependencies = [
+ "rayon",
+]
+
+[[package]]
 name = "lightcraft-engine"
 version = "0.18.0"
 dependencies = [
