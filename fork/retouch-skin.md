@@ -7,11 +7,13 @@ List: the Portrait tab's Skin section: Smoothness evens the skin and keeps its p
 The Skin feature of portrait retouching (`fork/retouch-foundation.md`), on the part masks of the people parse
 (`fork/retouch-masks.md`). Three sliders, off at 0, for every face or the picked one:
 
-- **Smoothness** (0…100) evens the skin: bumps, small marks, fine unevenness and blotches go (at 100, 61–85 % of the
-  cheek's unevenness between 0.2 % and 3 % of the face on portraits p1–p4 of the audit in #195; 29 % on the low-key
-  p5, whose cheek's unevenness at that size is mostly its shading), while the pores, fine hairs
-  and grain stay (about 90 % kept), and so do edges: eyes, brows, lips, nostrils, lash lines, folds, glasses, stubble
-  and the face's own shading. 50 is a natural everyday amount; 100 is a strong retouch.
+- **Smoothness** (0…100) evens the skin: bumps, small marks, fine unevenness and blotches go, while the pores, fine
+  hairs and grain stay (about 90 % kept), and so do edges: eyes, brows, lips, nostrils, lash lines, folds, glasses,
+  stubble and the face's own shading. Every step shows: low values even gentle unevenness almost fully and leave
+  stronger marks, higher values reach marks of more contrast too. Of the cheek's unevenness between 0.2 % and 3 % of
+  the face on portraits p1–p4 of the audit in #195, 25 takes away 20–31 %, 50 38–58 % (a plainly visible, natural
+  retouch), 75 53–77 % and 100 61–85 % (a strong retouch that keeps the pores); on the low-key p5, whose cheek's
+  unevenness at that size is mostly its shading, 7 / 15 / 24 / 29 %.
 - **Texture** (−100…100) softens the pores (−100 takes most of their contrast away) or makes them crisper (+100
   doubles their contrast).
 - **Shine** (0…100) lowers oily highlights: skin brighter than the skin around it and paler than it (white light on
@@ -23,10 +25,11 @@ How (`crates/retouch/src/skin.rs`, `skin/grid.rs`): frequency separation inside 
 luminance and colour ratios (each channel over luminance: calm where a channel is near 0, as blue is on warm skin
 in low light). The pores are what is finer than a blur of 0.2 % of the face; Smoothness keeps them and Texture
 scales them. The rest goes through a bilateral grid (Chen, Paris and Durand, 2007): the skin gathered into cells of
-about 1.6 % of the face and bins of light, blurred by 4 % of the face in space and by 0.4 in log light, and read
+about 1.6 % of the face and bins of light, blurred by 4 % of the face in space and by up to 0.4 in log light, and read
 back at each pixel's own place and light. A pixel is averaged only with skin of about its own brightness, so a
 bump or a blotch is evened right up to a nostril or a fold without crossing it, and with no halo. 15 % of a wider
-grid (7 % of the face) is mixed in for larger blotches. A colour change larger than about 8 % of a channel's share
+grid (7 % of the face) is mixed in for larger blotches. The slider sets how much of the even skin is taken
+(`1 − (1 − s)^1.6`: two thirds at 50) and the difference of light it evens across (0.16 just above 0, 0.4 at 100). A colour change larger than about 8 % of a channel's share
 is held back, because the grid tells edges by light only (a lit nose wing beside a cheek of another colour keeps
 its colour). Smoothness fades in over 1 % of the face from the mask's edge, so there is no seam against hair, beard
 or background. Shine compares the smoothed skin with a 10 % blur. Every blur reads the skin only (weighted by the

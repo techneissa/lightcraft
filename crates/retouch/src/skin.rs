@@ -60,6 +60,8 @@ pub const TONE_CUT: f32 = 0.15;
 /// light is averaged with it, and skin far brighter or darker (the other side of a nostril, a lash line or a
 /// shadow) is not.
 pub const EDGE: f32 = 0.4;
+/// The share of [`EDGE`] Smoothness evens across just above 0 ([`curve`]).
+pub const EDGE_LOW: f32 = 0.4;
 /// How much stronger Texture +100 makes the pores (1.0: twice their contrast).
 pub const TEXTURE_GAIN: f32 = 1.0;
 /// How much of the pores' contrast Texture −100 takes away.
@@ -249,7 +251,7 @@ fn retouch(mut c: Rgb32f, m: &Plane, size: f64, k: Strength) -> Rgb32f {
         }
     });
     drop(pores);
-    let even = if k.smooth > 0.0 { Even::new(&base, px(SMOOTH), px(TONE), px(FEATHER)) } else { None };
+    let even = if k.smooth > 0.0 { Even::new(&base, [px(SMOOTH), px(TONE), px(FEATHER)], k.smooth) } else { None };
     let around = if k.shine > 0.0 { Some(Reduced::of_skin(&base, px(SMOOTH)).blur(px(SHINE_BASE))) } else { None };
     let wide = |x: usize, y: usize, own: [f32; 3]| around.as_ref().map_or(own, |r| r.read(&r.taps(x, y), own));
     par_rows(&mut c.data, w.max(1), |y, row| {
@@ -272,16 +274,20 @@ fn retouch(mut c: Rgb32f, m: &Plane, size: f64, k: Strength) -> Rgb32f {
 struct Even {
     /// The grid at [`SMOOTH`] with [`TONE_CUT`] of the grid at [`TONE`] mixed in.
     grid: Grid,
+    /// How much of the even skin the slider takes ([`curve`]).
+    amount: f32,
     /// The mask blurred by [`FEATHER`]: Smoothness fades in from the mask's edge over about that much.
     fade: Reduced,
 }
 
 impl Even {
-    fn new(base: &Image<[f32; 4]>, sigma: f32, tone: f32, feather: f32) -> Option<Even> {
-        let range = EDGE;
+    /// The even skin of `base` for Smoothness `smooth` (0…1), with the grid at `sigma`, the tone grid at `tone`
+    /// and the fade from the mask's edge over `feather` (pixels).
+    fn new(base: &Image<[f32; 4]>, [sigma, tone, feather]: [f32; 3], smooth: f32) -> Option<Even> {
+        let (amount, range) = curve(smooth);
         let grid = Grid::new(base, sigma, range)?;
         let fade = Reduced::of_skin(base, feather).blur(feather);
-        Some(Even { grid: grid.blurred(sigma, range).mix(&grid.blurred(tone, range), TONE_CUT), fade })
+        Some(Even { grid: grid.blurred(sigma, range).mix(&grid.blurred(tone, range), TONE_CUT), amount, fade })
     }
 
     /// The even skin at (`x`, `y`) and how much of it to take there (0 at the mask's edge, 1 a [`FEATHER`]
@@ -297,12 +303,21 @@ impl Even {
             let d = even[c] - own[c];
             d * soft(d.abs() / own[c].abs().max(0.05), ce)
         };
-        ([even[0], own[1] + colour(1), own[2] + colour(2)], fade * fade * (3.0 - 2.0 * fade))
+        ([even[0], own[1] + colour(1), own[2] + colour(2)], self.amount * fade * fade * (3.0 - 2.0 * fade))
     }
 }
 
+/// Smoothness `s` (0…1) as how much of the even skin it takes and the difference of light (natural log) it evens
+/// across. Both rise with the slider, so every step is a finished retouch rather than a fade towards the top:
+/// low values even gentle unevenness almost fully (the amount rises fast, `1 − (1 − s)^1.6`: two thirds at 50) and
+/// leave stronger marks; higher values reach marks of more contrast, up to [`EDGE`] at 100.
+fn curve(s: f32) -> (f32, f32) {
+    let s = s.clamp(0.0, 1.0);
+    (1.0 - (1.0 - s).powf(1.6), EDGE * (EDGE_LOW + (1.0 - EDGE_LOW) * s))
+}
+
 /// One pixel: `src`, its skin without pores `smooth` ([`split`]), the even skin there
-/// (`None` with Smoothness off) and the skin around it at [`SHINE_BASE`].
+/// and how much of it to take (`None` with Smoothness off) and the skin around it at [`SHINE_BASE`].
 fn pixel(src: [f32; 3], smooth: [f32; 3], even: Option<([f32; 3], f32)>, around: [f32; 3], k: Strength) -> [f32; 3] {
     if luma(src) <= DARK || src.iter().any(|v| !v.is_finite()) {
         return src;
@@ -310,8 +325,8 @@ fn pixel(src: [f32; 3], smooth: [f32; 3], even: Option<([f32; 3], f32)>, around:
     let l = split(src);
     let pores: [f32; 3] = std::array::from_fn(|c| l[c] - smooth[c]);
     let mut low = smooth;
-    if let Some((even, fade)) = even {
-        low = std::array::from_fn(|c| smooth[c] + k.smooth * fade * (even[c] - smooth[c]));
+    if let Some((even, take)) = even {
+        low = std::array::from_fn(|c| smooth[c] + take * (even[c] - smooth[c]));
     }
     if k.shine > 0.0 {
         let (lit, _) = deshine(join(low), join(around), k.shine);
