@@ -114,6 +114,8 @@ fn person_plane(
         .filter(|q| q.is_valid())
         .map(|q| (q.rect.width() * w as f32 / q.width as f32).max(q.rect.height() * h as f32 / q.height as f32))
         .fold(1.0f32, f32::max);
+    // (a seam the parse leaves where two of its crops meet is closed first: snapped, it would become a crisp cut)
+    lightcraft_edgerefine::close_seams(&mut alpha, (cell.ceil() as usize).clamp(1, 3));
     let stop = || cancel.load(Ordering::Relaxed);
     snap(&Rgb { data: &crop, w: cw, h: ch }, &mut alpha, radius_for(cell), &stop).ok()?;
     // (never into another person: where someone else is, this person may only lose)

@@ -517,8 +517,11 @@ pub(crate) fn on_devices(gpu_refused: &AtomicBool, mut attempt: impl FnMut(bool)
 #[cfg(feature = "sam")]
 pub fn subject_edge(base: &lightcraft_develop::SegMask, m: &Matte, edge: Edge) -> Option<lightcraft_develop::SegMask> {
     let logits = base.logits()?;
-    let matte = lightcraft_birefnet::Matte { side: m.side, logits: m.logits.clone() };
-    let mixed = lightcraft_birefnet::combine::refine_edges(&logits, base.side as usize, &matte);
+    // (issue #240: BiRefNet's own cut-out is fine already, so the matte corrects it rather than replacing its edge;
+    // SAM 3's coarse grid takes the matte's edge as it is)
+    let fine = base.model.as_deref().is_some_and(|id| id.starts_with("birefnet") || id.starts_with("sam3+birefnet"));
+    let band = lightcraft_birefnet::combine::BAND;
+    let mixed = lightcraft_edgerefine::decide(&logits, base.side as usize, &m.logits, m.side, band, None, fine);
     if !mixed.iter().any(|l| *l > 0.0) {
         return None;
     }

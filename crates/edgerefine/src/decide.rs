@@ -13,7 +13,12 @@ const GAP_GROW: u32 = 2;
 /// side) of its edge the matte decides, with a smooth hand-over; and, with `gap_cap`, inside every gap [`gaps`] finds
 /// (sure background to the matte, each at most that fraction of the selection) and two cells around it. Sizes that
 /// don't add up give `base` enlarged.
-pub fn decide(base: &[f32], base_side: usize, matte: &[f32], n: usize, band: f32, gap_cap: Option<f32>) -> Vec<f32> {
+///
+/// With `keep_base` (a coarse selection that is itself a fine cut-out, as BiRefNet's is) the matte only corrects it
+/// in the band: where both agree the sharper of the two stands (a matte's softer edge never blurs a crisp one), what
+/// the matte adds stands (strands the cut-out missed), and what it takes away only as far as it is sure (a blob of
+/// background goes, a defocused hand the matte half doubts stays).
+pub fn decide(base: &[f32], base_side: usize, matte: &[f32], n: usize, band: f32, gap_cap: Option<f32>, keep_base: bool) -> Vec<f32> {
     let s = upsample(base, base_side, n);
     if matte.len() != n * n || n == 0 {
         return s;
@@ -35,16 +40,31 @@ pub fn decide(base: &[f32], base_side: usize, matte: &[f32], n: usize, band: f32
         .zip(&dist)
         .zip(&inside)
         .zip(&gap)
-        .map(|((((_, m), d), inside), gap)| {
+        .map(|((((b, m), d), inside), gap)| {
             // 1 within half the band of the coarse edge (or in a gap), 0 beyond the band, smooth between
             let px = *d as f32 / 3.0;
             let t = ((px - band / 2.0) / (band / 2.0)).clamp(0.0, 1.0);
             let w = if *gap { 1.0 } else { 1.0 - t * t * (3.0 - 2.0 * t) };
             let coarse = if *inside { STRONG } else { -STRONG };
             let m = if m.is_finite() { m.clamp(-2.0 * STRONG, 2.0 * STRONG) } else { coarse };
+            let m = if keep_base { fuse(b.clamp(-2.0 * STRONG, 2.0 * STRONG), m) } else { m };
             w * m + (1.0 - w) * coarse
         })
         .collect()
+}
+
+/// A fine coarse logit `b` corrected by a matte's `m` ([`decide`]'s `keep_base`).
+fn fuse(b: f32, m: f32) -> f32 {
+    if (b > 0.0) == (m > 0.0) {
+        return if b.abs() > m.abs() { b } else { m };
+    }
+    if b > 0.0 {
+        // (the matte takes away: as far as it is sure, from a logit of -2 to -5)
+        let t = ((-m - 2.0) / 3.0).clamp(0.0, 1.0);
+        let t = t * t * (3.0 - 2.0 * t);
+        return t * m + (1.0 - t) * b;
+    }
+    m
 }
 
 /// `side × side` logits resampled bilinearly (half-pixel centres) to `n × n`.

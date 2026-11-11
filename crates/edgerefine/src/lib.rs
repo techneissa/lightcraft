@@ -25,11 +25,13 @@
 mod decide;
 mod gaps;
 mod guided;
+mod seams;
 mod store;
 
 pub use decide::{decide, distance_to_edge, upsample};
 pub use gaps::gaps;
 pub use guided::snap;
+pub use seams::close_seams;
 pub use store::{Grid, store, tile};
 
 /// Logits are kept within this (a stored grid's quantization holds ±15.9: fully in or out).

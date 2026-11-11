@@ -12,6 +12,9 @@ use super::Matte;
 /// Half-width of the band where the matte decides, as a fraction of the photo's side (3 % ≈ 31 matte cells at 1024):
 /// wide enough for the parse's soft edge and for loose hair.
 pub const BAND: f32 = 0.03;
+/// The largest a gap the matte opens inside a person may be, as a fraction of the person (a hand on a hip leaves a
+/// gap of 1 to 3 %; a held bag or a second person the matte drops is larger and stays).
+const GAP_CAP: f32 = 0.05;
 /// Largest grid a person's new mask may have on a side (the matte's own resolution is the limit in practice).
 const MAX_CELLS: usize = 2048;
 
@@ -72,6 +75,17 @@ pub(super) fn refine_person(p: &Person, others: &[&Person], r: NormRect, matte: 
     let dist = distance_to_edge(&inside, gw, gh);
     // the band in grid cells (a cell is about one matte cell)
     let band = (BAND * n).max(1.0);
+    // (issue #240: the background the matte is sure of inside the person, however far from the parse's edge: the gap
+    // between an arm and the body, between fingers; and its own soft edge around it)
+    let matte_logits: Vec<f32> = (0..gw * gh)
+        .map(|i| {
+            let (x, y) = at(i);
+            lightcraft_edgerefine::logit(matte.coverage(x, y))
+        })
+        .collect();
+    let gap = lightcraft_edgerefine::gaps(&inside, &matte_logits, gw, gh, GAP_CAP);
+    let gap_near = distance_to_edge(&gap, gw, gh);
+    let in_gap = |i: usize| gap.get(i).copied().unwrap_or(false) || gap_near.get(i).is_some_and(|d| *d <= 6);
     let hair_near = near(p, Part::Hair, &at, gw, gh, band);
     let mut entire = Vec::with_capacity(gw * gh);
     let mut gained = Vec::with_capacity(gw * gh);
@@ -81,7 +95,7 @@ pub(super) fn refine_person(p: &Person, others: &[&Person], r: NormRect, matte: 
         let px = dist.get(i).copied().unwrap_or(u32::MAX) as f32 / 3.0;
         // 1 within half the band of the parse's edge, 0 beyond the band, smooth between
         let t = ((px - band / 2.0) / (band / 2.0)).clamp(0.0, 1.0);
-        let w = 1.0 - t * t * (3.0 - 2.0 * t);
+        let w = if in_gap(i) { 1.0 } else { 1.0 - t * t * (3.0 - 2.0 * t) };
         let mut v = w * matte.coverage(x, y) + (1.0 - w) * o;
         // (never into another person: where someone else is, this person may only lose)
         // (the others joined as the masks draw them: two people's soft edges at 0.45 each are someone, #124)

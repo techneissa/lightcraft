@@ -77,10 +77,10 @@ fn refining_opens_the_finger_gap_and_keeps_the_wisp() {
     let (gap, wisp, _) = measure(&alpha_of(&upsample(&base, 12, 80), 80, w, h));
     assert!(gap > 0.5 && wisp < 0.3, "the coarse mask fills the gap ({gap:.2}) and loses the wisp ({wisp:.2})");
     // today, BiRefNet Matting edge: the matte decides only in a band around the coarse edge, which misses the gap
-    let (gap, ..) = measure(&alpha_of(&decide(&base, 12, &matte, 80, 0.1, None), 80, w, h));
+    let (gap, ..) = measure(&alpha_of(&decide(&base, 12, &matte, 80, 0.1, None, false), 80, w, h));
     assert!(gap > 0.5, "matting in the band alone leaves the enclosed gap filled ({gap:.2})");
     // refined: the matte also opens the gap, and the edge is snapped to the photo
-    let decided = decide(&base, 12, &matte, 80, 0.1, Some(0.05));
+    let decided = decide(&base, 12, &matte, 80, 0.1, Some(0.05), false);
     let mut a = alpha_of(&decided, 80, w, h);
     let changed = snap(&Rgb { data: &rgb, w, h }, &mut a, radius_for(6.0), &|| false).unwrap();
     assert!(changed > 0);
@@ -95,7 +95,7 @@ fn refining_opens_the_finger_gap_and_keeps_the_wisp() {
 fn snapping_leaves_everything_away_from_the_edge_alone_and_can_stop() {
     let (rgb, w, h, base, matte) = scene();
     let img = Rgb { data: &rgb, w, h };
-    let before = alpha_of(&decide(&base, 12, &matte, 80, 0.1, Some(0.05)), 80, w, h);
+    let before = alpha_of(&decide(&base, 12, &matte, 80, 0.1, Some(0.05), false), 80, w, h);
     let mut after = before.clone();
     snap(&img, &mut after, 9, &|| false).unwrap();
     for (b, a) in before.data.iter().zip(&after.data) {
@@ -147,7 +147,7 @@ fn gaps_finds_small_sure_background_inside_the_selection_only() {
 #[test]
 fn store_keeps_every_edge_pixel_in_finer_grids_that_redraw_it() {
     let (rgb, w, h, base, matte) = scene();
-    let mut a = alpha_of(&decide(&base, 12, &matte, 80, 0.1, Some(0.05)), 80, w, h);
+    let mut a = alpha_of(&decide(&base, 12, &matte, 80, 0.1, Some(0.05), false), 80, w, h);
     snap(&Rgb { data: &rgb, w, h }, &mut a, radius_for(6.0), &|| false).unwrap();
     let (main, tiles) = store(&a, 64).unwrap();
     assert_eq!((main.side, main.logits.len(), main.rect), (64, 64 * 64, [0.0, 0.0, 1.0, 1.0]));
@@ -175,4 +175,36 @@ fn store_keeps_every_edge_pixel_in_finer_grids_that_redraw_it() {
     assert!(store(&Alpha { w: 4, h: 4, data: vec![1.0; 16] }, 8).unwrap().1.is_empty());
     assert!(store(&Alpha { w: 4, h: 4, data: vec![1.0; 3] }, 8).is_none());
     assert!(tile(&a, [10.0, 10.0, 5.0, 20.0], 8).is_none());
+}
+
+#[test]
+fn a_fine_base_keeps_its_crisp_edge_and_what_the_matte_doubts() {
+    // a crisp base (±12) and a soft matte that agrees on the edge but is blurred, doubts part of the subject (-1), is
+    // sure a blob is background (-9) and adds a strand (+4)
+    let n = 8;
+    let base = vec![12.0, 12.0, -12.0, 12.0, -12.0, -12.0, -12.0, -12.0];
+    let base: Vec<f32> = (0..n * n).map(|i| base[i % n]).collect();
+    let matte = vec![3.0, -1.0, -2.0, -9.0, 4.0, -12.0, -12.0, -12.0];
+    let matte: Vec<f32> = (0..n * n).map(|i| matte[i % n]).collect();
+    let d = decide(&base, n, &matte, n, 1.0, None, true);
+    assert!(d[0] > 11.0, "both say in: the crisp base stands ({})", d[0]);
+    assert!(d[1] > 8.0, "a doubt of -1 takes nothing away ({})", d[1]);
+    assert!(d[3] < -5.0, "a sure blob goes ({})", d[3]);
+    assert!(d[4] > 3.0, "the strand comes in ({})", d[4]);
+    let plain = decide(&base, n, &matte, n, 1.0, None, false);
+    assert!(plain[1] < 0.0, "without keep_base the doubt wins ({})", plain[1]);
+}
+
+#[test]
+fn closing_seams_fills_thin_dips_inside_and_keeps_wide_gaps() {
+    // a solid block with a 2 px seam down its middle and a 20 px gap further right
+    let (w, h) = (80usize, 40usize);
+    let mut a = Alpha::from_fn(w, h, |x, _| {
+        let x = (x * w as f32) as usize;
+        if (19..21).contains(&x) || (40..60).contains(&x) || x >= 75 || x < 5 { 0.0 } else { 1.0 }
+    });
+    close_seams(&mut a, 2);
+    assert!(a.data[20 * w + 19] > 0.99 && a.data[20 * w + 20] > 0.99, "the seam is closed");
+    assert!(a.data[20 * w + 50] < 0.01, "the wide gap stays open");
+    assert!(a.data[20 * w + 2] < 0.01 && a.data[20 * w + 77] < 0.01, "outside stays out");
 }
