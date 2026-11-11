@@ -136,6 +136,8 @@ pub(super) fn library(tag: &str, n: usize) -> (Session, PathBuf, Vec<PhotoId>) {
 fn attach(s: &mut Session, dir: &Path) {
     s.parsing.set_paths(Some(dir.join("models")), Some(dir.join("cache")), None);
     s.parse_ahead.power.fix(Some(Power::default()));
+    // (a photo open in the Edit view is parsed at once; the dwell has its own test)
+    s.parse_ahead_test_dwell(Duration::ZERO);
     index_read(s);
 }
 
@@ -266,6 +268,46 @@ fn while_culling_no_photo_stepped_past_is_parsed() {
     // to the Edit panel: the photo open there; the edits made while culling don't count as editing in it
     let st = settle(&mut s, json!({"pace": "light"}));
     assert_eq!((st["parsed"].as_u64(), st["editing"].as_bool()), (Some(1), Some(false)), "{st}");
+}
+
+#[test]
+fn stepping_through_photos_in_the_edit_view_parses_none_and_drops_the_run_of_one_stepped_past() {
+    let (mut s, _dir, ids) = library("dwell", 4);
+    for id in &ids {
+        add_face(&mut s, *id, None);
+    }
+    let gate = Gate::default();
+    s.parsing.set_runner(Some(gate.runner()));
+    // each photo shorter than the dwell: none parsed, no row, frames keep coming ("paused")
+    s.parse_ahead_test_dwell(Duration::from_secs(3600));
+    for id in &ids {
+        open(&mut s, *id);
+        for _ in 0..20 {
+            let st = pump(&mut s, json!({"pace": "light"}));
+            assert_eq!(st["state"], "paused", "{st}");
+        }
+    }
+    assert_eq!(gate.entered.load(Ordering::SeqCst), 0, "a photo stepped past was parsed");
+    assert!(row(&s).is_none());
+    // a photo that stays open is parsed; stepping on before it is done stops its run, which is not run again
+    s.parse_ahead_test_dwell(Duration::ZERO);
+    open(&mut s, ids[0]);
+    pump_until(&mut s, json!({"pace": "light"}), "the open photo's run starts", || gate.entered.load(Ordering::SeqCst) == 1);
+    s.parse_ahead_test_dwell(Duration::from_secs(3600));
+    open(&mut s, ids[1]);
+    pump(&mut s, json!({"pace": "light"}));
+    until("the run of the photo stepped past stops", || gate.stopped.load(Ordering::SeqCst) == 1);
+    gate.open(5);
+    for _ in 0..40 {
+        pump(&mut s, json!({"pace": "light"}));
+        std::thread::sleep(POLL);
+    }
+    assert_eq!(gate.entered.load(Ordering::SeqCst), 1, "the photo stepped past ran again");
+    assert_eq!(s.parse_ahead.counts().parsed, 0);
+    // an edit counts as staying: parsed at once, the photos ahead too
+    s.execute("develop.set", &json!({"control": "light.exposure", "value": 0.3})).unwrap();
+    let st = settle(&mut s, json!({"pace": "light"}));
+    assert_eq!((st["state"].as_str(), st["parsed"].as_u64()), (Some("done"), Some(3)), "{st}");
 }
 
 #[test]

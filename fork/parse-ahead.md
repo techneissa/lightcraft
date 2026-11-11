@@ -10,7 +10,9 @@ retouching's face search (`fork/retouch-masks.md`); Select People does not ask f
 branches merge).
 
 - **Which photos, in order** (issue #200: only photos likely to be retouched): the photo open in the Edit view (the
-  loupe with an Edit, Crop, Remove, Masking, Red Eye or Portrait panel) and, once the user has edited there since
+  loupe with an Edit, Crop, Remove, Masking, Red Eye or Portrait panel) once it has stayed open 4 s (stepping on
+  sooner parses nothing, and a run going for a photo stepped past ends; a portrait tool opened sooner asks for the
+  parse itself), and, once the user has edited there since
   coming to it (an edit replaces the open photo's develop settings) or the open photo has portrait settings, the 4
   photos ahead of it in the direction of travel, nearest first; none behind (stepped past already). Then photos with
   portrait settings, whose drawing needs the parse (newest first, also while the user is around). Then, while the user
@@ -18,7 +20,8 @@ branches merge).
   new import, a photo with faces nobody picked or starred, a rejected photo. While culling (any other view: the
   grid, the loupe without an Edit panel, Compare, Survey) nothing near the open photo is parsed and the early check
   for faces (below) waits; leaving the Edit view forgets the edits, so coming back parses the open photo alone until
-  the next edit. A neighbour without faces is parsed only while the face scan has not looked at it yet. A photo is
+  the next edit; an edit, or portrait settings on the open photo, count as staying (no 4 s wait). While the open
+  photo waits, `state` is `paused` (the app keeps pumping) and no row shows. A neighbour without faces is parsed only while the face scan has not looked at it yet. A photo is
   parsed once per model set and People edge, and once per app start (a failure is not retried until the next start; a
   photo whose file or faces change is done again).
 - **Never in the way**: one photo at a time on one worker thread, so the GPU turn is given up between photos. Nothing
@@ -139,6 +142,16 @@ A test Mac, other builds running (load average 8–48), 7 CC0 portraits (18–24
 - BiSeNet's clothes parser (SegFormer-B2) runs on candle at 700 ms; Sapiens2 at 1.2 s. Converting them to Core ML is
   the next step for those sets.
 
+Culling, measured with `crates/engine/examples/parse_cull.rs` (the 14 photos below, faces found first, a step every
+2 s as the arrow keys do, pumped as the app pumps: paused 1.5 s after each key, then light), same Mac, load average
+14–25:
+
+| Walk | Before | After |
+| --- | --- | --- |
+| Outside the Edit view, a step every 2 s | 17 model runs started (12 finished), 6.9 s CPU | none, 0.1 s CPU |
+| In the Edit view, no edit, a step every 2 s | 17 started (11 finished), 7.2 s CPU | none, 1.3 s CPU (the early face check on two photos without face regions) |
+| In the Edit view, no edit, a step every 6 s | 14 started, 14 finished, 8.4 s CPU | 14 and 14, 9.3 s CPU |
+
 After the change (same Mac and photos plus 5 CC0 group photos of 2 to 26 people, before and after run in turn three
 times, load average 25–39), mean per photo over 14 photos, CPU: 565–623 ms → 490–521 ms. By step, CPU: clothes parser
 139–157 → 80–83 ms, face parser 63–72 → 48–50 ms, face mesh 29–33 → 14 ms. On the 9 photos without the groups, the
@@ -160,13 +173,13 @@ BiSeNet: identical.
 `crates/engine/src/parse_ahead.rs`, `crates/engine/src/parse_ahead/{queue,index,peek,power,worker}.rs`,
 `crates/engine/src/people_parsing/ahead.rs`, `crates/engine/src/cmd/parse_ahead.rs`,
 `crates/engine/src/tests/parse_ahead.rs`, `crates/engine/src/tests/parse_ahead_peek.rs`, `crates/engine/examples/parse_ahead.rs`,
-`crates/engine/examples/parse_profile.rs`, `crates/ui-egui/src/parse_ahead.rs`,
+`crates/engine/examples/parse_profile.rs`, `crates/engine/examples/parse_cull.rs`, `crates/ui-egui/src/parse_ahead.rs`,
 `crates/ui-egui/src/tests/parse_ahead.rs`, `fork/parse-ahead.md`, `fork/tests.d/parse-ahead.txt`
 
 ## Hooks in official files
 
-- `crates/engine/Cargo.toml`: the `parse_profile` example (`test-hooks`) and `rustix` (its CPU clock) as a
-  dev-dependency.
+- `crates/engine/Cargo.toml`: the `parse_profile` (`test-hooks`) and `parse_cull` examples, and `rustix` (their CPU
+  clock) as a dev-dependency.
 - `crates/engine/src/lib.rs`: `pub mod parse_ahead`, field `Session::parse_ahead`. `crates/engine/src/cmd.rs`:
   `mod parse_ahead`, its specs. The `mod` lines of `crates/engine/src/tests.rs`, `crates/ui-egui/src/tests.rs` and
   `crates/ui-egui/src/lib.rs`.

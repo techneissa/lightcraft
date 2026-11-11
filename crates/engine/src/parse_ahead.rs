@@ -52,6 +52,9 @@ use queue::Why;
 
 /// The share of the cache's size limit the idle sweep fills at most.
 pub const IDLE_FILL: f64 = 0.9;
+/// How long a photo stays open in the Edit view before it is parsed, unless the user edits it (or it has portrait
+/// settings): stepping through photos with the arrow keys there parses none of them (issue #200).
+const DWELL: Duration = Duration::from_secs(4);
 /// How often the queue is rebuilt after the catalog changed (the photos around the open one: at once).
 const REBUILD_EVERY: Duration = Duration::from_secs(3);
 /// What of a photo the queue reads: its faces and the rest of its metadata, its dates, its file, whether it is in the
@@ -147,6 +150,12 @@ pub struct ParseAhead {
     worked: bool,
     /// The open photo and the address of its develop settings at the last pump (an edit replaces them).
     seen_open: Option<(PhotoId, usize)>,
+    /// The open photo and when it was opened.
+    opened: Option<(PhotoId, Instant)>,
+    /// [`DWELL`] (tests shorten it).
+    dwell: Duration,
+    /// The open photo waits for its [`DWELL`]: frames keep coming, without a row.
+    dwelling: bool,
     /// Photos done since the app started (parsed or failed), by identity: a photo that changes is done again.
     tried: HashSet<u128>,
     in_flight: Option<InFlight>,
@@ -182,6 +191,9 @@ impl Default for ParseAhead {
             culling: false,
             worked: false,
             seen_open: None,
+            opened: None,
+            dwell: DWELL,
+            dwelling: false,
             tried: HashSet::new(),
             in_flight: None,
             index: Slot::default(),
@@ -319,13 +331,23 @@ fn face_scanned(s: &Session, id: PhotoId) -> bool {
 }
 
 /// The photos around the open one worth parsing: those with faces, and those the face scan has not looked at yet. None
-/// while culling; the open photo alone until the user edits in the Edit panel (or it has portrait settings).
+/// while culling, nor while the open photo has been open less than [`DWELL`]; the open photo alone until the user edits
+/// in the Edit panel (or it has portrait settings).
 fn near_photos(s: &mut Session, backward: bool) -> Vec<PhotoId> {
+    s.parse_ahead.dwelling = false;
     let Some(at) = s.active() else { return Vec::new() };
     if s.parse_ahead.culling {
         return Vec::new();
     }
     let ahead = editing(s, at);
+    let a = &mut s.parse_ahead;
+    if a.opened.is_none_or(|(id, _)| id != at) {
+        a.opened = Some((at, Instant::now()));
+    }
+    a.dwelling = !ahead && a.opened.is_some_and(|(_, t)| t.elapsed() < a.dwell);
+    if a.dwelling {
+        return Vec::new();
+    }
     queue::near(s.visible(), at, backward, ahead)
         .into_iter()
         .filter(|id| s.catalog.photo(*id).is_some_and(|p| parseable(p) && (has_faces(p) || !face_scanned(s, *id))))
@@ -549,6 +571,13 @@ pub(crate) fn pump(s: &mut Session, pace: Pace, backward: bool) {
         f.run.stop();
     }
     let near = near_photos(s, backward);
+    // (a photo near the one open before, left behind: the user stepped past it, its run ends)
+    if let Some(f) = &s.parse_ahead.in_flight
+        && f.why == Why::Near
+        && !near.contains(&f.id)
+    {
+        s.parse_ahead.drop_in_flight();
+    }
     let stamp = Stamp {
         library: Arc::as_ptr(&s.library_identity) as usize,
         photos: s.catalog.len(),
@@ -591,6 +620,13 @@ fn show(s: &mut Session, pace: Pace, held: bool) {
     let left = ahead.queue.iter().filter(|(why, _)| pace == Pace::Pause || pace.allows(*why)).count();
     ahead.left = left;
     let busy = ahead.in_flight.is_some() || left > 0;
+    // (the open photo waits for its dwell: the frontend keeps pumping, no row shows)
+    if !busy && ahead.dwelling {
+        ahead.state = "paused";
+        ahead.row = None;
+        ahead.row_done = 0;
+        return;
+    }
     ahead.state = if !busy {
         "done"
     } else if held {
@@ -886,6 +922,11 @@ impl Session {
     /// Tests: the queue was built long ago (a change it reads rebuilds it at the next pump).
     pub(crate) fn parse_ahead_test_age(&mut self) {
         self.parse_ahead.built_at = None;
+    }
+
+    /// Tests: how long a photo stays open in the Edit view before it is parsed without an edit.
+    pub(crate) fn parse_ahead_test_dwell(&mut self, dwell: Duration) {
+        self.parse_ahead.dwell = dwell;
     }
 
     /// Tests: the model run going, if any.
