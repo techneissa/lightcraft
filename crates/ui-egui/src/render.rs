@@ -800,6 +800,31 @@ impl Renderer {
         Finished { look: None, result: r, color, full: None }
     }
 
+    /// A result without a picture, for a job that has no `RenderJob::failed` of its own.
+    fn failed_result(request_id: u64, photo: PhotoId, key: u64, level: lightcraft_engine::SourceLevel) -> RenderResult {
+        RenderResult {
+            request_id,
+            source_key: None,
+            photo,
+            level,
+            key,
+            rendered: Err(String::new()),
+            gpu_fallback: None,
+            loaded: None,
+            quick: None,
+            display: None,
+            frame: None,
+            mask_planes: None,
+            changed: None,
+        }
+    }
+
+    /// What the pool sends for a job that panicked (issue #227): `failed` with the panic's message, so the
+    /// slot's `pending` entry clears like any failed render's.
+    fn panicked(failed: RenderResult) -> lightcraft_preview::Failure<Finished> {
+        Box::new(move |e| Finished { look: None, result: RenderResult { rendered: Err(e), ..failed }, color: None, full: None })
+    }
+
     fn request_needed(&self, slot: Slot, key: u64, priority: u32) -> bool {
         // A matching old texture must not mask a different newer request (e.g. undo).
         if let Some(&(k, p)) = self.pending.get(&slot) {
@@ -950,13 +975,14 @@ impl Renderer {
             return;
         }
         let key = job.key;
+        let panicked = Self::panicked(job.failed(String::new()));
         let background = matches!(slot, Slot::Thumb(_) | Slot::ThumbQuick(_) | Slot::Prefetch(_));
         let display = self.display.clone();
         let queued = clock();
         if lightcraft_pipeline::profiling() && !background {
             eprintln!("  ui: {slot:?} submitted (at {:.1})", stamp());
         }
-        self.pool.submit(
+        self.pool.submit_or(
             slot,
             key,
             priority,
@@ -968,6 +994,7 @@ impl Renderer {
                 let run = || if background { lightcraft_engine::memory::in_background(|| job.run()) } else { job.run() };
                 Finished { look, ..Self::run_for(run, &display) }
             }),
+            panicked,
         );
     }
 
@@ -987,7 +1014,8 @@ impl Renderer {
         self.pending.insert(Slot::Full, (job.key, priority));
         job.request_id = lightcraft_preview::next_tick();
         self.requests.insert(Slot::Full, Requested { look: None, id: job.request_id, source: Some(job.origin.clone()) });
-        self.pool.submit(
+        let panicked = Self::panicked(job.failed(String::new()));
+        self.pool.submit_or(
             Slot::Full,
             job.key,
             priority,
@@ -995,6 +1023,7 @@ impl Renderer {
                 let (result, full) = crate::full_picture::work(job, plan);
                 Finished { look: None, result, color: None, full }
             }),
+            panicked,
         );
     }
 
@@ -1084,10 +1113,11 @@ impl Renderer {
             Requested { look: job.small.as_ref().map(|j| (geometry_look(&j.settings), j.request.apply_crop)), id: job.request_id, source },
         );
         let key = job.key;
+        let panicked = Self::panicked(Self::failed_result(job.request_id, job.photo, key, lightcraft_engine::SourceLevel::Thumb));
         let display = self.display.clone();
         let queued = clock();
         let background = matches!(slot, Slot::QuickAhead(_));
-        self.pool.submit(
+        self.pool.submit_or(
             slot,
             key,
             priority,
@@ -1098,6 +1128,7 @@ impl Renderer {
                 let run = || if background { lightcraft_engine::memory::in_background(|| job.run()) } else { job.run() };
                 Self::run_for(run, &display)
             }),
+            panicked,
         );
     }
 
@@ -1185,7 +1216,8 @@ impl Renderer {
         let request_id = lightcraft_preview::next_tick();
         self.requests.insert(slot, Requested { look: None, id: request_id, source: None });
         let display = self.display.clone();
-        self.pool.submit(slot, key, priority, Box::new(move || Self::run_for(|| compose.result(request_id), &display)));
+        let panicked = Self::panicked(Self::failed_result(request_id, PhotoId(0), key, lightcraft_engine::SourceLevel::Preview));
+        self.pool.submit_or(slot, key, priority, Box::new(move || Self::run_for(|| compose.result(request_id), &display)), panicked);
     }
 
     /// Prepare a photo in the background (a [`Slot::Prefetch`] job runs once per key; a newer one
@@ -1203,11 +1235,13 @@ impl Renderer {
             Requested { look: Some((geometry_look(&job.settings), job.request.apply_crop)), id: job.request_id, source: Some(job.origin.clone()) },
         );
         let key = job.key;
-        self.pool.submit(
+        let panicked = Self::panicked(job.failed(String::new()));
+        self.pool.submit_or(
             slot,
             key,
             priority,
             Box::new(move || Finished { look: None, result: lightcraft_engine::memory::in_background(|| job.run()), color: None, full: None }),
+            panicked,
         );
     }
 
@@ -2477,6 +2511,52 @@ mod color_image_tests {
         assert!(r.pending_poll() >= std::time::Duration::from_millis(100), "{:?}", r.pending_poll());
         r.set_offload(Box::new(NoWork));
         assert!(r.pending_poll() <= std::time::Duration::from_millis(16), "an offload has no wake-up: polled per frame");
+    }
+
+    // Issue #227: given a prefetch that panics in the pool, its pending entry clears (it held background
+    // work while the loupe was open) and a later job on that slot runs
+    #[test]
+    fn a_panicking_job_clears_its_pending_entry_and_the_slot_runs_again() {
+        let ctx = egui::Context::default();
+        let mut session = Session::new();
+        let mut r = Renderer::default();
+        let slot = Slot::Prefetch(1);
+        let result = |key: u64, id: u64| RenderResult {
+            request_id: id,
+            source_key: None,
+            photo: PhotoId(1),
+            level: lightcraft_engine::SourceLevel::Preview,
+            key,
+            rendered: Err("unreadable".into()),
+            gpu_fallback: None,
+            loaded: None,
+            quick: None,
+            display: None,
+            frame: None,
+            mask_planes: None,
+            changed: None,
+        };
+        let run = |r: &mut Renderer, session: &mut Session, key: u64, id: u64, panics: bool| {
+            r.requests.insert(slot, Requested { look: None, id, source: None });
+            r.pending.insert(slot, (key, 1));
+            let finished = result(key, id);
+            let job: lightcraft_preview::pool::Job<Finished> = if panics {
+                Box::new(|| panic!("a render job panics (expected in this test)"))
+            } else {
+                Box::new(move || Renderer::run_for(|| finished, &None))
+            };
+            r.pool.submit_or(slot, key, 1, job, Renderer::panicked(result(key, id)));
+            let t0 = std::time::Instant::now();
+            while r.pending.contains_key(&slot) && t0.elapsed() < std::time::Duration::from_secs(10) {
+                r.poll(&ctx, session);
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+        };
+        run(&mut r, &mut session, 1, 1, true);
+        assert!(!r.pending.contains_key(&slot), "the panic cleared the pending entry");
+        assert_eq!(r.prefetches_pending(), 0, "background work is no longer held");
+        run(&mut r, &mut session, 2, 2, false);
+        assert!(!r.pending.contains_key(&slot), "the slot's next job ran");
     }
 
     // Given loupe renders of both kinds, the draft's time and the full render's are kept apart
