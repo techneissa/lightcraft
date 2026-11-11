@@ -10,11 +10,17 @@
 //! 3. **Spots** are the places darker than their surroundings by more than [`FIND`] at their best size and darker
 //!    than every neighbour; no larger structure behind them (the last size, past 3 % of the face, answering more
 //!    means a nostril or a shadow, not a spot); round (not a line or a wrinkle: the response's curvature is at most
-//!    [`MAX_ELONGATION`] times longer one way); with skin all around. Overlapping finds keep the strongest.
-//! 4. **Kinds**: a spot whose red darkens nearly as much as the rest is brown (melanin), one whose red stays is red
-//!    (blood). Brown, dark ([`MOLE`]) and round is a mole; small and brown among many like it is a freckle when faint
-//!    and a mole when dark; anything else is a blemish.
-//! 5. **Donor**: a clean patch of skin next to each spot, whose texture the repair borrows.
+//!    [`MAX_ELONGATION`] times longer one way); with skin all around; standing out from the skin's texture
+//!    ([`STAND_OUT`]). Overlapping finds keep the strongest.
+//! 4. **Not spots** ([`judge`]): a crease or a hair through it ([`LINE`]), the edge of something larger and darker
+//!    beside it ([`SIDE`]: a nostril, a fold), the face's shading ([`BIG`]), or a strand Stray Hair's search found
+//!    under it (a hair stump, a crease; `strands`).
+//! 5. **Kinds** (`classify`): red (blood) is a blemish; a round sharp spot much darker than the spots around it is a
+//!    mole; one of a field of like spots, in a field of [`classify::FRECKLED`] or more, is a freckle; where stubble
+//!    grows, small dots and spots on textured skin are stubble and dropped; the rest are blemishes. On a freckled
+//!    face the field is searched again, finer ([`IN_FIELD`]), so its fainter freckles go with the rest when the
+//!    switch is off.
+//! 6. **Donor**: a clean patch of skin next to each spot, whose texture the repair borrows.
 
 use lightcraft_raster::blur::{gauss_taps, gaussian, gaussian_taps};
 use lightcraft_raster::{Image, Plane, Rgb32f, par_rows};
@@ -22,9 +28,16 @@ use lightcraft_raster::{Image, Plane, Rgb32f, par_rows};
 use crate::input::{Spot, SpotKind, Spots};
 use crate::{Part, Scene};
 
+mod classify;
+mod strands;
+mod traits;
+
 /// The face's size, in pixels, detection works at: a bigger face is reduced to it (spots under about 2 of these
 /// pixels are not looked for), a smaller one is worked on as it is.
 pub const WORK: f64 = 640.0;
+/// A face under this size, in pixels of the picture spots are found on, is not looked at: its spots (0.3–3 % of
+/// it) would be a pixel or two across.
+pub const MIN_FACE: f64 = 160.0;
 
 /// The sizes looked at (Gaussian σ, fractions of the face's size), smallest first. A spot of radius r answers most
 /// at σ = r/√2, so all but the last cover spots of 0.3–3 % of the face across; the last only tells a larger
@@ -43,8 +56,19 @@ pub const ABSORB: [f32; 3] = [0.15, 0.65, 0.2];
 pub const FIND: f32 = 0.06;
 /// The two smallest sizes need this much more (pores and grain are small and faint): ×1.6 and ×1.3.
 const SMALL_EXTRA: [f32; 2] = [0.6, 0.3];
-/// A spot this much darker than the skin around it counts fully ([`Spot::strength`] 1).
-pub const STRONG: f32 = 0.3;
+/// How much a spot shows ([`Spot::strength`]) is its darkening times its radius (a fraction of the face), on a log
+/// scale from [`FAINTEST`] (0) to [`PLAIN`] (1): a faint pore-sized dot to a dark spot 2 % of the face across.
+pub const FAINTEST: f64 = 0.06 * 0.0016;
+pub const PLAIN: f64 = 0.5 * 0.01;
+
+/// How much a spot of darkening `contrast` (natural log) and radius `r` (a fraction of the face) shows, 0…1.
+fn shows(contrast: f32, r: f64) -> f32 {
+    let v = f64::from(contrast.max(0.0)) * r.max(0.0);
+    if !(v.is_finite() && v > 0.0) {
+        return 0.0;
+    }
+    ((v / FAINTEST).ln() / (PLAIN / FAINTEST).ln()).clamp(0.0, 1.0) as f32
+}
 /// The response's curvature may be at most this many times stronger one way than the other (a line or a wrinkle
 /// is much longer than wide), per size: the smallest (a hair, a pore's edge) and the largest (a crease, the
 /// corner of a nostril) must be rounder.
@@ -52,6 +76,10 @@ pub const MAX_ELONGATION: [f32; 7] = [2.0, 2.2, 2.5, 2.5, 2.2, 1.8, 1.8];
 /// Red darkening as much as the rest, or more, is a shadow or a hair, not a spot: blood leaves red as it is and
 /// melanin darkens it less than green. A spot's red share is at most this.
 pub const NEUTRAL: f32 = 0.92;
+/// A spot this much darker than the skin around it (natural log: about 30 %) is looked at whatever its colour.
+pub const DARK_ENOUGH: f32 = 0.35;
+/// … and may be this many times longer one way than [`MAX_ELONGATION`] allows.
+const DARK_STRETCH: f32 = 1.5;
 /// The mask must be at least this all around a spot (1.5 radii out): a spot at the skin's edge is a lash, a lip
 /// line or hair.
 const SKIN_ALL_AROUND: f32 = 0.9;
@@ -61,8 +89,9 @@ const EXTENT: f32 = 0.75;
 
 /// The texture around a spot is measured over this share of the face's size …
 const BUSY: f64 = 0.02;
-/// … and the spot must be this many times darker than the texture's mean response.
-pub const STAND_OUT: f32 = 4.0;
+/// … and the spot must be this many times darker than the texture's mean response (older skin is textured, and
+/// its marks stand out from it less than a pimple does from young skin).
+pub const STAND_OUT: f32 = 2.5;
 
 /// Skin around a place more textured than this is a beard, stubble or brows, not clean skin: nothing there is a
 /// spot.
@@ -75,22 +104,48 @@ pub const DARKEST_SKIN: f32 = 0.6;
 
 /// Skin whose mean colour has less saturation than this is grey (a black-and-white photo).
 const GREY: f64 = 0.04;
+/// Red's share of the darkening taken on a grey photo, where colour can't tell a spot from a shadow (under
+/// [`NEUTRAL`]: shape and contrast decide alone).
+const GREY_RED_SHARE: f32 = 0.65;
 
-/// Brown: red darkens at least this share of how much the absorbing channel does (blood leaves red as it is).
-pub const BROWN: f32 = 0.45;
-/// A mole: brown and darker than the skin around it by at least this (natural log: about 25 %).
-pub const MOLE: f32 = 0.22;
-/// A mole is round: at most this elongation.
-const MOLE_ROUND: f32 = 1.8;
-/// A brown spot at most [`FRECKLE_RADIUS`] across (a fraction of the face's size) with at least [`FRECKLE_GROUP`]
-/// others like it within [`FRECKLE_NEAR`] is a freckle when fainter than this, else a mole.
-pub const FRECKLE_FAINT: f32 = 0.2;
-const FRECKLE_RADIUS: f64 = 0.006;
-pub const FRECKLE_GROUP: usize = 5;
-const FRECKLE_NEAR: f64 = 0.12;
+/// A spot the darkness carries on past both ways (a crease, a wrinkle, a hair) by at least this share of its own
+/// darkening ([`traits::Traits::line`]) is not a spot.
+pub const LINE: f32 = 0.5;
+/// A spot next to something larger and as dark (its darkest sixth around, [`traits::Traits::side`], at least this
+/// share of its own darkening) is the edge of a nostril, a fold or a shadow, not a spot.
+pub const SIDE: f32 = 0.6;
+/// … or when that sixth is this much darker than the skin (natural log, about 40 %) whatever the spot is: a
+/// nostril, the inside of a lip corner.
+const SIDE_DARK: f32 = 0.5;
+/// A spot at least this share of the face in radius …
+const BIG: f64 = 0.006;
+/// … whose darkness fades to less than this share of its centre's by its edge ([`traits::Traits::edge`]) is the
+/// face's shading (the side of the nose, between the brows), not a mark, when it is also fainter than
+/// [`BIG_FAINT`] and greyer than the face's spots (red's share of its darkening past their median by
+/// [`SHADE_GREYER`] of the way to grey: less light darkens every colour alike): a large mark is dark to its edge
+/// or dark, and a pimple is red.
+const BIG_EDGE: f32 = 0.5;
+const BIG_FAINT: f32 = 0.35;
+const SHADE_GREYER: f32 = 0.35;
 
-/// Most spots kept per face (the strongest).
-pub const MAX_SPOTS: usize = 400;
+/// How hard a search looks: the least darkening ([`FIND`]) and how many times the skin's texture a spot must
+/// stand out by ([`STAND_OUT`]).
+#[derive(Clone, Copy)]
+struct Look {
+    find: f32,
+    stand_out: f32,
+}
+
+/// The first search, over the whole skin.
+const FIRST: Look = Look { find: FIND, stand_out: STAND_OUT };
+/// The second, inside a freckle field ([`classify::in_field`]): a field's fainter freckles, against skin whose
+/// texture the field itself is.
+const IN_FIELD: Look = Look { find: FIELD_FIND, stand_out: FIELD_STAND_OUT };
+pub const FIELD_FIND: f32 = 0.03;
+pub const FIELD_STAND_OUT: f32 = 1.2;
+
+/// Most spots kept per face (the strongest; a freckled face has hundreds).
+pub const MAX_SPOTS: usize = 1000;
 /// Most pixels of the mask's box looked at (the box is reduced to the face's [`WORK`] size first).
 const MAX_BOX: usize = 1 << 26;
 /// Most candidate places looked at further (the strongest).
@@ -106,8 +161,8 @@ struct Work {
     size: f64,
     w: usize,
     h: usize,
-    /// Per pixel: absorbing channel × mask, red × mask, mask.
-    weighted: Image<[f32; 3]>,
+    /// Per pixel: red, green and blue × mask, and the mask.
+    weighted: Image<[f32; 4]>,
     /// The face's skin area in image pixels.
     skin_px: f64,
     /// The skin has no colour (a black-and-white photo): red can't tell a spot from a shadow.
@@ -126,6 +181,8 @@ struct Found {
     elongation: f32,
     /// Radius in work pixels.
     radius: f64,
+    /// How textured the skin around it is ([`busy`]).
+    busy: f32,
 }
 
 /// The spots on face `face` of `scene` (on `img`, the picture the face's masks come from). Empty without a Facial
@@ -137,22 +194,82 @@ pub fn find(img: &Rgb32f, scene: &Scene<'_>, face: usize) -> Spots {
     let (resp, red) = responses(&work);
     let busy = busy(&work, &resp);
     let base = base(&work);
-    let mut found = candidates(&work, &resp, &red, &busy);
+    let mut found = candidates(&work, &resp, &red, &busy, FIRST);
     found.retain(|f| is_skin_bright(&base, f));
     found.sort_by(|a, b| b.contrast.total_cmp(&a.contrast));
-    let kept = suppress(found);
-    let kinds = kinds(&kept, work.size);
-    let list = kept
+    let mut kept = suppress(&[], found, MAX_SPOTS);
+    let hairs = strands::Map::of(scene, face);
+    // shading darkens red nearly as much as the rest; spots on this face darken it this much at most
+    let mut shares: Vec<f32> = kept.iter().map(|f| f.red_share).collect();
+    let mid = shares.len() / 2;
+    let typical = if shares.is_empty() { 1.0 } else { *shares.select_nth_unstable_by(mid, f32::total_cmp).1 };
+    let shade = typical + SHADE_GREYER * (1.0 - typical).max(0.0);
+    let beard = beard(scene, face, &work);
+    let judge = |f: &Found, field: bool| judge(&work, scene, (hairs.as_ref(), beard.as_ref()), f, field, shade);
+    let mut seen: Vec<(Found, traits::Traits)> = kept.iter().filter_map(|f| judge(f, false)).collect();
+    let mut kinds = classify::kinds(&seen, work.size, beard.as_ref());
+    // a freckle field is looked at again, finer: its fainter freckles go with the rest when they are not kept
+    let freckles: Vec<Found> = seen.iter().zip(&kinds).filter(|(_, k)| **k == Some(SpotKind::Freckle)).map(|((f, _), _)| *f).collect();
+    if freckles.len() >= classify::FRECKLED {
+        let mut more = candidates(&work, &resp, &red, &busy, IN_FIELD);
+        more.retain(|f| is_skin_bright(&base, f) && classify::in_field(f, &freckles, work.size));
+        more.sort_by(|a, b| b.contrast.total_cmp(&a.contrast));
+        let more = suppress(&kept, more, MAX_SPOTS.saturating_sub(kept.len()));
+        for f in &more {
+            if let Some((f, t)) = judge(f, true) {
+                kinds.push(Some(if classify::is_red(&t) { SpotKind::Blemish } else { SpotKind::Freckle }));
+                seen.push((f, t));
+            }
+        }
+        kept.extend(more);
+    }
+    let list = seen
         .iter()
         .zip(kinds)
-        .filter_map(|(f, kind)| {
+        .filter_map(|((f, _), kind)| {
+            let kind = kind?;
             let at = to_norm(scene, &work, f.x as f64 + 0.5, f.y as f64 + 0.5)?;
             let donor = donor(&work, &resp, &kept, f).and_then(|(dx, dy)| to_norm(scene, &work, dx, dy));
-            let strength = ((f.contrast - FIND) / (STRONG - FIND)).clamp(0.0, 1.0);
+            let strength = shows(f.contrast, f.radius / work.size);
             Some(Spot { at, radius: f.radius * work.factor as f64 / size_px, donor, kind, strength })
         })
         .collect();
     Spots { list, skin }
+}
+
+/// Spot `f` with its look, or `None` when it is not a spot: a crease or a hair through it ([`LINE`]), the edge of
+/// something larger and darker ([`SIDE`], [`SIDE_DARK`]), the face's shading ([`BIG`], greyer than `shade`), or on a strand Stray Hair's
+/// search found (a hair stump in stubble, a crease). In a freckle field (`field`) the freckles around a spot are
+/// as dark as it and line up by chance: only a nostril or a fold as dark as [`SIDE_DARK`] counts there.
+fn judge(
+    work: &Work,
+    scene: &Scene<'_>,
+    (hairs, beard): (Option<&strands::Map<'_>>, Option<&classify::Beard>),
+    f: &Found,
+    field: bool,
+    shade: f32,
+) -> Option<(Found, traits::Traits)> {
+    let t = traits::measure(work, f)?;
+    let at = to_norm(scene, work, f.x as f64 + 0.5, f.y as f64 + 0.5)?;
+    let factor = work.factor as f64;
+    let stubbly = beard.is_some_and(|b| b.holds(f.x as f64 + 0.5, f.y as f64 + 0.5));
+    let on_hair = hairs.is_some_and(|h| h.covers(at, f.radius * factor, work.size * factor, stubbly));
+    let shading = f.radius >= BIG * work.size && t.edge < BIG_EDGE && f.contrast < BIG_FAINT && f.red_share >= shade;
+    let beside = (t.side >= SIDE && !field) || t.side * t.dark >= SIDE_DARK;
+    let line = t.line >= LINE && !field;
+    (!line && !beside && !shading && !on_hair).then_some((*f, t))
+}
+
+/// The face's beard area ([`classify::Beard`]) from its first five landmarks, in work pixels.
+fn beard(scene: &Scene<'_>, face: usize, w: &Work) -> Option<classify::Beard> {
+    let f = scene.faces.get(face)?;
+    let view = scene.view();
+    let k = w.factor as f64;
+    let px = |i: usize| -> Option<(f64, f64)> {
+        let (x, y) = view.to_px(f.face.landmark(i)?.0, f.face.landmark(i)?.1)?;
+        Some(((x - w.x0 as f64) / k, (y - w.y0 as f64) / k))
+    };
+    classify::Beard::new([px(0)?, px(1)?], px(2)?, [px(3)?, px(4)?])
 }
 
 /// Work pixel (`x`, `y`) → normalised photo coordinates.
@@ -167,6 +284,10 @@ fn work(img: &Rgb32f, scene: &Scene<'_>, face: usize) -> Option<Work> {
         return None;
     }
     let size = scene.faces.get(face)?.size;
+    // on a smaller face a spot is a pixel or two: noise, not something to retouch
+    if size < MIN_FACE {
+        return None;
+    }
     let mask = scene.faces.get(face)?.face.mask(Part::FacialSkin)?;
     let [x0, y0, x1, y1] = scene.mask_box(face, Part::FacialSkin)?;
     let (bw, bh) = (x1 - x0, y1 - y0);
@@ -176,20 +297,19 @@ fn work(img: &Rgb32f, scene: &Scene<'_>, face: usize) -> Option<Work> {
     let factor = ((size / WORK).floor() as usize).clamp(1, bw.max(bh).max(1));
     let (w, h) = (bw.div_ceil(factor), bh.div_ceil(factor));
     let view = scene.view();
-    let mut weighted = Image::<[f32; 3]>::new(w, h);
+    let mut weighted = Image::<[f32; 4]>::new(w, h);
     let mut skin_rows = vec![0.0f64; h];
     par_rows(&mut weighted.data, w.max(1), |sy, row| {
         let ys = y0 + sy * factor..(y0 + (sy + 1) * factor).min(y1);
         for (sx, o) in row.iter_mut().enumerate() {
             let xs = x0 + sx * factor..(x0 + (sx + 1) * factor).min(x1);
-            let mut acc = [0.0f32; 3];
+            let mut acc = [0.0f32; 4];
             for y in ys.clone() {
                 for x in xs.clone() {
                     let (nx, ny) = view.to_norm(x as f64 + 0.5, y as f64 + 0.5);
                     let m = mask.sample(nx, ny).clamp(0.0, 1.0);
                     let p = img.data.get(y * img.width + x).copied().unwrap_or_default();
-                    let a = (p[0] * ABSORB[0] + p[1] * ABSORB[1] + p[2] * ABSORB[2]).max(0.0);
-                    acc = [acc[0] + a * m, acc[1] + p[0].max(0.0) * m, acc[2] + m];
+                    acc = [acc[0] + p[0].max(0.0) * m, acc[1] + p[1].max(0.0) * m, acc[2] + p[2].max(0.0) * m, acc[3] + m];
                 }
             }
             let n = (ys.len() * xs.len()).max(1) as f32;
@@ -197,7 +317,7 @@ fn work(img: &Rgb32f, scene: &Scene<'_>, face: usize) -> Option<Work> {
         }
     });
     for (s, row) in skin_rows.iter_mut().zip(weighted.data.chunks(w.max(1))) {
-        *s = row.iter().map(|p| f64::from(p[2])).sum::<f64>() * (factor * factor) as f64;
+        *s = row.iter().map(|p| f64::from(p[3])).sum::<f64>() * (factor * factor) as f64;
     }
     let skin_px: f64 = skin_rows.iter().sum();
     // the skin's mean colour, from up to 128 × 128 samples
@@ -219,7 +339,7 @@ fn work(img: &Rgb32f, scene: &Scene<'_>, face: usize) -> Option<Work> {
 /// Blurs under this σ (pixels) use exact Gaussian taps (the three-box blur snaps small sizes to whole pixels).
 const EXACT_BELOW: f32 = 2.0;
 
-fn blur(img: &Image<[f32; 3]>, sigma: f32) -> Image<[f32; 3]> {
+fn blur(img: &Image<[f32; 4]>, sigma: f32) -> Image<[f32; 4]> {
     if sigma < EXACT_BELOW && sigma.is_finite() && sigma > 0.0 { gaussian_taps(img, &gauss_taps(sigma)) } else { gaussian(img, sigma) }
 }
 
@@ -235,24 +355,24 @@ fn sigma(work: &Work, i: usize) -> f32 {
 fn responses(work: &Work) -> (Vec<Plane>, Vec<Plane>) {
     let (w, h) = (work.w, work.h);
     let n = SCALES.len();
-    let mut levels: Vec<Image<[f32; 3]>> = (0..SURROUND).map(|i| blur(&work.weighted, sigma(work, i))).collect();
+    let mut levels: Vec<Image<[f32; 4]>> = (0..SURROUND).map(|i| blur(&work.weighted, sigma(work, i))).collect();
     let (mut resp, mut red) = (Vec::with_capacity(n), Vec::with_capacity(n));
     for i in 0..n {
         let outer = blur(&work.weighted, sigma(work, i + SURROUND));
         let inner = levels.remove(0);
         let mut r = Plane::new(w, h);
         let mut d = Plane::new(w, h);
-        let row_of = |img: &Image<[f32; 3]>, y: usize| img.data.get(y * w..(y + 1) * w).unwrap_or(&[]).to_vec();
+        let row_of = |img: &Image<[f32; 4]>, y: usize| img.data.get(y * w..(y + 1) * w).unwrap_or(&[]).to_vec();
         par_rows(&mut r.data, w.max(1), |y, row| {
             let (a, b) = (row_of(&inner, y), row_of(&outer, y));
             for ((o, p), q) in row.iter_mut().zip(&a).zip(&b) {
-                *o = if p[2] >= 0.5 && q[2] > 1e-3 { ln_ratio(q[0] / q[2], p[0] / p[2]) } else { 0.0 };
+                *o = if p[3] >= 0.5 && q[3] > 1e-3 { ln_ratio(absorb(q) / q[3], absorb(p) / p[3]) } else { 0.0 };
             }
         });
         par_rows(&mut d.data, w.max(1), |y, row| {
             let (a, b) = (row_of(&inner, y), row_of(&outer, y));
             for ((o, p), q) in row.iter_mut().zip(&a).zip(&b) {
-                *o = if p[2] >= 0.5 && q[2] > 1e-3 { ln_ratio(q[1] / q[2], p[1] / p[2]) } else { 0.0 };
+                *o = if p[3] >= 0.5 && q[3] > 1e-3 { ln_ratio(q[0] / q[3], p[0] / p[3]) } else { 0.0 };
             }
         });
         resp.push(r);
@@ -260,6 +380,11 @@ fn responses(work: &Work) -> (Vec<Plane>, Vec<Plane>) {
         levels.push(outer);
     }
     (resp, red)
+}
+
+/// The absorbing channel ([`ABSORB`]) of a weighted pixel (weighted like it).
+fn absorb(p: &[f32; 4]) -> f32 {
+    p[0] * ABSORB[0] + p[1] * ABSORB[1] + p[2] * ABSORB[2]
 }
 
 /// ln(a / b), 0 when either is not a positive number.
@@ -282,7 +407,7 @@ fn threshold(i: usize) -> f32 {
 
 /// Every place darker than its neighbours at its best size, by more than that size's threshold, with no larger
 /// structure behind it, round and with skin all around.
-fn candidates(work: &Work, resp: &[Plane], red: &[Plane], busy: &Plane) -> Vec<Found> {
+fn candidates(work: &Work, resp: &[Plane], red: &[Plane], busy: &Plane, look: Look) -> Vec<Found> {
     let (w, h) = (work.w, work.h);
     let detect = SCALES.len() - 1;
     // the best size per pixel
@@ -303,7 +428,7 @@ fn candidates(work: &Work, resp: &[Plane], red: &[Plane], busy: &Plane) -> Vec<F
         for x in 1..w.saturating_sub(1) {
             let j = y * w + x;
             let (v, i) = (best.data.get(j).copied().unwrap_or(0.0), scale.get(j).copied().unwrap_or(0) as usize);
-            if v < threshold(i) {
+            if v < threshold(i) * look.find / FIND {
                 continue;
             }
             let (xi, yi) = (x as isize, y as isize);
@@ -320,7 +445,7 @@ fn candidates(work: &Work, resp: &[Plane], red: &[Plane], busy: &Plane) -> Vec<F
             if resp.get(detect).is_some_and(|r| at(r, xi, yi) >= v) {
                 continue;
             }
-            let Some(f) = measure(work, resp, red, busy, x, y, i, v) else { continue };
+            let Some(f) = measure(work, resp, red, busy, (x, y, i, v), look.stand_out) else { continue };
             out.push(f);
             if out.len() >= MAX_CANDIDATES {
                 return out;
@@ -331,8 +456,8 @@ fn candidates(work: &Work, resp: &[Plane], red: &[Plane], busy: &Plane) -> Vec<F
 }
 
 /// The place's shape and colour; `None` when it is a line or lies at the skin's edge.
-#[allow(clippy::too_many_arguments)]
-fn measure(work: &Work, resp: &[Plane], red: &[Plane], busy: &Plane, x: usize, y: usize, i: usize, v: f32) -> Option<Found> {
+fn measure(work: &Work, resp: &[Plane], red: &[Plane], busy: &Plane, place: (usize, usize, usize, f32), stand_out: f32) -> Option<Found> {
+    let (x, y, i, v) = place;
     let r = resp.get(i)?;
     let s = sigma(work, i);
     let radius = f64::from(s) * std::f64::consts::SQRT_2;
@@ -351,7 +476,10 @@ fn measure(work: &Work, resp: &[Plane], red: &[Plane], busy: &Plane, x: usize, y
     let disc = (tr * tr / 4.0 - det).max(0.0).sqrt();
     let (big, small) = (tr / 2.0 + disc, tr / 2.0 - disc);
     let elongation = if small > 0.0 { big / small } else { f32::INFINITY };
-    if elongation > MAX_ELONGATION.get(i).copied().unwrap_or(0.0) {
+    // a dark spot may be less round: a mole beside stubble or a fold reads a little stretched, and a line through it
+    // is told by what is around it ([`LINE`])
+    let stretch = if v >= DARK_ENOUGH { DARK_STRETCH } else { 1.0 };
+    if elongation > MAX_ELONGATION.get(i).copied().unwrap_or(0.0) * stretch {
         return None;
     }
     if !skin_all_around(work, x as f64 + 0.5, y as f64 + 0.5, radius * 1.5 + 1.0) {
@@ -365,32 +493,36 @@ fn measure(work: &Work, resp: &[Plane], red: &[Plane], busy: &Plane, x: usize, y
         })
         .sum::<f32>()
         / 8.0;
-    if v < STAND_OUT * around || around > TOO_BUSY {
+    if v < stand_out * around || around > TOO_BUSY {
         return None;
     }
     // (without colour every spot reads as brown: shape and contrast alone tell them apart)
-    let red_share = if work.grey { BROWN + 0.2 } else { red.get(i).map_or(0.0, |d| at(d, xi, yi)) / v.max(1e-6) };
-    if red_share > NEUTRAL {
+    let red_share = if work.grey { GREY_RED_SHARE } else { red.get(i).map_or(0.0, |d| at(d, xi, yi)) / v.max(1e-6) };
+    // (a mole can be as grey as a shadow: a dark spot is looked at further, and a shadow or a hair is told by its
+    // shape and what is around it)
+    if red_share > NEUTRAL && v < DARK_ENOUGH {
         return None;
     }
     // a mark with a faint wide rim answers almost as much at the next sizes up: it reaches as far as they do
     let reach = (i + 1..SCALES.len() - 1).take_while(|k| resp.get(*k).is_some_and(|p| at(p, xi, yi) >= EXTENT * v)).last().unwrap_or(i);
     let radius = f64::from(sigma(work, reach)) * std::f64::consts::SQRT_2;
-    Some(Found { x, y, scale: i, contrast: v, red_share, elongation, radius })
+    Some(Found { x, y, scale: i, contrast: v, red_share, elongation, radius, busy: around })
 }
 
-/// How textured the skin is around each place: the mean size of the small responses (the second size, either
-/// way) over [`BUSY`] of the face. A beard, stubble or rough skin is busy; a spot must stand out from it.
+/// How textured the skin is around each place: the mean size of the small responses lighter than their
+/// surroundings (the second size), doubled, over [`BUSY`] of the face. A beard, stubble or rough skin is busy
+/// both ways and a spot must stand out from it; a field of freckles is dark spots on even skin, so the freckles
+/// don't count as texture against each other.
 fn busy(work: &Work, resp: &[Plane]) -> Plane {
     let Some(r) = resp.get(1) else { return Plane::new(work.w, work.h) };
-    let abs = Plane { width: r.width, height: r.height, data: r.data.iter().map(|v| v.abs()).collect() };
+    let abs = Plane { width: r.width, height: r.height, data: r.data.iter().map(|v| (-v).max(0.0) * 2.0).collect() };
     gaussian(&abs, (BUSY * work.size) as f32)
 }
 
 /// The skin's brightness around each place ([`BASE`] blur), as a ratio to the face's median skin brightness.
 fn base(work: &Work) -> Plane {
     let blurred = blur(&work.weighted, (BASE * work.size) as f32);
-    let mut ys: Vec<f32> = blurred.data.iter().filter(|p| p[2] >= 0.9).map(|p| p[0] / p[2]).filter(|v| v.is_finite()).collect();
+    let mut ys: Vec<f32> = blurred.data.iter().filter(|p| p[3] >= 0.9).map(|p| absorb(p) / p[3]).filter(|v| v.is_finite()).collect();
     let median = if ys.is_empty() {
         0.0
     } else {
@@ -400,7 +532,7 @@ fn base(work: &Work) -> Plane {
     Plane {
         width: work.w,
         height: work.h,
-        data: blurred.data.iter().map(|p| if p[2] > 1e-3 && median > 1e-6 { p[0] / p[2] / median } else { 0.0 }).collect(),
+        data: blurred.data.iter().map(|p| if p[3] > 1e-3 && median > 1e-6 { absorb(p) / p[3] / median } else { 0.0 }).collect(),
     }
 }
 
@@ -420,7 +552,7 @@ fn skin_all_around(work: &Work, cx: f64, cy: f64, r: f64) -> bool {
         if xi >= work.w || yi >= work.h {
             return 0.0;
         }
-        work.weighted.data.get(yi * work.w + xi).map_or(0.0, |p| p[2])
+        work.weighted.data.get(yi * work.w + xi).map_or(0.0, |p| p[3])
     };
     m(cx, cy) >= SKIN_ALL_AROUND
         && (0..12).all(|k| {
@@ -429,52 +561,23 @@ fn skin_all_around(work: &Work, cx: f64, cy: f64, r: f64) -> bool {
         })
 }
 
-/// The strongest first: a find overlapping a stronger one is the same spot.
-fn suppress(found: Vec<Found>) -> Vec<Found> {
+/// The strongest first: a find overlapping a stronger one, or one of `prior` (an earlier search's), is the same
+/// spot. At most `most`.
+fn suppress(prior: &[Found], found: Vec<Found>, most: usize) -> Vec<Found> {
     let mut kept: Vec<Found> = Vec::new();
+    let overlaps = |k: &Found, f: &Found| {
+        let d = ((k.x as f64 - f.x as f64).powi(2) + (k.y as f64 - f.y as f64).powi(2)).sqrt();
+        d < (k.radius + f.radius) * 0.75
+    };
     for f in found {
-        let near = kept.iter().any(|k| {
-            let d = ((k.x as f64 - f.x as f64).powi(2) + (k.y as f64 - f.y as f64).powi(2)).sqrt();
-            d < (k.radius + f.radius) * 0.75
-        });
-        if !near {
+        if kept.len() >= most {
+            break;
+        }
+        if !prior.iter().chain(&kept).any(|k| overlaps(k, &f)) {
             kept.push(f);
-            if kept.len() >= MAX_SPOTS {
-                break;
-            }
         }
     }
     kept
-}
-
-fn is_brown(f: &Found) -> bool {
-    f.red_share >= BROWN
-}
-
-/// Each spot's kind: moles, then freckles (brown faint small spots in a group), then blemishes.
-fn kinds(spots: &[Found], size: f64) -> Vec<SpotKind> {
-    let small_brown = |f: &Found| is_brown(f) && f.radius <= FRECKLE_RADIUS * size;
-    let near = FRECKLE_NEAR * size;
-    spots
-        .iter()
-        .map(|f| {
-            if is_brown(f) && f.contrast >= MOLE && f.elongation <= MOLE_ROUND {
-                return SpotKind::Mole;
-            }
-            if small_brown(f) {
-                let group = spots
-                    .iter()
-                    .filter(|o| !std::ptr::eq(*o, f) && small_brown(o))
-                    .filter(|o| ((o.x as f64 - f.x as f64).powi(2) + (o.y as f64 - f.y as f64).powi(2)).sqrt() <= near)
-                    .count();
-                // one of many small brown spots: a freckle when faint, a mole when dark
-                if group >= FRECKLE_GROUP {
-                    return if f.contrast < FRECKLE_FAINT { SpotKind::Freckle } else { SpotKind::Mole };
-                }
-            }
-            SpotKind::Blemish
-        })
-        .collect()
 }
 
 /// A clean patch of skin next to spot `f` (work pixels): of 16 places 2.6 and 3.4 radii away, the one with skin all
@@ -486,7 +589,7 @@ fn donor(work: &Work, resp: &[Plane], spots: &[Found], f: &Found) -> Option<(f64
     let resp = resp.get(f.scale)?;
     let bright = |x: f64, y: f64| {
         let (xi, yi) = (x.max(0.0) as usize, y.max(0.0) as usize);
-        work.weighted.data.get(yi.min(work.h.saturating_sub(1)) * work.w + xi.min(work.w.saturating_sub(1))).map_or(0.0, |p| p[0] / p[2].max(1e-3))
+        work.weighted.data.get(yi.min(work.h.saturating_sub(1)) * work.w + xi.min(work.w.saturating_sub(1))).map_or(0.0, |p| absorb(p) / p[3].max(1e-3))
     };
     let ring: f32 =
         (0..8).map(|k| f64::from(k) * std::f64::consts::TAU / 8.0).map(|a| bright(cx + 1.8 * r * a.cos(), cy + 1.8 * r * a.sin())).sum::<f32>() / 8.0;

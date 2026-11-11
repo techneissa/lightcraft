@@ -1,7 +1,7 @@
 //! Try the blemish feature on a picture without building the app:
 //!
 //! `cargo run -p lightcraft-retouch --release --example blemish -- in.jpg out.jpg [--amount 100] [--keep 1]
-//! [--mask facialSkin-0.png] [--face x0,y0,x1,y1] [--fit 2048] [--marks marks.png] [--runs 1]`
+//! [--mask facialSkin-0.png] [--face x0,y0,x1,y1] [--people people.json] [--fit 2048] [--marks marks.png] [--runs 1]`
 //!
 //! - `--amount` (0…100) and `--keep` (1: Keep Moles and Freckles, the default; 0: remove them too).
 //! - `--mask` is a grey picture of the Facial Skin mask over the whole photo, at any size (white = skin): the
@@ -9,6 +9,8 @@
 //!   in.jpg outdir/`, then `outdir/masks/facialSkin-0.png`). Repeat it, each after its `--face`, for more faces.
 //! - `--face` is the face's box in fractions of the photo; without one, a mask's face is the box of its pixels
 //!   above half.
+//! - `--people` is the parser example's `people.json`: each face (in order) gets its person's landmarks (the five,
+//!   then the face mesh), as the app's faces have them; Blemishes reads them to tell stubble below the nose.
 //! - `--fit` shrinks the photo to that long edge first (1936 is the draft's size of a 3:2 photo). Spots are found
 //!   on the photo shrunk to 2048 px, as the app finds them on the people parse's picture, and repaired at `--fit`
 //!   (the whole photo when not given), as every render repairs them.
@@ -16,6 +18,7 @@
 //!   is kept at these settings.
 //! - `--runs` repeats the repair (the slider's work) and prints the fastest run.
 //!
+//! Runs Stray Hair's strand search first, as the app does (a spot on a strand is a hair stump or a crease).
 //! Prints the time spots took to find, each face's spots by kind, how many are removed and the share of the skin
 //! repaired. The picture is worked on in linear light (sRGB primaries; the app works in linear Rec.2020).
 #![forbid(unsafe_code)]
@@ -39,7 +42,10 @@ fn main() -> ExitCode {
     }
 }
 
-const USAGE: &str = "usage: blemish in.jpg out.jpg [--amount N] [--keep 0|1] [--face x0,y0,x1,y1] [--mask mask.png] [--fit EDGE] \
+/// The mesh points of the five landmarks every face has first (eyes, nose tip, mouth corners), as the app picks them.
+const MESH_FIVE: [usize; 5] = [468, 473, 1, 61, 291];
+
+const USAGE: &str = "usage: blemish in.jpg out.jpg [--amount N] [--keep 0|1] [--face x0,y0,x1,y1] [--mask mask.png] [--people people.json] [--fit EDGE] \
                      [--marks marks.png] [--runs N]";
 
 fn run(args: &[String]) -> Result<(), String> {
@@ -49,6 +55,7 @@ fn run(args: &[String]) -> Result<(), String> {
     let mut boxes: Vec<NormRect> = Vec::new();
     let mut faces: Vec<Face> = Vec::new();
     let (mut fit, mut runs, mut marks) = (0usize, 1usize, None);
+    let mut meshes: Vec<Vec<(f64, f64)>> = Vec::new();
     let mut it = args.iter();
     while let Some(a) = it.next() {
         let mut value = || it.next().ok_or_else(|| USAGE.to_string());
@@ -75,6 +82,24 @@ fn run(args: &[String]) -> Result<(), String> {
                 let plane = Plane::from_fn(cw, ch, |x, y| plane.data.get((y0 + y) * w + x0 + x).copied().unwrap_or(0.0));
                 faces.push(Face { masks: vec![(Part::FacialSkin, PartMask { plane, area })], ..Face::boxed(bounds) });
             }
+            "--people" => {
+                let path = value()?;
+                let text = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
+                let json: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("{path}: {e}"))?;
+                let people = json.get("people").and_then(|p| p.as_array()).cloned().unwrap_or_default();
+                meshes = people
+                    .iter()
+                    .map(|p| {
+                        let mesh: Vec<(f64, f64)> = p
+                            .get("mesh")
+                            .and_then(|m| m.as_array())
+                            .map(|m| m.iter().filter_map(|q| Some((q.get(0)?.as_f64()?, q.get(1)?.as_f64()?))).collect())
+                            .unwrap_or_default();
+                        let five: Vec<(f64, f64)> = MESH_FIVE.iter().filter_map(|i| mesh.get(*i).copied()).collect();
+                        if five.len() == 5 { five.into_iter().chain(mesh).collect() } else { Vec::new() }
+                    })
+                    .collect();
+            }
             "--fit" => fit = value()?.parse().map_err(|_| USAGE.to_string())?,
             "--runs" => runs = value()?.parse::<usize>().map_err(|_| USAGE.to_string())?.max(1),
             "--marks" => marks = Some(value()?.clone()),
@@ -82,14 +107,22 @@ fn run(args: &[String]) -> Result<(), String> {
         }
     }
     faces.extend(boxes.into_iter().map(Face::boxed));
+    for (f, mesh) in faces.iter_mut().zip(meshes) {
+        f.landmarks = mesh;
+    }
     let [input, output] = files.as_slice() else { return Err(USAGE.into()) };
     let rgb = image::open(input).map_err(|e| format!("{input}: {e}"))?.to_rgb8();
     let src = linear(&fitted(&rgb, fit));
     let (w, h) = (src.width, src.height);
     let parse = linear(&fitted(&rgb, 2048));
+    // as the app: Stray Hair's strands first (Blemishes leaves spots on a strand), then the spots
+    let t = std::time::Instant::now();
+    let faces = lightcraft_retouch::hair::with_strands(&parse, faces);
+    let strands_ms = t.elapsed().as_secs_f64() * 1e3;
     let t = std::time::Instant::now();
     let faces = with_spots(&parse, faces);
     let find_ms = t.elapsed().as_secs_f64() * 1e3;
+    eprintln!("strands: {strands_ms:.1} ms (Stray Hair's search, which the app runs anyway)");
     let settings = global.blemish.clone();
     report(&faces, &settings, find_ms, parse.width, parse.height);
     let r = Retouch::with_global(global);

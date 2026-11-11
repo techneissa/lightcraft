@@ -137,8 +137,9 @@ fn with_spots_and_strands(
         }),
         orient,
     );
-    let faces = if skin { lightcraft_develop::retouch::blemish::with_spots(&linear, faces) } else { faces };
+    // strands first: Blemishes leaves the spots that lie on a strand (a hair stump in stubble, a crease)
     let faces = with_strands(&linear, faces, crops);
+    let faces = if skin { lightcraft_develop::retouch::blemish::with_spots(&linear, faces) } else { faces };
     match wrinkles {
         Some(search) if skin => search.run(faces, &linear),
         _ => (faces, false),

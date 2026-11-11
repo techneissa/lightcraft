@@ -6,13 +6,15 @@
 //! - **Finding** ([`find`], [`with_spots`]): once per photo, on the picture the face's masks come from, by the
 //!   provider (the engine finds them with the people parse and keeps them with the masks, [`crate::Face::spots`]).
 //!   Spots are small places darker or redder than the skin around them, 0.3–3 % of the face across, inside the
-//!   Facial Skin mask; each gets a kind (blemish, mole, freckle), a strength and a donor (a clean patch of skin next
-//!   to it). A face whose provider did not look ([`crate::Face::spots`] `None`: the examples, the tests) is looked at
+//!   Facial Skin mask, not on a crease, a hair or stubble; each gets a kind (blemish, mole, freckle: by its colour,
+//!   shape and darkness against the spots around it, and whether it is one of a freckle field), how much it shows
+//!   and a donor (a clean patch of skin next to it). A face whose provider did not look ([`crate::Face::spots`] `None`: the examples, the tests) is looked at
 //!   on the image being retouched.
 //! - **Repair** (`apply`, every render): each spot is filled from the skin around it (a smooth fill from a ring of
 //!   skin samples, [`RING`] radii out) times the texture of its donor patch, faded in over [`CORE`]…[`FEATHER`]
-//!   radii, weighted by the skin mask. The Amount slider only changes each spot's weight ([`Blemish::weights`]): no
-//!   detection runs while it moves.
+//!   radii, weighted by the skin mask; without a clean donor (inside a freckle field) the pixel's own fine grain is
+//!   kept. The Amount slider only changes each spot's weight ([`Blemish::weights`]: the most visible spots first,
+//!   each fully): no detection runs while it moves.
 //!
 //! Sizes are fractions of the face's size, so the draft, the loupe and an export repair the same spots the same way.
 //! The fill reads skin only (every ring sample and donor pixel is weighted by the mask, so those off it count for
@@ -28,12 +30,24 @@ mod find;
 
 pub use find::find;
 
+/// Amount reaches the least visible spot at this share of the slider ([`Blemish::weights`]) …
+pub const ORDER: f32 = 0.85;
+/// … and each spot fades in over this share of it.
+pub const FADE: f32 = 0.15;
+
 /// The fill reaches this many spot radii (the spot itself, fully replaced).
 pub const CORE: f64 = 1.7;
 /// … and fades out by this many radii.
 pub const FEATHER: f64 = 2.6;
 /// The ring of skin samples the fill comes from, in spot radii.
 pub const RING: f64 = 3.0;
+/// The own-grain fallback reads only pixels whose skin mask is at least this (a parse's mask is a little under 1
+/// inside the skin).
+const GRAIN_SKIN: f32 = 0.9;
+/// The own grain is measured against a window of a [`GRAIN_SPOT`]th of the spot's radius either way, at least one
+/// pixel and at most [`GRAIN_MOST`].
+const GRAIN_SPOT: f64 = 6.0;
+const GRAIN_MOST: usize = 4;
 /// Ring samples per spot.
 const RING_SAMPLES: usize = 16;
 /// The donor's texture is borrowed as a ratio to its own fill, held within this factor either way (a speck of dust
@@ -55,7 +69,7 @@ const READS: f64 = MAX_DONOR + RING + 0.5;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Blemish {
-    /// 0…100; 0 is off. Low values remove only the strongest spots; 100 removes every one found.
+    /// 0…100; 0 is off. Low values remove only the most visible spots; 100 removes every one found.
     pub amount: f64,
     /// Leave moles and freckles as they are (on by default).
     pub keep_moles: bool,
@@ -140,19 +154,29 @@ pub struct Report {
 }
 
 impl Blemish {
-    /// Each spot's weight (0…1) at these settings: 0 for moles and freckles while they are kept; else Amount, which
-    /// takes the strongest spots first (at 50 a spot of strength 1 is fully removed and a faint one not at all; at
-    /// 100 every spot is). The Refine brush (#99) will scale these per spot.
+    /// Each spot's weight (0…1) at these settings: 0 for moles and freckles while they are kept. Amount takes the
+    /// spots it removes in order of how much they show ([`Spot::strength`]: darkness and size), each one fully: a
+    /// spot's turn comes at its rank among them ([`ORDER`] of the way along for the faintest), and it fades in over
+    /// [`FADE`] of the slider. So 25 removes the most visible quarter or so, 50 every obvious spot, 100 every spot
+    /// found, and each step shows. The Refine brush (#99) will scale these per spot.
     pub fn weights(&self, spots: &[Spot]) -> Vec<f32> {
         let a = if self.amount.is_finite() { (self.amount.clamp(0.0, 100.0) / 100.0) as f32 } else { 0.0 };
+        let taken = |s: &Spot| !(self.keep_moles && s.kind != SpotKind::Blemish);
+        let shows = |s: &Spot| if s.strength.is_finite() { s.strength.clamp(0.0, 1.0) } else { 0.0 };
+        // each removed spot's rank from the most visible (0) to the least (1); ties share a rank
+        let mut order: Vec<f32> = spots.iter().filter(|s| taken(s)).map(shows).collect();
+        order.sort_by(|a, b| b.total_cmp(a));
+        let n = order.len();
         spots
             .iter()
             .map(|s| {
-                if self.keep_moles && s.kind != SpotKind::Blemish {
+                if !taken(s) {
                     return 0.0;
                 }
-                let p = if s.strength.is_finite() { s.strength.clamp(0.0, 1.0) } else { 0.0 };
-                ((a - (1.0 - p) * 0.5) / 0.5).clamp(0.0, 1.0)
+                let v = shows(s);
+                let ahead = order.partition_point(|o| *o > v);
+                let rank = if n > 1 { ahead as f32 / (n - 1) as f32 } else { 0.0 };
+                ((a - ORDER * rank) / FADE).clamp(0.0, 1.0)
             })
             .collect()
     }
@@ -356,6 +380,29 @@ fn fill(samples: &[Sample], p: (f64, f64), shift: (f64, f64)) -> Option<[f32; 3]
     (wsum > 0.0).then(|| acc.map(|v| v / wsum))
 }
 
+/// Pixel (`x`, `y`) of `img` as a ratio to the mean of the square `half` pixels either way around it (each held
+/// within [`TEXTURE_RANGE`] either way); `None` at the picture's edge or when any of them is not skin (`skin`: the
+/// mask at a pixel, under [`GRAIN_SKIN`]), so no hair or background comes in.
+fn grain(img: &Rgb32f, x: usize, y: usize, half: usize, skin: impl Fn(usize, usize) -> f32) -> Option<[f32; 3]> {
+    let half = half.max(1);
+    if x < half || y < half || x + half >= img.width || y + half >= img.height {
+        return None;
+    }
+    let n = ((2 * half + 1) * (2 * half + 1)) as f32;
+    let mut mean = [0.0f32; 3];
+    for yy in y - half..=y + half {
+        for xx in x - half..=x + half {
+            if skin(xx, yy) < GRAIN_SKIN {
+                return None;
+            }
+            let p = img.data.get(yy * img.width + xx)?;
+            mean = std::array::from_fn(|c| mean[c] + p[c] / n);
+        }
+    }
+    let p = img.data.get(y * img.width + x)?;
+    Some(std::array::from_fn(|c| if mean[c] > 1e-5 { (p[c] / mean[c]).clamp(1.0 / TEXTURE_RANGE, TEXTURE_RANGE) } else { 1.0 }))
+}
+
 fn smoothstep(e0: f64, e1: f64, x: f64) -> f64 {
     let t = ((x - e0) / (e1 - e0)).clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
@@ -378,6 +425,8 @@ impl Healer<'_> {
         let x1 = ((p.c.0 + reach).ceil().max(0.0) as usize).min(bx1);
         let y1 = ((p.c.1 + reach).ceil().max(0.0) as usize).min(by1);
         let (inner, outer) = (p.r * CORE, reach);
+        // the own grain's window: well inside the spot, so it keeps pores and not the spot
+        let half = ((p.r / GRAIN_SPOT).floor() as usize).clamp(1, GRAIN_MOST);
         let mut out: Vec<Healed> = Vec::new();
         for y in y0..y1 {
             for x in x0..x1 {
@@ -397,6 +446,10 @@ impl Healer<'_> {
                     continue;
                 }
                 let Some(base) = fill(&here, q, (0.0, 0.0)) else { continue };
+                // without a donor (no clean skin next to the spot, as in a freckle field): the pixel's own fine
+                // grain, so the healed skin keeps its noise and finest pores
+                let skin = |x: usize, y: usize| self.mask(x as f64 + 0.5, y as f64 + 0.5);
+                let own = |base: [f32; 3]| grain(img, x, y, half, skin).map_or(base, |g| std::array::from_fn(|c| base[c] * g[c]));
                 let new: [f32; 3] = match &donor {
                     // the donor's texture counts as far as the donor pixel is skin: hair or background next to it
                     // lends nothing
@@ -405,9 +458,9 @@ impl Healer<'_> {
                             let t = if dbase[c] > 1e-5 { (tex[c] / dbase[c]).clamp(1.0 / TEXTURE_RANGE, TEXTURE_RANGE) } else { 1.0 };
                             base[c] * (1.0 + md * (t - 1.0))
                         }),
-                        _ => base,
+                        _ => own(base),
                     },
-                    None => base,
+                    None => own(base),
                 };
                 if new.iter().all(|v| v.is_finite()) {
                     out.push((i, new, k));
