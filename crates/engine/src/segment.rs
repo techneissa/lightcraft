@@ -232,15 +232,24 @@ impl Segmenter {
         if !detail.is_empty() {
             return;
         }
-        let Some((made, grids)) = self.refined.as_ref() else { return };
-        if seg.data == made.data && seg.rect == made.rect {
-            *detail = grids.clone();
-        } else if made.invert().is_some_and(|inv| inv.data == seg.data && inv.rect == seg.rect) {
-            *detail = grids.iter().filter_map(SegMask::invert).collect();
-        } else {
-            return;
+        if let Some(grids) = self.take_refined(seg) {
+            *detail = grids;
         }
+    }
+
+    /// The finer grids of `seg` when it is the refined selection the worker made last, as made or turned around (the
+    /// grids turned with it); taken, so they go to one mask.
+    pub(crate) fn take_refined(&mut self, seg: &SegMask) -> Option<Vec<SegMask>> {
+        let (made, grids) = self.refined.as_ref()?;
+        let out = if seg.data == made.data && seg.rect == made.rect {
+            grids.clone()
+        } else if made.invert().is_some_and(|inv| inv.data == seg.data && inv.rect == seg.rect) {
+            grids.iter().filter_map(SegMask::invert).collect()
+        } else {
+            return None;
+        };
         self.refined = None;
+        Some(out)
     }
     /// Whether this build can compute AI masks at all.
     pub const AVAILABLE: bool = cfg!(feature = "sam");
