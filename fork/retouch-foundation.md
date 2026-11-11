@@ -32,7 +32,9 @@ Nothing changes in a photo yet: every feature is an empty stub. What is there fo
   geometry slot (face reshape, next to Transform) is reserved, not run. Skipped while the block is off or the
   Portrait tab's eye is off; the scene-linear stage's key then hashes a 0 for it (a new element of that key, so
   in-memory stage caches made before this change are not reused; nothing on disk changes). On the GPU, a retouched photo's scene-linear stage
-  runs on the CPU.
+  runs on the CPU. A zoomed window maps faces and masks through the whole frame, moved by the window's offset, so
+  every feature rounds a position to the same pixel as the whole frame (#238: Even Tone's grid started a row lower
+  through the window's own mapping); `a_zoomed_window_gives_the_whole_frames_retouch` checks each feature.
 - **Faces** (`crates/engine/src/retouch_input.rs`): a `FaceProvider` finds them on a 1600-pixel render of the photo
   before its crop, without retouching; the default is YuNet (Settings ▸ Faces: boxes and five landmarks, no masks),
   so features that need masks change nothing until the people parser (#81) installs its provider
