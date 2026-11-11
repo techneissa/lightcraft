@@ -23,9 +23,10 @@ fn hash(x: usize, y: usize) -> f32 {
     (h % 10_000) as f32 / 10_000.0
 }
 
-/// The freckles: 9 small faint spots around [`FRECKLES`].
+/// The freckles: a field of 25 small faint spots around [`FRECKLES`] (a few in a group are age spots, not a
+/// freckled face).
 fn freckles() -> Vec<(f64, f64)> {
-    (0..9).map(|i| (FRECKLES.0 + ((i % 3) as f64 - 1.0) * 0.035, FRECKLES.1 + ((i / 3) as f64 - 1.0) * 0.035)).collect()
+    (0..25).map(|i| (FRECKLES.0 + ((i % 5) as f64 - 2.0) * 0.03, FRECKLES.1 + ((i / 5) as f64 - 2.0) * 0.03)).collect()
 }
 
 /// The face at `n` × `n` pixels. Pores are a fixed grain of the picture's pixels (fine texture at any size); spot
@@ -143,8 +144,8 @@ fn finds_pimples_moles_and_freckles() {
         assert_eq!(near(&spots, at), Some(SpotKind::Mole), "mole at {at:?}: {:?}", spots.list);
     }
     let freckled = freckles().iter().filter(|at| near(&spots, **at) == Some(SpotKind::Freckle)).count();
-    assert!(freckled >= 7, "{freckled} of 9 freckles: {:?}", spots.list);
-    assert!(spots.list.len() <= PIMPLES.len() + MOLES.len() + 9, "pores are not spots: {:?}", spots.list);
+    assert!(freckled >= 21, "{freckled} of 25 freckles: {:?}", spots.list);
+    assert!(spots.list.len() <= PIMPLES.len() + MOLES.len() + 25, "pores are not spots: {:?}", spots.list);
     assert!(spots.skin > 0.5 && spots.skin < 1.0, "skin area in face sizes²: {}", spots.skin);
 }
 
@@ -166,7 +167,7 @@ fn removes_pimples_and_keeps_moles_and_freckles_while_the_switch_is_on() {
         assert!(after < before * 0.3, "mole removed at {at:?}: {before} → {after}");
     }
     let gone = freckles().iter().filter(|at| dip(&all, **at) < dip(&img, **at) * 0.3).count();
-    assert!(gone >= 7, "{gone} of 9 freckles removed");
+    assert!(gone >= 21, "{gone} of 25 freckles removed");
 }
 
 /// Healing keeps the skin's texture: inside a pimple's core the pores' fine variation is about that of clean skin.
@@ -332,8 +333,12 @@ fn a_draft_and_an_export_repair_the_same_spots() {
     assert!(total > 0.0 && diff / total < 0.35, "the changes differ by {:.0} %", diff / total * 100.0);
     // spots found on the export are the draft's
     let (a, b) = (spots_of(&draft_img), spots_of(&export_img));
+    // (the draft's face is 270 pixels: it sees only the darkest few of the faint freckles, too few to make a
+    // freckled face, so those few read as marks there; spots are found once, on the people parse's picture)
     for s in &a.list {
-        assert_eq!(near(&b, s.at), Some(s.kind), "{s:?} found on the draft, not on the export: {:?}", b.list);
+        let on_export = near(&b, s.at);
+        let same = on_export == Some(s.kind) || (s.kind == SpotKind::Blemish && on_export == Some(SpotKind::Freckle));
+        assert!(same, "{s:?} found on the draft, not on the export ({on_export:?}): {:?}", b.list);
     }
 }
 
@@ -361,7 +366,7 @@ fn the_report_counts_spots_and_the_repaired_area() {
     let keep = Blemish { amount: 100.0, keep_moles: true }.report(&spots);
     assert_eq!(keep.removed, PIMPLES.len());
     assert_eq!(keep.moles, MOLES.len());
-    assert!(keep.freckles >= 7);
+    assert!(keep.freckles >= 21);
     assert!(keep.area > 0.0 && keep.area < 0.05, "{}", keep.area);
     let all = Blemish { amount: 100.0, keep_moles: false }.report(&spots);
     assert_eq!(all.removed, spots.list.len());
@@ -391,4 +396,48 @@ fn a_face_cut_by_the_edge() {
     assert!(out.data.iter().flatten().all(|v| v.is_finite()));
     let at = PIMPLES[1];
     assert!(dip(&out, at) < dip(&img, at) * 0.3, "the pimple inside the photo is repaired");
+}
+
+/// Dark skin (#204): a group of brown marks (what acne leaves on dark skin, or an older face's age spots), one red
+/// pimple, and a field of freckles away from them. On dark skin every spot is brown, so colour can't tell a mark
+/// from a freckle; at 100 with Keep Moles and Freckles on, the marks and the pimple go and the freckle field stays.
+#[test]
+fn on_dark_skin_marks_go_and_a_freckle_field_stays() {
+    let marks: Vec<(f64, f64)> = (0..8).map(|i| (0.265 + (i % 2) as f64 * 0.07, 0.395 + (i / 2) as f64 * 0.07)).collect();
+    const PIMPLE: (f64, f64) = (0.6, 0.24);
+    let field: Vec<(f64, f64)> = (0..36).map(|i| (0.665 + ((i % 6) as f64 - 2.5) * 0.03, 0.55 + ((i / 6) as f64 - 2.5) * 0.03)).collect();
+    let n = 400;
+    let size = n as f64 * FACE.width();
+    let d =
+        |x: usize, y: usize, at: (f64, f64)| ((x as f64 + 0.5 - at.0 * n as f64).powi(2) + (y as f64 + 0.5 - at.1 * n as f64).powi(2)).sqrt() / size;
+    let img = Rgb32f::from_fn(n, n, |x, y| {
+        let shade = 0.9 + 0.2 * (y as f32 / n as f32);
+        let pore = 1.0 + 0.04 * (hash(x, y) - 0.5);
+        let mut p = [0.1 * shade * pore, 0.06 * shade * pore, 0.04 * shade * pore];
+        for at in &marks {
+            // a soft brown mark about 1.4 % of the face across
+            let g = (-(d(x, y, *at) / 0.005).powi(2)).exp() as f32;
+            p = [p[0] * (1.0 - 0.2 * g), p[1] * (1.0 - 0.28 * g), p[2] * (1.0 - 0.3 * g)];
+        }
+        for at in &field {
+            let g = (-(d(x, y, *at) / 0.004).powi(2)).exp() as f32;
+            p = [p[0] * (1.0 - 0.2 * g), p[1] * (1.0 - 0.28 * g), p[2] * (1.0 - 0.3 * g)];
+        }
+        // the pimple: blood darkens green and blue and leaves red
+        let g = (-(d(x, y, PIMPLE) / 0.007).powi(2)).exp() as f32;
+        [p[0] * (1.0 - 0.04 * g), p[1] * (1.0 - 0.4 * g), p[2] * (1.0 - 0.3 * g)]
+    });
+    let spots = spots_of(&img);
+    for at in marks.iter().chain(std::iter::once(&PIMPLE)) {
+        assert_eq!(near(&spots, *at), Some(SpotKind::Blemish), "{at:?}: {:?}", spots.list);
+    }
+    let freckled = field.iter().filter(|at| near(&spots, **at) == Some(SpotKind::Freckle)).count();
+    assert!(freckled >= 24, "{freckled} of 36 freckles: {:?}", spots.list);
+    let out = retouch(&img, &settings(100.0, true), vec![face()]);
+    for at in marks.iter().chain(std::iter::once(&PIMPLE)) {
+        let (before, after) = (dip(&img, *at), dip(&out, *at));
+        assert!(before > 0.15 && after < before * 0.3, "{at:?}: {before} → {after}");
+    }
+    let kept = field.iter().filter(|at| (dip(&out, **at) - dip(&img, **at)).abs() < 1e-6).count();
+    assert!(kept >= 30, "{kept} of 36 freckles kept");
 }

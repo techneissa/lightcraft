@@ -416,12 +416,12 @@ impl Strands {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SpotKind {
-    /// A blemish: a pimple, a red or dark mark. Always removed.
+    /// A blemish: a pimple, a red or dark mark, a scab, an age spot. Always removed.
     #[default]
     Blemish,
-    /// A mole: darker, round, sharp-edged and brown. Kept while Keep Moles and Freckles is on.
+    /// A mole: round, sharp-edged and much darker than the spots around it. Kept while Keep Moles and Freckles is on.
     Mole,
-    /// One of many small faint brown spots grouped together. Kept while Keep Moles and Freckles is on.
+    /// One of a field of many like spots (a freckled face). Kept while Keep Moles and Freckles is on.
     Freckle,
 }
 
@@ -436,7 +436,7 @@ pub struct Spot {
     /// next to it is all skin (the spot is then filled from the skin around it alone).
     pub donor: Option<(f64, f64)>,
     pub kind: SpotKind,
-    /// How much it stands out (0…1): a low Amount removes the strongest spots only.
+    /// How much it shows (0…1), from its darkness and its size: a low Amount removes the most visible spots only.
     pub strength: f32,
 }
 
