@@ -1,8 +1,8 @@
 //! Fork feature (`fork/retouch-wrinkles.md`): the Wrinkles search of the face search.
 //!
 //! Next to Blemishes' spots and Stray Hair's strands, once per photo on the face search's worker: for each face with the
-//! face mesh and a Facial Skin mask, the wrinkle mask, LaMa's fill of it (when the model is installed; else the banded
-//! heal) and the change that results, kept in `Face::wrinkles` (`lightcraft_retouch::wrinkles::with_fixes_from`). A
+//! face mesh and a Facial Skin mask, the lines found and the change that evens the skin out across them, kept in
+//! `Face::wrinkles` (`lightcraft_retouch::wrinkles::with_fixes_from`; the filler's LaMa fill is no longer called). A
 //! render only scales it with the sliders; no model runs while one moves. A row in the activity stack
 //! (`retouch.wrinkles`) shows the search, and its ✕ stops it: no face then keeps a change, Wrinkles shows its old
 //! result, and the photo's faces are kept as "to search again" (`Found::retry`).

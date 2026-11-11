@@ -6,6 +6,7 @@
 //! - **Face edge**: a ring on both sides of the outline, from the brows down (the top of the outline crosses the forehead,
 //!   whose lines must reach it, so there it is not excluded; the hairline is cut by the Facial Skin mask).
 //! - **Nostrils**: a disc on each, round the mesh's nostril points.
+//! - **Eyes**: each eye's opening and a thin band round it, so the lash lines and the lids' edges are never a wrinkle.
 
 use lightcraft_raster::{Plane, par_rows};
 
@@ -21,6 +22,18 @@ pub const OVAL: [usize; 36] = [
 /// The mesh points round each nostril (the subject's right, then left): the wing, the bottom and the hole.
 const NOSTRILS: [[usize; 3]; 2] = [[129, 98, 240], [358, 327, 460]];
 /// The brows' upper edge (the forehead's lower limit) and the mouth's corners.
+/// Each eye's opening, round from the outer corner along the lower lid and back along the upper one.
+pub const EYE_RINGS: [[usize; 16]; 2] = [
+    [33, 7, 163, 144, 145, 153, 154, 155, 133, 173, 157, 158, 159, 160, 161, 246],
+    [263, 249, 390, 373, 374, 380, 381, 382, 362, 398, 384, 385, 386, 387, 388, 466],
+];
+/// The band round an eye: full within `LID_IN` of its opening, none past `LID_OUT` (fractions of the face); and round
+/// each corner a disc, full within `CORNER_IN`, none past `CORNER_OUT`: the corner's dark wedge and the lash line's end
+/// are the eye's, not lines to even out.
+const LID_IN: f64 = 0.01;
+const LID_OUT: f64 = 0.02;
+const CORNER_IN: f64 = 0.02;
+const CORNER_OUT: f64 = 0.032;
 const BROWS: [usize; 10] = [70, 63, 105, 66, 107, 336, 296, 334, 293, 300];
 const MOUTH: [usize; 2] = [61, 291];
 const EYES: [usize; 2] = [33, 263];
@@ -49,6 +62,8 @@ pub(super) fn excluded(ctx: &FaceCtx<'_>, w: usize, h: usize) -> Option<Plane> {
         })
         .collect();
     let nostrils = nostrils?;
+    let eyes_open: Option<Vec<Vec<P>>> = EYE_RINGS.iter().map(|ring| ring.iter().map(|&i| pt(i)).collect()).collect();
+    let eyes_open = eyes_open?;
     // the face's "down" axis and where the brows and the mouth lie along it
     let eyes: Option<Vec<P>> = EYES.iter().map(|&i| pt(i)).collect();
     let eyes = eyes?;
@@ -70,6 +85,8 @@ pub(super) fn excluded(ctx: &FaceCtx<'_>, w: usize, h: usize) -> Option<Plane> {
     let s = ctx.size;
     let f = |v: f64| (v * s) as f32;
     let (ring_in, ring_out, nostril_in, nostril) = (f(RING_IN), f(RING_OUT), f(NOSTRIL_IN), f(NOSTRIL));
+    let (lid_in, lid_out, corner_in, corner_out) = (f(LID_IN), f(LID_OUT), f(CORNER_IN), f(CORNER_OUT));
+    let corners: Vec<P> = EYE_RINGS.iter().flat_map(|r| [r[0], r[8]]).filter_map(pt).collect();
     let (brow_top, brow_in, mouth_in, mouth_out) =
         (t_brow as f32 - f(0.08), t_brow as f32 - f(0.03), t_mouth as f32 + f(0.10), t_mouth as f32 + f(0.16));
     let mut out = Plane::new(w, h);
@@ -90,7 +107,12 @@ pub(super) fn excluded(ctx: &FaceCtx<'_>, w: usize, h: usize) -> Option<Plane> {
                     1.0 - smoothstep(nostril_in, nostril, dist)
                 })
                 .fold(0.0f32, f32::max);
-            *v = ear.max(ring).max(nose);
+            let eye = eyes_open.iter().map(|e| 1.0 - smoothstep(lid_in, lid_out, -(areas::polygon_inside(e, p) as f32))).fold(0.0f32, f32::max);
+            let corner = corners
+                .iter()
+                .map(|c| 1.0 - smoothstep(corner_in, corner_out, (((p.0 - c.0).powi(2) + (p.1 - c.1).powi(2)).sqrt()) as f32))
+                .fold(0.0f32, f32::max);
+            *v = ear.max(ring).max(nose).max(eye).max(corner);
         }
     });
     Some(out)
@@ -142,6 +164,12 @@ mod tests {
         assert!(at(&excluded, 0.5, 0.05) < 0.01, "the top of the outline");
         assert!(at(&excluded, 0.25, 0.6) < 0.01, "the cheek");
         assert!(at(&excluded, 0.5, 1.2) < 0.01, "the neck");
+        // the eyes and a thin band round them, not the cheek below
+        assert!(at(&excluded, 0.33, 0.45) > 0.99, "the right eye");
+        assert!(at(&excluded, 0.33, 0.47) > 0.99, "its lower lid's edge");
+        assert!(at(&excluded, 0.33, 0.52) < 0.01, "under the eye");
+        assert!(at(&excluded, 0.24, 0.45) > 0.99, "just past the eye's outer corner");
+        assert!(at(&excluded, 0.19, 0.47) < 0.01, "the crow's feet further out");
         // above the ears' band the side of the head is not excluded
         assert!(at(&excluded, -0.03, 0.05) < 0.01, "the side of the forehead");
     }

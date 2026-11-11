@@ -140,6 +140,15 @@ pub(super) type P = (f64, f64);
 /// Where mesh point `i` lies on a frontal face, in fractions of the face's box: the points the areas read, the
 /// rest in the middle. For tests and examples that need a face mesh without the face mesh model.
 pub fn frontal(i: usize) -> (f64, f64) {
+    // each eye's opening: an almond from the outer corner along the lower lid and back along the upper one
+    for (ring, (outer, inner)) in super::exclude::EYE_RINGS.iter().zip([(0.25, 0.42), (0.75, 0.58)]) {
+        if let Some(k) = ring.iter().position(|p| *p == i) {
+            let t = (k as f64 / 8.0).min(2.0);
+            let (along, lid) = if t <= 1.0 { (t, 1.0) } else { (2.0 - t, -1.0) };
+            let x = outer + (inner - outer) * along;
+            return (x, 0.45 + lid * 0.018 * (std::f64::consts::PI * along).sin());
+        }
+    }
     match i {
         33 => (0.25, 0.45),
         133 => (0.42, 0.45),

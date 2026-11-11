@@ -33,11 +33,14 @@
 pub mod areas;
 mod exclude;
 mod fix;
+mod flatten;
+mod glasses;
 mod hairlike;
 mod heal;
 mod lines;
 mod ridge;
 pub mod search;
+mod zones;
 
 use lightcraft_raster::{Plane, Rgb32f, par_rows};
 use serde::{Deserialize, Serialize};
@@ -45,7 +48,7 @@ use serde::{Deserialize, Serialize};
 pub use areas::Area;
 pub use exclude::OVAL as FACE_OVAL;
 pub use fix::Fix;
-pub use search::{Crop, Fill, Filler, LAMA_FACES, NoFill, Picture, Source, WORK, with_fixes, with_fixes_from};
+pub use search::{Crop, Fill, Filler, NoFill, Picture, Source, WORK, with_fixes, with_fixes_from};
 
 use crate::{Control, FaceCtx, Feature, Part, Scene, Scope, Spec, Stage};
 

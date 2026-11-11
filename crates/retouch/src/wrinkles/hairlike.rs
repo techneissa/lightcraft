@@ -2,26 +2,34 @@
 //! cut a hair in two (half a strand would be left) nor copy one as pores, so these pixels are left out of the mask, out of
 //! the skin the fill and the donors read, and stay as they are.
 //!
-//! A pixel is hair-like when it is a thin bright line whose colour is greyer than the skin's own (a grey or white hair
+//! A pixel is hair-like when it is a thin bright line (thinner than a lit ridge of skin, [`THIN`]) whose colour is greyer than the skin's own (a grey or white hair
 //! against the red of skin). Chroma is measured against the face's median, so a black-and-white photo, where everything
 //! is neutral, flags nothing. A skin-coloured thin bright line (the lit ridge beside a deep crease) and a grey patch with
-//! no line in it (a pale ridge between creases) are skin.
+//! no line in it (a pale ridge between creases) are skin. So is a short pale streak: on a deeply lined face the lit
+//! ridges between the creases are thin, bright and paler than the skin, but short; a hair is one long strand, so only
+//! stretches at least [`MIN_LEN`] long count.
 
 use lightcraft_raster::blur::gaussian;
 use lightcraft_raster::morph::max_filter;
 use lightcraft_raster::{Plane, Rgb32f};
 
 use super::heal::smoothstep;
-use super::ridge::valley_response;
 
 /// A thin bright line (a hair; width a fraction of the face) counts from this response (log light) up to [`LINE_FULL`].
 const LINE_FROM: f32 = 0.015;
 const LINE_FULL: f32 = 0.05;
-const LINE_SIGMA: f64 = 0.003;
+const LINE_SIGMA: f64 = 0.0015;
+/// A hair is thin: its line answers at [`LINE_SIGMA`] more than this share of its answer at [`WIDE`] times that width.
+/// A lit ridge of skin, a few times wider, answers more at the wider width.
+const THIN: f32 = 1.2;
+const WIDE: f32 = 3.0;
 /// ...and only where the colour is greyer than the skin's median by this much (log of red over green) from
 /// [`GREY_FROM`] to [`GREY_FULL`]: the lit ridge beside a deep crease is a thin bright line too, but skin-coloured.
 const GREY_FROM: f32 = 0.12;
 const GREY_FULL: f32 = 0.25;
+/// The shortest hair, a fraction of the face (a stretch of hair-like pixels of fewer than this length × 2 pixels is not
+/// one).
+const MIN_LEN: f64 = 0.06;
 
 /// 0…1 per pixel: how hair-like each pixel of the crop is (grown by a pixel and softened, so a hair's edge goes too).
 /// `lg` is the crop's log light per channel, `skin` its skin (0…1) and `size` the face's size in pixels.
@@ -41,10 +49,13 @@ pub(super) fn hair_like(lg: &Rgb32f, skin: &Plane, size: f64) -> Plane {
     };
     // thin bright lines: valleys of the negated brightness
     let lum = lg.map(|p| -(0.2126 * p[0].exp() + 0.7152 * p[1].exp() + 0.0722 * p[2].exp()).max(1e-4).ln());
-    let line = valley_response(&lum, ((LINE_SIGMA * size) as f32).max(1.5));
+    let sigma = ((LINE_SIGMA * size) as f32).max(1.5);
+    let (line, wide) = (valley_response(&lum, sigma), valley_response(&lum, WIDE * sigma));
     let raw = Plane::from_fn(w, h, |x, y| {
         let i = y * w + x;
-        let thin = smoothstep(LINE_FROM, LINE_FULL, line.data.get(i).copied().unwrap_or(0.0));
+        let r = line.data.get(i).copied().unwrap_or(0.0);
+        let narrow = r > THIN * wide.data.get(i).copied().unwrap_or(0.0);
+        let thin = if narrow { smoothstep(LINE_FROM, LINE_FULL, r) } else { 0.0 };
         let grey = if median.is_finite() {
             let d = median - chroma.data.get(i).copied().unwrap_or(median);
             smoothstep(GREY_FROM, GREY_FULL, d)
@@ -53,7 +64,30 @@ pub(super) fn hair_like(lg: &Rgb32f, skin: &Plane, size: f64) -> Plane {
         };
         thin * grey
     });
-    gaussian(&max_filter(&raw, 1), 0.7)
+    // one long strand, not a short pale streak
+    let strands = super::ridge::hysteresis(&raw, 0.3, 0.6, |_| ((2.0 * MIN_LEN * size) as usize).max(8));
+    gaussian(&max_filter(&raw.zip_map(&strands, |r, s| r * s), 1), 0.7)
+}
+
+/// How much of a valley (dark line) of width `sigma` there is at each pixel, in log-light depth: the larger Hessian
+/// eigenvalue of the blurred picture times `sigma²`, damped where the second one is as large (a dark spot).
+fn valley_response(l: &Plane, sigma: f32) -> Plane {
+    let g = gaussian(l, sigma);
+    let (w, h) = (g.width, g.height);
+    let s2 = sigma * sigma;
+    Plane::from_fn(w, h, |x, y| {
+        let at = |dx: isize, dy: isize| g.get_clamped(x as isize + dx, y as isize + dy);
+        let c = at(0, 0);
+        let (a, d) = (at(1, 0) - 2.0 * c + at(-1, 0), at(0, 1) - 2.0 * c + at(0, -1));
+        let b = (at(1, 1) - at(-1, 1) - at(1, -1) + at(-1, -1)) / 4.0;
+        let (mean, spread) = ((a + d) / 2.0, (((a - d) / 2.0).powi(2) + b * b).sqrt());
+        let (l1, l2) = (mean + spread, mean - spread);
+        if l1 <= 0.0 || !l1.is_finite() {
+            return 0.0;
+        }
+        let ratio = l2 / l1;
+        s2 * l1 * (-(ratio * ratio) / (2.0 * 0.5 * 0.5)).exp()
+    })
 }
 
 #[cfg(test)]

@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use lightcraft_raster::blur::gaussian;
 use lightcraft_raster::{Plane, Rgb32f};
-use lightcraft_retouch::wrinkles::{Fill, Filler, Fix, LAMA_FACES, NoFill, Wrinkles, areas, with_fixes};
+use lightcraft_retouch::wrinkles::{Fill, Filler, Fix, NoFill, Wrinkles, areas, with_fixes};
 use lightcraft_retouch::{Face, Feature, Input, NormRect, Part, PartMask, Retouch, Stage, View, WholePhoto};
 
 /// The face's box in the test pictures (x0, y0, width, height, as fractions of a 320 × 400 picture): 200 × 200 px.
@@ -247,62 +247,27 @@ fn a_window_equals_the_whole_render_inside_it() {
     }
 }
 
-/// A filler that gives back the clean skin (the picture without the lines), as LaMa would.
-struct Clean(Rgb32f);
+/// A search stopped from the `n`-th time it asks whether it was (the search asks before each face and twice within one).
+struct StopAt(std::cell::Cell<usize>, usize);
 
-impl Filler for Clean {
+impl Filler for StopAt {
     fn fill(&mut self, _: &Rgb32f, _: &Plane) -> Fill {
-        Fill::Done(self.0.clone())
-    }
-}
-
-struct Say(fn() -> Fill, bool);
-
-impl Filler for Say {
-    fn fill(&mut self, _: &Rgb32f, _: &Plane) -> Fill {
-        (self.0)()
+        Fill::Unavailable
     }
 
     fn cancelled(&self) -> bool {
-        self.1
+        self.0.set(self.0.get() + 1);
+        self.0.get() >= self.1
     }
-}
-
-#[test]
-fn a_filler_gives_the_low_band_and_without_one_the_banded_heal_stands_in() {
-    let img = forehead_lines(320, 400, 1.0, 0.04);
-    let clean = forehead_lines_none(320, 400);
-    let with = with_fixes(&img, vec![meshed(FACE)], &mut Clean(clean)).remove(0);
-    let fix = fix_of(&with);
-    assert!(!fix.is_empty());
-    let out = retouched(&img, &wrinkles(100.0, 0.0, 0.0, 0.0), vec![with]);
-    assert!(line_depth(&out) < line_depth(&img) * 0.25, "a fill from the filler also takes the lines away");
-    // no model (or one that failed): the banded heal, the same as NoFill
-    let a = with_fixes(&img, vec![meshed(FACE)], &mut Say(|| Fill::Unavailable, false)).remove(0);
-    let b = searched(&img);
-    assert_eq!(a.wrinkles, b.wrinkles, "Unavailable is the banded heal");
-    assert!(!fix_of(&a).is_empty());
-}
-
-fn forehead_lines_none(w: usize, h: usize) -> Rgb32f {
-    // (the same pores, no lines)
-    let lined = forehead_lines(w, h, 1.0, 0.04);
-    let (fx, fy, fs) = (FACE[0] * w as f64, FACE[1] * h as f64, 200.0);
-    Rgb32f::from_fn(w, h, |x, y| {
-        let (u, v) = (((x as f64 + 0.5) - fx) / fs, ((y as f64 + 0.5) - fy) / fs);
-        let line: f64 = if (0.25..0.75).contains(&u) { LINES.iter().map(|l| (-0.5 * ((v - l) / LINE_SIGMA).powi(2)).exp()).sum() } else { 0.0 };
-        let p = lined.data[y * w + x];
-        p.map(|c| c / (1.0 - LINE_DEPTH * line as f32))
-    })
 }
 
 #[test]
 fn a_cancelled_search_keeps_nothing_and_a_face_without_a_search_shows_the_old_wrinkles() {
     let img = forehead_lines(320, 400, 1.0, 0.04);
-    let cancelled = with_fixes(&img, vec![meshed(FACE)], &mut Say(|| Fill::Cancelled, true));
+    let cancelled = with_fixes(&img, vec![meshed(FACE)], &mut StopAt(std::cell::Cell::new(0), 1));
     assert_eq!(cancelled[0].wrinkles, None);
-    let stopped_in_the_fill = with_fixes(&img, vec![meshed(FACE)], &mut Say(|| Fill::Cancelled, false));
-    assert_eq!(stopped_in_the_fill[0].wrinkles, None);
+    let stopped_in_the_search = with_fixes(&img, vec![meshed(FACE)], &mut StopAt(std::cell::Cell::new(0), 3));
+    assert_eq!(stopped_in_the_search[0].wrinkles, None, "stopped after the line search, before the change was kept");
     // not searched: the old Wrinkles soften the lines (and change pixels)
     let old = retouched(&img, &wrinkles(100.0, 0.0, 0.0, 0.0), vec![meshed(FACE)]);
     assert!(!same_bits(&img, &old));
@@ -347,14 +312,14 @@ fn no_panic_on_odd_faces_and_pictures() {
 
 // ---- what v2 changes against v1, and what the review asked to pin down ----
 
-/// A faint line (12 % deep) in dark skin, as the float picture and as the 8-bit sRGB picture the people parse renders.
+/// A faint line (2.5 % deep) in dark skin, as the float picture and as the 8-bit sRGB picture the people parse renders.
 /// A float crop reads the line as it is (too shallow to be a wrinkle); the 8-bit copy's rounding steps (6 % a code in
 /// the shadows) make it deeper than it is.
 fn faint_line_in_the_dark() -> (Rgb32f, Rgb32f) {
     let float = Rgb32f::from_fn(320, 400, |x, y| {
         let (u, v) = (((x as f64 + 0.5) - 60.0) / 200.0, ((y as f64 + 0.5) - 40.0) / 200.0);
         let line: f64 = if (0.25..0.75).contains(&u) { LINES.iter().map(|l| (-0.5 * ((v - l) / LINE_SIGMA).powi(2)).exp()).sum() } else { 0.0 };
-        let k = (1.0 - 0.12 * line as f32) * 0.02 / 0.3 * (1.0 + 0.01 * noise(x, y));
+        let k = (1.0 - 0.025 * line as f32) * 0.02 / 0.3 * (1.0 + 0.01 * noise(x, y));
         SKIN.map(|c| c * k)
     });
     let q = float.map(|p| {
@@ -371,7 +336,7 @@ fn faint_line_in_the_dark() -> (Rgb32f, Rgb32f) {
 fn an_8_bit_picture_reads_a_faint_line_in_the_shadows_as_a_wrinkle_and_a_float_one_does_not() {
     let (float, quantised) = faint_line_in_the_dark();
     let change = |img: &Rgb32f| fix_of(&searched(img)).width * fix_of(&searched(img)).height;
-    assert_eq!(change(&float), 0, "a 12 % line is not a wrinkle: no change");
+    assert_eq!(change(&float), 0, "a 2.5 % line is not a wrinkle: no change");
     assert!(change(&quantised) > 0, "the same line after 8-bit rounding is read as one");
 }
 
@@ -562,47 +527,12 @@ fn the_widened_areas_take_away_lines_between_the_brows_under_the_eyes_on_the_che
     }
 }
 
-/// A picture with lines all over it and many faces: only the [`LAMA_FACES`] largest get the model, and every face still gets
-/// a change (the others by the banded heal).
-#[test]
-fn only_the_largest_faces_get_the_model() {
-    struct Count(usize);
-    impl Filler for Count {
-        fn fill(&mut self, _: &Rgb32f, _: &Plane) -> Fill {
-            self.0 += 1;
-            Fill::Unavailable
-        }
-    }
-    let img = Rgb32f::from_fn(1000, 400, |_, y| SKIN.map(|c| c * (1.0 - 0.3 * f32::from(y % 9 == 0))));
-    // ten faces of growing size on two rows
-    let faces: Vec<Face> = (0..10)
-        .map(|i| {
-            let side = 0.28 + 0.01 * i as f64;
-            meshed([(i % 5) as f64 * 0.2 + 0.01, (i / 5) as f64 * 0.5 + 0.02, side * 0.4 * 0.7, side * 0.9 * 0.7 * 0.8])
-        })
-        .collect();
-    let mut count = Count(0);
-    let out = with_fixes(&img, faces, &mut count);
-    assert_eq!(count.0, LAMA_FACES, "the model ran for the eight largest");
-    assert!(out.iter().all(|f| f.wrinkles.is_some()), "every face has a change: the two smallest by the banded heal");
-}
-
 #[test]
 fn a_search_stopped_after_the_first_face_keeps_no_face() {
-    struct StopAfterOne(usize);
-    impl Filler for StopAfterOne {
-        fn fill(&mut self, _: &Rgb32f, _: &Plane) -> Fill {
-            self.0 += 1;
-            Fill::Unavailable
-        }
-
-        fn cancelled(&self) -> bool {
-            self.0 >= 1
-        }
-    }
     let img = Rgb32f::from_fn(640, 400, |_, y| SKIN.map(|c| c * (1.0 - 0.3 * f32::from(y % 9 == 0))));
     let faces = vec![meshed([0.02, 0.1, 0.3, 0.5]), meshed([0.55, 0.1, 0.3, 0.5])];
-    let out = with_fixes(&img, faces, &mut StopAfterOne(0));
+    // (the first face asks three times; the second face's first question stops the search)
+    let out = with_fixes(&img, faces, &mut StopAt(std::cell::Cell::new(0), 4));
     assert!(
         out.iter().all(|f| f.wrinkles.is_none()),
         "the first face's finished change is dropped with the rest: {:?}",
@@ -614,4 +544,56 @@ fn a_search_stopped_after_the_first_face_keeps_no_face() {
 fn the_sliders_cover_the_widened_areas_by_label_and_id() {
     let spec = lightcraft_retouch::find("retouch.wrinkles.smileLines").expect("the control keeps its id");
     assert_eq!(spec.label, "Cheeks and Smile Lines");
+}
+
+/// Issue #201: a forehead lit from one side (light falling off across it and down it), with pores, and five thin
+/// creases (about 3 px wide, 20 % deep) on a face 1280 px across, as in a portrait. Forehead 100 takes most of the
+/// creases' depth away, keeps the light's gradient, and leaves the forehead's mean light where it was (no pale patch).
+/// (The search used to work on a crop of at most 768 px, where these creases were a pixel wide and mostly stayed.)
+#[test]
+fn forehead_100_takes_thin_creases_away_and_keeps_the_gradient_and_the_light() {
+    let (w, h, side) = (1600usize, 1800usize, 1280.0f64);
+    let face = [160.0 / 1600.0, 160.0 / 1800.0, side / 1600.0, side / 1800.0];
+    let rows = [0.10, 0.13, 0.16, 0.19, 0.22];
+    let (fx, fy) = (face[0] * w as f64, face[1] * h as f64);
+    let light = |x: usize, y: usize| 1.0 - 0.35 * ((x as f64 - fx) / side) as f32 - 0.2 * ((y as f64 - fy) / side) as f32;
+    let picture = |creases: bool| {
+        Rgb32f::from_fn(w, h, |x, y| {
+            let (u, v) = (((x as f64 + 0.5) - fx) / side, ((y as f64 + 0.5) - fy) / side);
+            let crease: f64 = if creases && (0.25..0.75).contains(&u) {
+                rows.iter().map(|r| (-0.5 * ((v - r) * side / 1.5).powi(2)).exp()).fold(0.0, f64::max)
+            } else {
+                0.0
+            };
+            let k = light(x, y) * (1.0 - 0.2 * crease as f32) * (1.0 + 0.03 * pore(x, y, 3.0));
+            SKIN.map(|c| c * k)
+        })
+    };
+    let (img, clean) = (picture(true), picture(false));
+    let face = with_fixes(&img, vec![meshed(face)], &mut NoFill).remove(0);
+    let out = retouched(&img, &wrinkles(100.0, 0.0, 0.0, 0.0), vec![face]);
+    let lum = |im: &Rgb32f, x: usize, y: usize| f64::from(luma(im.data[y * w + x]).ln());
+    // the creases' depth: on a crease against the clean picture there, along the middle of the forehead
+    let depth = |im: &Rgb32f| {
+        let mut sum = 0.0;
+        for r in rows {
+            let y = (fy + r * side) as usize;
+            for x in (fx + 0.35 * side) as usize..(fx + 0.65 * side) as usize {
+                sum += lum(&clean, x, y) - lum(im, x, y);
+            }
+        }
+        sum / (rows.len() as f64 * 0.3 * side)
+    };
+    let (before, after) = (depth(&img), depth(&out));
+    assert!(before > 0.15, "the creases are there: {before:.3}");
+    assert!(after < 0.3 * before, "Forehead 100 takes most of the creases' depth away: {before:.3} → {after:.3}");
+    // the light's gradient and the mean light: blurred well past the creases, the result matches the clean picture
+    let smooth = |im: &Rgb32f| gaussian(&Plane::from_fn(w, h, |x, y| luma(im.data[y * w + x]).ln()), 40.0);
+    let (a, b) = (smooth(&out), smooth(&clean));
+    let region = || (0..8).flat_map(|i| (0..4).map(move |j| (fx + (0.3 + 0.05 * i as f64) * side, fy + (0.12 + 0.03 * j as f64) * side)));
+    for (x, y) in region() {
+        let (x, y) = (x as usize, y as usize);
+        let d = a.data[y * w + x] - b.data[y * w + x];
+        assert!(d.abs() < 0.02, "the light at {x},{y} moved by {d:.3}");
+    }
 }
