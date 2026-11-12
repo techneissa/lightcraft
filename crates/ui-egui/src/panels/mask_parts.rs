@@ -180,18 +180,18 @@ pub fn delete_selected(app: &mut LightcraftApp) -> bool {
     false
 }
 
-/// The kinds of part, each a button: id, label, icon.
+/// The kinds of part, each a button: id, label, icon. Same order as the Create New Mask tiles (`masking.rs`).
 const KINDS: [(&str, &str, Icon); 10] = [
-    ("brush", "Brush", Icon::Brush),
-    ("linear", "Linear Gradient", Icon::Linear),
-    ("radial", "Radial Gradient", Icon::Radial),
-    ("colorRange", "Color Range", Icon::Picker),
-    ("luminanceRange", "Luminance Range", Icon::Sliders),
+    ("object", "Object", Icon::ObjectSelect),
+    ("prompt", "Describe…", Icon::Describe),
     ("subject", "Subject", Icon::Subject),
     ("sky", "Sky", Icon::Sky),
     ("background", "Background", Icon::Background),
-    ("object", "Object", Icon::ObjectSelect),
-    ("prompt", "Describe…", Icon::Describe),
+    ("brush", "Brush", Icon::Brush),
+    ("linear", "Linear Gradient", Icon::Linear),
+    ("radial", "Radial Gradient", Icon::Radial),
+    ("luminanceRange", "Luminance Range", Icon::Sliders),
+    ("colorRange", "Color Range", Icon::Picker),
 ];
 
 /// Under the selected mask: Add · Subtract · Intersect for the next part, and a button for each kind of part.
