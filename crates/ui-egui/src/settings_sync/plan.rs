@@ -101,6 +101,7 @@ const RANGES: &[(&str, f64, f64)] = &[
     ("brushSize", 0.002, 0.5),
     ("brushFeather", 0.0, 100.0),
     ("brushFlow", 0.0, 100.0),
+    ("lensBlurBrushAmount", 0.0, 100.0),
     ("removeSize", 0.0, 1.0),
     ("removeFeather", 0.0, 100.0),
     ("removeOpacity", 0.0, 100.0),
@@ -132,7 +133,10 @@ fn area_of(key: &str, in_settings: bool) -> &'static str {
             "language" => "appearance",
             "sidebar" | "editSections" | "toolStrip" | "foldedSections" => "arrangements",
             k if ["brush", "remove", "mask", "crop", "clip"].iter().any(|p| k.starts_with(p))
-                || matches!(k, "pointColorVisualize" | "hdrVisualize" | "visualizeSpots" | "spotsThreshold" | "toolOverlay") =>
+                || matches!(
+                    k,
+                    "pointColorVisualize" | "hdrVisualize" | "visualizeSpots" | "spotsThreshold" | "toolOverlay" | "lensBlurBrushAmount"
+                ) =>
             {
                 "tools"
             }

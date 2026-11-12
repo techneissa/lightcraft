@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
-use super::EditSection::{Calibration, Color, Detail, Effects, Light, Optics};
+use super::EditSection::{Calibration, Color, Detail, Effects, LensBlur, Light, Optics};
 use super::*;
 use crate::headless::Headless;
 use crate::{LightcraftApp, Services};
@@ -20,7 +20,7 @@ fn read(saved: Value) -> EditSectionLayout {
 #[test]
 fn a_new_panel_lists_every_section_shown_in_the_usual_order() {
     let layout = EditSectionLayout::default();
-    assert_eq!(order(&layout), [Light, Color, Effects, Detail, Optics, Calibration]);
+    assert_eq!(order(&layout), [Light, Color, Effects, Detail, Optics, LensBlur, Calibration]);
     assert!(!layout.any_hidden() && layout.is_default());
 }
 
@@ -37,13 +37,14 @@ fn an_arrangement_survives_saving() {
 #[test]
 fn a_damaged_or_missing_arrangement_is_made_whole() {
     let layout = read(json!([{"id": "detail", "hidden": true}, {"id": "map"}, "light", {"id": "detail"}, {"id": 7}, null]));
-    assert_eq!(order(&layout), [Detail, Light, Color, Effects, Optics, Calibration]);
+    assert_eq!(order(&layout), [Detail, Light, Color, Effects, Optics, LensBlur, Calibration]);
     assert!(layout.is_hidden(Detail), "the first entry for a section counts");
     for saved in [json!(null), json!("light"), json!(3), json!({"light": true}), json!([])] {
         assert!(read(saved).is_default());
     }
     // every section hidden is not an arrangement the panel can be left in
-    let all_hidden = read(json!(["light", "color", "effects", "detail", "optics", "calibration"].map(|id| json!({"id": id, "hidden": true}))));
+    let all_hidden =
+        read(json!(["light", "color", "effects", "detail", "optics", "lensBlur", "calibration"].map(|id| json!({"id": id, "hidden": true}))));
     assert_eq!(all_hidden.shown(), [Light]);
 }
 
@@ -52,7 +53,7 @@ fn moving_steps_over_hidden_sections_and_stops_at_the_ends() {
     let mut layout = EditSectionLayout::default();
     layout.set_hidden(Effects, true);
     assert!(layout.move_by(Detail, true), "Detail goes above Color, past the hidden Effects");
-    assert_eq!(layout.shown(), [Light, Detail, Color, Optics, Calibration]);
+    assert_eq!(layout.shown(), [Light, Detail, Color, Optics, LensBlur, Calibration]);
     assert!(!layout.can_move(Light, true) && !layout.can_move(Calibration, false));
     assert!(!layout.move_by(Light, true) && !layout.move_by(Effects, true), "the first and a hidden section stay");
     assert!(layout.move_before(Light, None));
@@ -62,7 +63,7 @@ fn moving_steps_over_hidden_sections_and_stops_at_the_ends() {
 #[test]
 fn the_last_shown_section_cannot_be_hidden() {
     let mut layout = EditSectionLayout::default();
-    for s in [Color, Effects, Detail, Optics, Calibration] {
+    for s in [Color, Effects, Detail, Optics, LensBlur, Calibration] {
         assert!(layout.set_hidden(s, true));
     }
     assert!(!layout.set_hidden(Light, true));
@@ -75,8 +76,8 @@ fn the_last_shown_section_cannot_be_hidden() {
 fn requests_are_read_strictly() {
     let layout = EditSectionLayout::default();
     let next = layout.with_request(Some(&json!(["optics", "light"])), Some(&json!(["effects"]))).unwrap();
-    assert_eq!(order(&next), [Optics, Light, Color, Effects, Detail, Calibration]);
-    assert_eq!(next.shown(), [Optics, Light, Color, Detail, Calibration]);
+    assert_eq!(order(&next), [Optics, Light, Color, Effects, Detail, LensBlur, Calibration]);
+    assert_eq!(next.shown(), [Optics, Light, Color, Detail, LensBlur, Calibration]);
     // a key left out keeps what is there
     assert_eq!(next.with_request(None, Some(&json!([]))).unwrap().shown().len(), 7);
     assert_eq!(order(&next.with_request(None, Some(&json!(["color"]))).unwrap()), order(&next));
@@ -85,7 +86,7 @@ fn requests_are_read_strictly() {
         (json!(["light", "light"]), json!(null), "listed twice"),
         (json!(["lite"]), json!(null), "unknown section `lite`"),
         (json!(null), json!([3]), "names no section"),
-        (json!(null), json!(["light", "color", "effects", "detail", "optics", "calibration"]), "at least one"),
+        (json!(null), json!(["light", "color", "effects", "detail", "optics", "lensBlur", "calibration"]), "at least one"),
     ] {
         let e = layout.with_request(Some(&o), Some(&h)).unwrap_err();
         assert!(e.contains(says), "{e}");
@@ -127,11 +128,11 @@ fn headers(h: &mut Headless) -> Vec<String> {
 #[test]
 fn the_panel_draws_the_sections_in_the_chosen_order_and_skips_hidden_ones() {
     let mut h = edit_open();
-    assert_eq!(headers(&mut h), ["light", "color", "effects", "detail", "optics", "calibration"]);
+    assert_eq!(headers(&mut h), ["light", "color", "effects", "detail", "optics", "lensBlur", "calibration"]);
     exec(&mut h, "view.editSections", json!({"order": ["optics", "light"], "hidden": ["effects", "calibration"]}));
-    assert_eq!(headers(&mut h), ["optics", "light", "color", "detail"]);
+    assert_eq!(headers(&mut h), ["optics", "light", "color", "detail", "lensBlur"]);
     exec(&mut h, "view.editSectionsReset", json!({}));
-    assert_eq!(headers(&mut h), ["light", "color", "effects", "detail", "optics", "calibration"]);
+    assert_eq!(headers(&mut h), ["light", "color", "effects", "detail", "optics", "lensBlur", "calibration"]);
 }
 
 #[test]
@@ -264,8 +265,8 @@ fn dragging_a_heading_moves_its_section() {
     assert!((line.center().y - color_top).abs() < 3.0, "the line is at the top of Color: {line:?} / {color_top}");
     release(&mut h, to);
     assert_eq!(h.app.ui.dragging_edit_section, None);
-    assert_eq!(headers(&mut h), ["light", "optics", "color", "effects", "detail", "calibration"]);
-    assert_eq!(order(&h.app.ui.edit_sections), [Light, Optics, Color, Effects, Detail, Calibration]);
+    assert_eq!(headers(&mut h), ["light", "optics", "color", "effects", "detail", "lensBlur", "calibration"]);
+    assert_eq!(order(&h.app.ui.edit_sections), [Light, Optics, Color, Effects, Detail, LensBlur, Calibration]);
     assert!(!h.app.ui.section_open("optics"), "a drag does not open the section");
     // saved
     let back = serde_json::from_value::<crate::state::UiState>(serde_json::to_value(&h.app.ui).unwrap()).unwrap();
@@ -283,7 +284,7 @@ fn dragging_a_heading_moves_its_section() {
     });
     h.step();
     release(&mut h, to);
-    assert_eq!(headers(&mut h), ["light", "optics", "color", "effects", "detail", "calibration"]);
+    assert_eq!(headers(&mut h), ["light", "optics", "color", "effects", "detail", "lensBlur", "calibration"]);
     // a click still opens
     assert!(!h.app.ui.section_open("detail"));
     let r = h.request("ui.clickWidget", json!({"id": "section:detail", "fx": 0.3}), T);
@@ -291,5 +292,5 @@ fn dragging_a_heading_moves_its_section() {
     h.step();
     h.step();
     assert!(h.app.ui.section_open("detail"), "a click opens the section");
-    assert_eq!(order(&h.app.ui.edit_sections), [Light, Optics, Color, Effects, Detail, Calibration]);
+    assert_eq!(order(&h.app.ui.edit_sections), [Light, Optics, Color, Effects, Detail, LensBlur, Calibration]);
 }

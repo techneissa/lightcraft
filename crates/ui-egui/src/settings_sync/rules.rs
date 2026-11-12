@@ -89,6 +89,8 @@ pub const SYNCED: &[&str] = &[
     "brushErase",
     "brushAutoMask",
     "brushPressure",
+    // Lens Blur's Focus / Blur brush strength (official, 2026-11-12), a tool default like the brush's
+    "lensBlurBrushAmount",
     "removeSize",
     "removeFeather",
     "removeOpacity",
