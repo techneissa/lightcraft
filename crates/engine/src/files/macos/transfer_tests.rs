@@ -13,8 +13,8 @@ use crate::media::DenoiseSpec;
 
 /// A Sony ARW of `model`, 72 × 48, whose RGGB mosaic holds 6 × 6 tiles of different colours.
 fn arw_tiles(model: &str) -> Vec<u8> {
-    use lightcraft_tiff::tags::{self as t, photometric};
-    use lightcraft_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter, Value};
+    use craft_tiff::tags::{self as t, photometric};
+    use craft_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter, Value};
     let (w, h) = (72usize, 48usize);
     let mut rng = crate::camera_preview::colour_transfer::tests::Lcg(7);
     let tiles: Vec<[f64; 3]> = (0..12 * 8).map(|_| [rng.unit(), rng.unit(), rng.unit()]).collect();

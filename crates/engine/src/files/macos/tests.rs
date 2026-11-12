@@ -13,8 +13,8 @@ use crate::media::LoadOptions;
 
 /// A Sony ARW of `model`, 72 × 48, with EXIF `orientation`: an uncompressed 14-bit CFA strip in a SubIFD.
 pub(crate) fn arw(model: &str, orientation: u16) -> Vec<u8> {
-    use lightcraft_tiff::tags::{self as t, photometric};
-    use lightcraft_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter, Value};
+    use craft_tiff::tags::{self as t, photometric};
+    use craft_tiff::{ByteOrder, IfdBuilder, ImageData, TiffWriter, Value};
     let (w, h) = (72u32, 48u32);
     let mut raw = IfdBuilder::new();
     raw.set(t::NEW_SUBFILE_TYPE, Value::Long(vec![0]));
