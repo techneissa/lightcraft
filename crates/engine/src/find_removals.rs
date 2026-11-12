@@ -399,7 +399,7 @@ impl Session {
             Kind::Person => ("findPeople", "Finding people"),
             Kind::Wire => ("findWires", "Finding wires"),
         };
-        let guard = self.activity.start(label_kind, label, Cancel::Flag(cancel.clone()));
+        let guard = self.activity.start_background(label_kind, label, Cancel::Flag(cancel.clone()));
         let finds = self.finds.clone();
         let failed_cancel = cancel.clone();
         let wait = wait || !self.segmenter.background;

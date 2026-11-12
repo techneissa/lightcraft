@@ -243,7 +243,7 @@ fn a_search_has_a_row_and_can_be_cancelled() {
     assert_eq!(r["started"], true, "{r}");
     let rows = s.activity.list();
     let row = rows.iter().find(|t| t.kind == "findWires").expect("a row while it runs");
-    assert!(row.cancellable);
+    assert!(row.cancellable && row.background, "its row is in the ring, with a ✕");
     assert_eq!(s.finds.view(s.active()).running, vec![Kind::Wire]);
     assert!(s.execute("spot.findWires", &json!({})).is_err(), "one search of a kind at a time");
     s.activity.cancel(row.id).unwrap();

@@ -775,7 +775,7 @@ impl Session {
         let job_id = job.id;
         let cancel = job.cancel.clone();
         self.segmenter.worker.submit(job)?;
-        let task = self.activity.start("segment", activity_label(&tag), crate::activity::Cancel::Flag(cancel.clone()));
+        let task = self.activity.start_background("segment", activity_label(&tag), crate::activity::Cancel::Flag(cancel.clone()));
         self.segmenter.in_flight.push(InFlight { id: job_id, tag, cancel, detail, _task: task });
         Ok(())
     }

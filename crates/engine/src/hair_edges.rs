@@ -445,7 +445,7 @@ impl HairEdges {
             // (another edge model says here what it lacks)
             return Err(format!("{} is not downloaded ({} MB; maskEdges.download)", edge.label(), MODEL_BYTES.div_ceil(1_000_000)));
         }
-        let row = self.inner.activity.start("matting", "Refining hair edges", Cancel::Flag(cancel.clone()));
+        let row = self.inner.activity.start_background("matting", "Refining hair edges", Cancel::Flag(cancel.clone()));
         row.detail(edge.label());
         let _one_at_a_time = lock(&self.inner.one_run);
         // (one model on the GPU at a time, people parsing and LaMa included: `crate::gpu_run`)

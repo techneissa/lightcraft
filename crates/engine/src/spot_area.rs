@@ -229,7 +229,7 @@ impl Session {
             self.object_jobs.0 = keep;
         }
         let req = self.segment_clicks_request(id, model_clicks).map_err(crate::EngineError::Other)?;
-        let task = self.activity.start("segment", "Selecting with SAM 3", Cancel::Flag(req.cancel.clone()));
+        let task = self.activity.start_background("segment", "Selecting with SAM 3", Cancel::Flag(req.cancel.clone()));
         let ObjectAsk { target, hint, exclude, reach, expand, fill } = ask;
         self.object_jobs.0.push(ObjectJob { photo: id, target, hint, exclude, reach, expand, fill, req, measuring: None, _task: task });
         Ok(())
@@ -305,7 +305,7 @@ impl Session {
     /// Put a job whose request is `req` on the list, as [`Session::queue_object`] does (tests).
     #[cfg(all(test, feature = "sam"))]
     pub(crate) fn push_object_job(&mut self, id: PhotoId, ask: ObjectAsk, req: ClicksRequest) {
-        let task = self.activity.start("segment", "Selecting with SAM 3", Cancel::Flag(req.cancel.clone()));
+        let task = self.activity.start_background("segment", "Selecting with SAM 3", Cancel::Flag(req.cancel.clone()));
         let ObjectAsk { target, hint, exclude, reach, expand, fill } = ask;
         self.object_jobs.0.push(ObjectJob { photo: id, target, hint, exclude, reach, expand, fill, req, measuring: None, _task: task });
     }

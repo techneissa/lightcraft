@@ -312,7 +312,7 @@ impl Session {
             let parsing = self.parsing.clone();
             let row = match parent {
                 Some(p) => self.activity.start_child(p, "selectPeople", "Finding people", crate::activity::Cancel::No),
-                None => self.activity.start("selectPeople", "Finding people", crate::activity::Cancel::No),
+                None => self.activity.start_background("selectPeople", "Finding people", crate::activity::Cancel::No),
             };
             let spawned = std::thread::Builder::new().name("select-people".into()).spawn({
                 let key = key.clone();

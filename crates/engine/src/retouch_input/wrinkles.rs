@@ -75,7 +75,7 @@ impl WrinkleSearch {
         let stop = Arc::new(AtomicBool::new(first));
         let run = FillRun::with_stop(stop.clone());
         // (the row is held by the run, so LaMa's own row is not added to it)
-        run.hold(Box::new(self.activity.start("retouch.wrinkles", "Smoothing Wrinkles", Cancel::Flag(stop.clone()))));
+        run.hold(Box::new(self.activity.start_background("retouch.wrinkles", "Smoothing Wrinkles", Cancel::Flag(stop.clone()))));
         let mut filler = make(&self.lama, &run, &stop);
         let source = FloatSource { cropper: self.cropper.as_deref(), picture: Picture(linear) };
         let faces = lightcraft_develop::retouch::wrinkles::with_fixes_from(&source, faces, filler.as_mut());

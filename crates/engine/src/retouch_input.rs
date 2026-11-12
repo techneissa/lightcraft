@@ -552,7 +552,7 @@ impl Session {
         {
             self.retouch_faces.lock().started += 1;
             let store = self.retouch_faces.clone();
-            let guard = self.activity.start("retouch.faces", &format!("Finding Faces ({})", finder.name()), crate::activity::Cancel::No);
+            let guard = self.activity.start_background("retouch.faces", &format!("Finding Faces ({})", finder.name()), crate::activity::Cancel::No);
             let spawned = std::thread::Builder::new().name("retouch-faces".into()).spawn({
                 let key = key.clone();
                 let store = store.clone();

@@ -84,7 +84,7 @@ impl HairEdges {
         if !available() {
             return Err("Apple Vision masks need macOS 14 or later".into());
         }
-        let row = self.inner.activity.start("matting", "Refining hair edges", Cancel::Flag(cancel.clone()));
+        let row = self.inner.activity.start_background("matting", "Refining hair edges", Cancel::Flag(cancel.clone()));
         row.detail(Edge::Vision.label());
         let stop = || cancel.load(Ordering::Relaxed) || lightcraft_gpu::shutting_down();
         if stop() {
