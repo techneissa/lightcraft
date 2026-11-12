@@ -188,7 +188,7 @@ fn the_activity_row_progresses_pauses_and_cancels() {
     let rows = s.activity.list();
     let row = rows.iter().find(|t| t.kind == "focus").expect("an activity row");
     assert_eq!((row.label.as_str(), row.total, row.cancellable), ("Reading focus points", 40, true));
-    assert!(row.background, "the app's own scan is background work (the top bar's ring)");
+    assert!(row.background, "the scan shows in the top bar's ring");
     // already running: asking again starts nothing new
     let r = s.execute("photo.readFocusPoints", &json!({})).unwrap();
     assert_eq!((r["queued"].as_u64(), r["running"].as_bool()), (Some(0), Some(true)));
@@ -297,9 +297,9 @@ fn real_files_header_read_matches_whole_file() {
     );
 }
 
-/// Photo ▸ Read Focus Points is a job the user starts: its row stays in the activity stack, not the top bar's ring.
+/// Photo ▸ Read Focus Points is a short read: its row is in the top bar's ring too, not the activity stack.
 #[test]
-fn a_read_the_user_asks_for_is_not_background_work() {
+fn a_read_the_user_asks_for_is_in_the_ring_too() {
     let dir = temp_dir("user-row");
     let mut photos = Vec::new();
     for i in 0..20u64 {
@@ -312,5 +312,5 @@ fn a_read_the_user_asks_for_is_not_background_work() {
     let r = s.execute("photo.readFocusPoints", &json!({})).unwrap();
     assert!(r["queued"].as_u64() > Some(0), "{r}");
     let row = s.activity.list().into_iter().find(|t| t.kind == "focus").expect("an activity row");
-    assert!(!row.background);
+    assert!(row.background);
 }

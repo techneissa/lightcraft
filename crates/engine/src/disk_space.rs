@@ -181,7 +181,7 @@ impl crate::Session {
                             Ok(()) => match answered.recv_timeout(SHOW_ROW_AFTER) {
                                 Ok(answer) => Ok(answer),
                                 Err(_) => {
-                                    let _row = activity.start("cache", "Checking free disk space", crate::activity::Cancel::No);
+                                    let _row = activity.start_background("cache", "Checking free disk space", crate::activity::Cancel::No);
                                     Ok(answered.recv().ok().flatten())
                                 }
                             },

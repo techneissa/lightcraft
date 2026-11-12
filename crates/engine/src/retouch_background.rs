@@ -304,7 +304,7 @@ fn depth_load(store: &Backdrops, path: String, stamp: u64, p: &Photo, activity: 
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let guard = activity.start("retouch.depth", "Reading depth map", crate::activity::Cancel::No);
+        let guard = activity.start_background("retouch.depth", "Reading depth map", crate::activity::Cancel::No);
         let worker = store.clone();
         let (q, photo) = (path.clone(), p.clone());
         let spawned = std::thread::Builder::new().name("retouch-depth".into()).spawn(move || {
@@ -499,7 +499,7 @@ impl Session {
         store.lock().busy.push(id.clone());
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let guard = self.activity.start("retouch.backdrop", "Loading background picture", crate::activity::Cancel::No);
+            let guard = self.activity.start_background("retouch.backdrop", "Loading background picture", crate::activity::Cancel::No);
             guard.detail(&name);
             let (worker, i) = (store.clone(), id.clone());
             let spawned = std::thread::Builder::new().name("retouch-backdrop".into()).spawn(move || {

@@ -1,6 +1,6 @@
-//! The ring in the top bar (issue #198): the work the app starts by itself to get photos ready (previews, faces,
-//! focus points, the full-size view…) is `background` in the engine's registry, so it takes no row in the activity
-//! stack. A small ring beside the top bar's icons fills with the tasks' combined progress instead, and sweeps while no
+//! The ring in the top bar (issues #198, #276): the work the app does for the photo in front of you (previews, faces,
+//! focus points, the full-size view, AI model work and its loading, short checks…) is `background` in the engine's
+//! registry, so it takes no row in the activity stack. A small ring beside the top bar's icons fills with the tasks' combined progress instead, and sweeps while no
 //! task knows its total yet. Hovering it lists each task with its name, percentage and count; a click opens the
 //! same list with ✕ for the tasks that can stop. With nothing running there is no ring.
 
@@ -31,9 +31,13 @@ pub fn fraction(tasks: &[TaskInfo]) -> Option<f32> {
     (!known.is_empty()).then(|| (known.iter().sum::<f64>() / known.len() as f64).clamp(0.0, 1.0) as f32)
 }
 
-/// One task's line: "Building previews · 40 % · 24 of 60".
+/// One task's line: "Building previews · 40 % · 24 of 60", with what it is on after the name ("Finding people parts
+/// · Sapiens2").
 pub fn line(t: &TaskInfo) -> String {
     let mut parts = vec![tr(&t.label).to_string()];
+    if !t.detail.is_empty() {
+        parts.push(t.detail.clone());
+    }
     if t.cancelling {
         parts.push(tr("Stopping…").to_string());
     } else {

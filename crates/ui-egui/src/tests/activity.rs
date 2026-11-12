@@ -667,3 +667,20 @@ fn background_work_shows_as_the_ring_and_takes_no_row() {
     h.step();
     assert!(!has(&h, "icon:activityRing"), "no ring once nothing runs");
 }
+
+/// Issue #276: AI model work for the photo being edited is listed by the ring, with what it is on, and takes no row in
+/// the stack; an export keeps its row.
+#[test]
+fn model_work_is_listed_by_the_ring_with_its_detail_and_an_export_is_not() {
+    let mut h = demo();
+    let parse = h.app.session.activity.start_background("parsing", "Finding people parts", Cancel::Flag(Default::default()));
+    parse.detail("Sapiens2");
+    let export = h.app.session.activity.start("export", "Exporting", Cancel::Yes);
+    wait_visible(&mut h);
+    let ring = crate::panels::activity_ring::tasks(&h.app);
+    assert_eq!(ring.iter().map(|t| t.kind).collect::<Vec<_>>(), ["parsing"]);
+    assert!(crate::panels::activity_ring::line(&ring[0]).contains("Sapiens2"), "the ring names what the task is on");
+    assert!(ring[0].cancellable, "its ✕ is in the ring's list");
+    assert!(!has(&h, &format!("activity:row:{}", parse.id())), "no row for the model work");
+    assert!(has(&h, &format!("activity:row:{}", export.id())), "the export keeps its row");
+}

@@ -138,7 +138,7 @@ impl Session {
             return self.portrait_commit(p, &r);
         }
         let cancel = Arc::new(AtomicBool::new(false));
-        let row = self.activity.start("portrait", "Applying portrait settings", Cancel::Flag(cancel.clone()));
+        let row = self.activity.start_background("portrait", "Applying portrait settings", Cancel::Flag(cancel.clone()));
         row.progress(0, photos as u64);
         let handle = row.handle();
         let (tx, rx) = std::sync::mpsc::channel();

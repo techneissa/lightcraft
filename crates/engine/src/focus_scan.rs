@@ -199,9 +199,9 @@ fn candidates(s: &Session, ids: Option<&[PhotoId]>) -> Vec<(PhotoId, String)> {
     out
 }
 
-/// Start reading `list` on a worker thread. `background`: the app started it by itself ([`pump`]), so its row is
-/// the top bar's ring; a read somebody asked for ([`read_points`]) keeps its row in the activity stack.
-fn start(s: &mut Session, list: Vec<(PhotoId, String)>, pace: Pace, background: bool) -> std::result::Result<(), String> {
+/// Start reading `list` on a worker thread ([`pump`] by itself, [`read_points`] when asked). It is a short read, so its
+/// row is the top bar's ring, not the activity stack.
+fn start(s: &mut Session, list: Vec<(PhotoId, String)>, pace: Pace) -> std::result::Result<(), String> {
     let cancel = Arc::new(AtomicBool::new(false));
     let pace = Arc::new(AtomicU8::new(pace as u8));
     let (tx, rx) = mpsc::channel();
@@ -241,11 +241,7 @@ fn start(s: &mut Session, list: Vec<(PhotoId, String)>, pace: Pace, background: 
         })
         .map_err(|e| format!("could not start reading focus points: {e}"))?;
     let cancel_row = Cancel::Flag(cancel.clone());
-    let guard = if background {
-        s.activity.start_background("focus", "Reading focus points", cancel_row)
-    } else {
-        s.activity.start("focus", "Reading focus points", cancel_row)
-    };
+    let guard = s.activity.start_background("focus", "Reading focus points", cancel_row);
     guard.progress(0, total);
     let now = Instant::now();
     s.focus_scan.job = Some(Job {
@@ -382,7 +378,7 @@ pub(crate) fn pump(s: &mut Session, p: &Value) -> Result<Value> {
         s.focus_scan.auto_checked = true;
         let list = candidates(s, None);
         if !list.is_empty()
-            && let Err(e) = start(s, list, pace, true)
+            && let Err(e) = start(s, list, pace)
         {
             log::warn!("{e}");
         }
@@ -413,7 +409,7 @@ pub(crate) fn read_points(s: &mut Session, p: &Value) -> Result<Value> {
         return Ok(json!({"queued": 0, "running": false}));
     }
     let wait = p.get("wait").and_then(Value::as_bool) == Some(true);
-    start(s, list, if wait { Pace::Normal } else { s.focus_scan.pace }, false).map_err(|e| crate::cmd::bad(C, e))?;
+    start(s, list, if wait { Pace::Normal } else { s.focus_scan.pace }).map_err(|e| crate::cmd::bad(C, e))?;
     // a run asked for counts as this library opening's automatic one
     s.focus_scan.auto_checked = true;
     if !wait {

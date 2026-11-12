@@ -132,8 +132,8 @@ pub struct TaskInfo {
     pub batch: bool,
     /// Items that failed so far (counted in `done` too).
     pub failed: u64,
-    /// The app started this by itself to get photos ready ([`Activity::start_background`]): the desktop app shows
-    /// it as the ring in the top bar rather than as a row in the activity stack.
+    /// Short work for the photo in front of the person, or the app's own preparation ([`Activity::start_background`]):
+    /// the desktop app shows it as the ring in the top bar rather than as a row in the activity stack.
     pub background: bool,
     /// Time left (ms), estimated from the measured time per item; none until an item is done, or while the total
     /// isn't known.
@@ -304,9 +304,11 @@ impl Activity {
         self.register(kind, label, cancel, None, false, false)
     }
 
-    /// Register a task the app starts by itself to get photos ready (previews, faces, the full-size view…), not one a
-    /// person asked for. It is listed like any other (`activity.list` marks it `background`), but the desktop app
-    /// shows it as the ring in the top bar and not as a row in the activity stack.
+    /// Register short work that needs no row of its own: the app's preparation of photos (previews, faces, the
+    /// full-size view…), AI model work for the photo being edited and its model loading, short checks. It is listed
+    /// like any other (`activity.list` marks it `background`), but the desktop app shows it as the ring in the top
+    /// bar and not as a row in the activity stack. A job a person starts over many files and waits for uses
+    /// [`Activity::start`].
     pub fn start_background(&self, kind: &'static str, label: &str, cancel: Cancel) -> TaskGuard {
         self.register(kind, label, cancel, None, false, true)
     }

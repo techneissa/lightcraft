@@ -213,7 +213,7 @@ impl GlareRepair {
             Method::Flux => "Repairing Glare (FLUX)",
             Method::Lama => "Filling Glints (LaMa)",
         };
-        let guard = self.inner.activity.start("retouch.glare", label, Cancel::Yes);
+        let guard = self.inner.activity.start_background("retouch.glare", label, Cancel::Yes);
         let inner = self.inner.clone();
         let spawned = std::thread::Builder::new().name("glare-repair".into()).spawn(move || {
             let stop = guard.cancel_flag().unwrap_or_default();

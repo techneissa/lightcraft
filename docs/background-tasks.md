@@ -6,10 +6,12 @@ the amount of work isn't known), the count and what it's working on, and ✕ if 
 a task that can stop is running. Agents see the same list through `activity.list` / `activity.cancel`, and
 `ui.inspect` reports it as `activity`.
 
-One kind of work is not in the stack: **background preparation**, what the app starts by itself to get photos ready
-(issue #198). It shows as a small ring in the top bar that fills with the tasks' combined progress (a sweep while no
-total is known). Hovering the ring lists each task with its name, percentage and count; a click opens the same list
-with ✕ for the ones that can stop. With none running there is no ring. See [Background preparation](#background-preparation-the-ring).
+Some work is not in the stack: **background work**, what the app does for the photo in front of you without a person
+asking for each step or waiting on it: preparing photos (issue #198), AI model work for the photo being edited, model
+loading and warm-up, and short checks (issue #276). It shows as a small ring in the top bar that fills with the tasks'
+combined progress (a sweep while no total is known). Hovering the ring lists each task with its name, what it is on
+(a model's name), percentage and count; a click opens the same list with ✕ for the ones that can stop. With none
+running there is no ring. See [Background work](#background-work-the-ring).
 
 The registry is `lightcraft_engine::activity` (`crates/engine/src/activity.rs`, `Session::activity`). The stack is
 `crates/ui-egui/src/panels/activity.rs`. Every job that can last more than a moment uses it; **don't add a progress
@@ -54,29 +56,38 @@ guard.detail(&file_name);
 - **Quiet periodic work** shows no row: the auto-import folder listing runs every few seconds through
   `tasks::spawn(.., None, ..)`.
 
-## Background preparation: the ring
+## Background work: the ring
 
-A task is **background** when the app starts it by itself to prepare photos, and a person didn't ask for it and can't
-act on it. The flag is set where the task starts, never by a list of kinds in the UI:
+A task is **background** when it is short work for the photo in front of the person, or the app's own preparation, and
+nobody starts it over many files and waits for it. The flag is set where the task starts, never by a list of kinds in
+the UI:
 
 ```rust
-let guard = session.activity.start_background("faces", "Finding faces", Cancel::No);
+let guard = session.activity.start_background("parsing", "Finding people parts", Cancel::Flag(cancel.clone()));
 ```
 
 - `Activity::start_background` is `start` with the flag; `TaskInfo::background` (`activity.list`, `ui.inspect`) reports
   it, and a child row of a background batch is background too. From the UI, `tasks::spawn_background` does the same
-  for a worker thread.
-- Marked today: the app's own preview preparation ("Preparing photos in the background"), the face scan, "Finding people
-  parts ahead", the automatic focus-point read (not Photo ▸ Read Focus Points), the full-size view and its read-ahead,
-  the thumbnail-cache tidy, and the raw recheck when a library opens.
-- **Check before marking:** a task is background only when no command a person runs reaches it. One start shared by an
-  automatic and a user path (focus points) takes a `background` argument; the GPU check for faces and the macOS colour
-  check are reached from user commands, so they keep their row.
-- **Not background:** anything a person starts or waits for. Export, import, scan, synchronize, Build Previews and Build
-  Smart Previews, downloads, merges, AI Denoise, LaMa and masking jobs, Edit In and Find Missing Photos keep their row
-  in the stack, with their ✕.
-- **Choosing:** use `start_background` when the app starts the work without being asked and the person has nothing
-  to do with it; use `start` otherwise. When unsure, use `start`: a row is easier to dismiss than hidden work is to find.
+  for a worker thread. The name `background` stays; read it as "shown in the ring".
+- Marked today:
+  - Preparation: previews ("Preparing photos in the background"), the face scan, "Finding people parts ahead",
+    "Finding AI masks", the focus-point read (also Photo ▸ Read Focus Points), the full-size view and its read-ahead,
+    the thumbnail-cache tidy, and the raw recheck when a library opens.
+  - AI work for the photo being edited: faces and people parts (`retouch.faces`, `parsing`, `matting` for BiRefNet and
+    Apple Vision, `selectPeople`, `portrait`), masks and fills (`segment`, "Selecting with SAM 3", `lama`,
+    `findPeople` / `findWires`), the retouch steps (`retouch.depth`, `.backdrop`, `.wrinkles`, `.glare`).
+  - Model loading and warm-up (SAM 3, Core ML, the fastest-unit test) and short checks ("Checking the GPU for faces",
+    "Checking free disk space", the macOS colour check).
+- **Check before marking:** ask whether a person starts it over many files and waits for it. If so it keeps its row.
+  A task started under a batch row (`start_child`) follows its parent. One start shared by two paths takes the flag
+  from the shorter one.
+- **Not background:** jobs a person starts and waits for keep their row in the stack, with their ✕: export (all
+  kinds), import, folder scan, synchronize, move, rename, merge, model and data downloads, AI Denoise, Learn My Edits,
+  Match Look, Lightroom import, Edit In, Find Similar Photos, Build Previews and Build Smart Previews, and Find
+  Missing Photos.
+- **Choosing:** use `start_background` for work on the photo being edited, its model loading and short checks; use
+  `start` for a long job over many files. When unsure, use `start`: a row is easier to dismiss than hidden work is to
+  find.
 - Background tasks still hold their guard, progress and cancel as above; only where they show differs. They show once
   they are 0.5 s old, like rows. The ring is `crates/ui-egui/src/panels/activity_ring.rs`.
 

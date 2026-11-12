@@ -624,7 +624,7 @@ impl PeopleParsing {
         matting: Option<(crate::hair_edges::HairEdges, crate::hair_edges::Edge)>,
         flag: Arc<AtomicBool>,
     ) -> Result<(), String> {
-        let row = self.inner.activity.start("parsing", "Finding people parts", Cancel::Flag(flag.clone()));
+        let row = self.inner.activity.start_background("parsing", "Finding people parts", Cancel::Flag(flag.clone()));
         let quiet = ahead::quiet().is_some();
         let row = self.shown(row, set, &flag);
         let this = self.clone();

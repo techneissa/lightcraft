@@ -304,7 +304,7 @@ impl LamaFill {
             return None;
         }
         if !run.holds() {
-            run.hold(Box::new(self.inner.activity.start("lama", "Filling with LaMa", Cancel::Flag(run.stop_flag()))));
+            run.hold(Box::new(self.inner.activity.start_background("lama", "Filling with LaMa", Cancel::Flag(run.stop_flag()))));
         }
         let cancelled = || run.stopped() || lightcraft_gpu::shutting_down();
         let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.run_model(rgb, hole, w, h, use_.params, &cancelled)));
