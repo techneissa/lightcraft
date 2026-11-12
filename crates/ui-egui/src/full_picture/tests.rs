@@ -174,12 +174,23 @@ fn going_back_to_a_photo_reads_its_picture_from_disk_and_a_new_look_does_not() {
 
 // Given a build of the finished picture under way, when I change Exposure, then it stops: nothing of it is kept, no
 // second build runs beside it, and the picture that follows is the new look's
+//
+// (The build is held under way at a gate of this app's own until the edit: its row starts when it is asked for, and a
+// build still queued when the look changes is dropped from the queue uncounted, which made this test fail on a slower
+// machine, issue #273.)
 #[test]
 fn an_edit_stops_the_build_under_way_and_no_two_run_at_once() {
     let fixture = RenderFixture::new("full-picture-stop", 1);
     let mut h = loupe(&fixture, None);
-    assert!(h.step_until(SETTLE, row), "a build starts");
+    let gate: &'static lightcraft_engine::memory::WorkGate = Box::leak(Box::new(lightcraft_engine::memory::WorkGate::new(1 << 30)));
+    h.app.renderer.full.gate = Some(gate);
+    let held = gate.acquire(gate.usage().1);
+    assert!(h.step_until(SETTLE, row), "a build is asked for");
+    let at_once = h.app.renderer.full.at_once.clone();
+    assert!(h.step_until(SETTLE, |_| at_once.now.load(std::sync::atomic::Ordering::SeqCst) == 1), "the build is under way");
     exec(&mut h, "develop.set", json!({"values": {"light.exposure": 0.6}}));
+    assert!(h.step_until(SETTLE, |h| h.app.renderer.full.stats.dropped >= 1), "the build under way stops");
+    drop(held);
     until_ready(&mut h);
     let stats = h.app.renderer.full.stats;
     assert_eq!((stats.dropped, stats.rendered), (1, 1), "the first build was dropped, the second kept: {stats:?}");
