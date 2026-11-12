@@ -213,8 +213,16 @@ pub(crate) fn guided_fast(cx: &mut Cx<'_>, part: &Part<'_>, whole: (usize, usize
     Some(q)
 }
 
-/// The highlights/shadows base (`render::tone_base`) of the plane `part`, for `out`.
-pub(crate) fn tone_base(cx: &mut Cx<'_>, part: &Part<'_>, whole: (usize, usize), sigma: f32, detail: usize, out: &Rect) -> Option<Buf> {
+/// The highlights/shadows base (`render::tone_base`) of the plane `part`, for `out`. `coarse`: the whole frame's
+/// [`crate::render::coarse_median`] when the base keeps the gaps in fine detail (process V8 on, `local::base_keeps_gaps`).
+pub(crate) fn tone_base(
+    cx: &mut Cx<'_>,
+    part: &Part<'_>,
+    whole: (usize, usize),
+    (sigma, detail): (f32, usize),
+    coarse: Option<&Buf>,
+    out: &Rect,
+) -> Option<Buf> {
     if detail == 0 {
         return guided_fast(cx, part, whole, sigma, local::BASE_EPS, out);
     }
@@ -222,6 +230,16 @@ pub(crate) fn tone_base(cx: &mut Cx<'_>, part: &Part<'_>, whole: (usize, usize),
     let i = grow(&m_at, (detail.min(local::BASE_DETAIL_MAX), detail.min(local::BASE_DETAIL_MAX)), whole);
     let c = cut(cx, part, &i)?;
     let m = median_hv(cx, &c, width(&i), height(&i), detail);
+    // V8: each value clamped between the fine median and the coarse one (`render::detail_free`), pixel by pixel
+    let m = match coarse {
+        Some(coarse) => {
+            let co = cut(cx, &Part::whole(coarse, whole, 1), &i)?;
+            let clamped = cx.gpu.buffer(area(&i));
+            map(cx, "clamp_between_k", area(&i), &[], [Some(&c), Some(&m), Some(&co)], &clamped);
+            clamped
+        }
+        None => m,
+    };
     let m = cut(cx, &Part { buf: &m, at: i, nc: 1 }, &m_at)?;
     guided_fast(cx, &Part { buf: &m, at: m_at, nc: 1 }, whole, sigma, local::BASE_EPS, out)
 }

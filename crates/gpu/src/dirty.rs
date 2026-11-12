@@ -359,7 +359,10 @@ pub(crate) fn planes(cx: &mut Cx<'_>, lin: &Buf, plan: &Plan<'_>, req: &RenderRe
             let key = local::base_key(&plan.settings, sg, sig.base_detail);
             let kept = old.base.as_ref().filter(|(k, _)| *k == key).map(|(_, b)| b);
             let reach = cut::tone_base_reach(whole, sg, sig.base_detail);
-            let b = redo(cx, kept, reach, 1, &mut |cx, r| cut::tone_base(cx, &lp, whole, sg, sig.base_detail, r))?;
+            // (V8's base reads a coarse median across the frame: made whole once, its tiles cut from it)
+            let coarse = (kept.is_some() && sig.base_detail > 0 && local::base_keeps_gaps(&plan.settings))
+                .then(|| crate::render::coarse_median(cx, &log_l, w, h, sig.base_detail));
+            let b = redo(cx, kept, reach, 1, &mut |cx, r| cut::tone_base(cx, &lp, whole, (sg, sig.base_detail), coarse.as_ref(), r))?;
             planes.base = Some((key, b.clone()));
             b
         }

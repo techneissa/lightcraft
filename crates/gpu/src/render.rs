@@ -522,14 +522,20 @@ fn detail_free(cx: &mut Cx<'_>, l: &Buf, w: usize, h: usize, r: usize) -> Buf {
         return cx.copy(l);
     }
     let fine = median_hv(cx, l, w, h, r);
+    let coarse = coarse_median(cx, l, w, h, r);
+    let out = cx.gpu.buffer(w * h);
+    map(cx, "clamp_between_k", w * h, &[], [Some(l), Some(&fine), Some(&coarse)], &out);
+    out
+}
+
+/// The coarse half of [`detail_free`]: the median at `r` of a `local::BASE_COARSE_STEP`× downscaled copy of `l`,
+/// enlarged to `w × h`. (Fork: the view's tile redraws, `dirty::planes`, take it whole and cut their tiles from it.)
+pub(crate) fn coarse_median(cx: &mut Cx<'_>, l: &Buf, w: usize, h: usize, r: usize) -> Buf {
     let s = local::BASE_COARSE_STEP;
     let (lw, lh) = (w.div_ceil(s).max(1), h.div_ceil(s).max(1));
     let lo = resize(cx, l, (w, h), (lw, lh), 1, Filter::Box);
     let lo_median = median_hv(cx, &lo, lw, lh, r);
-    let coarse = resize(cx, &lo_median, (lw, lh), (w, h), 1, Filter::Bilinear);
-    let out = cx.gpu.buffer(w * h);
-    map(cx, "clamp_between_k", w * h, &[], [Some(l), Some(&fine), Some(&coarse)], &out);
-    out
+    resize(cx, &lo_median, (lw, lh), (w, h), 1, Filter::Bilinear)
 }
 
 /// Fast guided filter (`local::guided_fast`): coefficients on a subsampled grid.
