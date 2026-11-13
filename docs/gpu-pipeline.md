@@ -500,10 +500,10 @@ bounding box. Each 16 × 16 tile first picks, 256 dabs at a time, the dabs that 
 memory, so a stroke of tens of thousands of dabs costs what its box and its dabs near each pixel cost; the
 old kernel took at most 4,096 dabs across the whole mask and sent the part to the CPU past that. A dab is
 five words (x, y, radius, hard core, flow), pen pressure applied on the CPU, so pressure stays on the
-device. A part with Auto Mask strokes is stamped on the CPU (`masks::auto_edge`: each dab compares 3 × 3 median
+device. A part with Auto Mask strokes is stamped on the CPU (`masks::auto_edge`: each dab compares median
 colours with a reference built from the stroke's recent samples, issue #280) from the render's colours read back
 once, and uploaded; the CPU keeps the last four such parts (`masks::BrushCache`, counted in the stages' bytes), so a
-new stroke stamps only that stroke there too. A part whose strokes extend a held part stamps only the new strokes
+new stroke stamps only that stroke there too, and a part it holds whole (a Refine Edges drag, another part of the mask edited) reads nothing back. Plain and erase strokes in a part with Auto Mask strokes are stamped on the CPU with them. A part whose strokes extend a held part stamps only the new strokes
 over a copy of its plane; the last four parts stay on the device.
 
 ### The overlay's alphas (issue #75)

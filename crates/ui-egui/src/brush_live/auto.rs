@@ -6,21 +6,21 @@
 use egui::ColorImage;
 use lightcraft_color::transfer::srgb_to_linear;
 use lightcraft_pipeline::local::log_lum;
-use lightcraft_pipeline::masks::{AutoColor, auto_color, median3};
+use lightcraft_pipeline::masks::{AutoColor, auto_color, median_at};
 use std::cell::RefCell;
 use std::rc::Rc;
 
 /// The side (pixels) of the tiles the guide keeps median colours in.
 const TILE: usize = 32;
 
-/// The colour of every pixel of the picture a stroke is painted over, and its 3 × 3 median colour
+/// The colour of every pixel of the picture a stroke is painted over, and its median colour
 /// (worked out the first time a stroke reads it, kept by tiles of [`TILE`]² pixels made as the
 /// brush reaches them).
 pub struct Guide {
     size: [usize; 2],
     colors: Vec<AutoColor>,
-    /// (NaN luminance: not worked out)
-    medians: RefCell<Vec<Option<Box<[AutoColor]>>>>,
+    /// The radius the medians kept are of, and the tiles (NaN luminance: not worked out).
+    medians: RefCell<(usize, Vec<Option<Box<[AutoColor]>>>)>,
 }
 
 impl Guide {
@@ -36,7 +36,7 @@ impl Guide {
             })
             .collect();
         let tiles = img.size[0].div_ceil(TILE) * img.size[1].div_ceil(TILE);
-        Guide { size: img.size, colors, medians: RefCell::new(vec![None; tiles]) }
+        Guide { size: img.size, colors, medians: RefCell::new((1, vec![None; tiles])) }
     }
 
     /// The picture's size (pixels).
@@ -66,14 +66,20 @@ impl Guide {
         self.colors.get(self.index(x, y)).copied().unwrap_or([0.0, 1.0, 1.0, 1.0])
     }
 
-    /// The 3 × 3 median colour of pixel `(x, y)` (clamped to the picture), as the committed stroke
-    /// compares pixels.
-    pub fn median(&self, x: isize, y: isize) -> AutoColor {
+    /// The median colour of radius `rho` of pixel `(x, y)` (clamped to the picture), as the
+    /// committed stroke compares pixels (`lightcraft_pipeline::masks::median_at`).
+    pub fn median(&self, x: isize, y: isize, rho: usize) -> AutoColor {
         let i = self.index(x, y);
         let w = self.size[0].max(1);
         let (px, py) = (i % w, i / w);
-        let work = || median3(|dx, dy| self.color(px as isize + dx, py as isize + dy));
-        let Ok(mut memo) = self.medians.try_borrow_mut() else { return work() };
+        let work = || median_at(|dx, dy| self.color(px as isize + dx, py as isize + dy), rho);
+        let Ok(mut held) = self.medians.try_borrow_mut() else { return work() };
+        let (kept_rho, memo) = &mut *held;
+        if *kept_rho != rho {
+            // (another scale: what is kept is of another radius)
+            memo.iter_mut().for_each(|t| *t = None);
+            *kept_rho = rho;
+        }
         let Some(tile) = memo.get_mut(py / TILE * w.div_ceil(TILE) + px / TILE) else { return work() };
         let slot = (py % TILE) * TILE + px % TILE;
         let tile = tile.get_or_insert_with(|| vec![[f32::NAN; 4]; TILE * TILE].into_boxed_slice());
@@ -123,14 +129,14 @@ mod tests {
         let g = Guide::new(&ColorImage::new([16, 16], px));
         let at = |fx, fy| {
             let (x, y) = g.pixel(fx, fy);
-            g.median(x, y)
+            g.median(x, y, 1)
         };
         let c = at(0.25, 0.5);
         let r = AutoRef { lo: c, hi: c };
         assert!(r.weight(at(0.1, 0.9)) > 0.99, "the same surface");
         assert!(r.weight(at(0.9, 0.5)) < 0.01, "another surface");
         // out of range and hostile positions don't panic
-        let _ = (g.pixel(-3.0, 9.0), g.pixel(f32::NAN, f32::INFINITY), g.median(-5, 99));
+        let _ = (g.pixel(-3.0, 9.0), g.pixel(f32::NAN, f32::INFINITY), g.median(-5, 99, 3));
     }
 
     #[test]

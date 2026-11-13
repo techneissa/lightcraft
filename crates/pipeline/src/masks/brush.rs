@@ -7,7 +7,7 @@ use std::sync::Arc;
 use lightcraft_develop::BrushStroke;
 use lightcraft_raster::{Plane, Rgb32f};
 
-use super::auto_edge::{AutoColor, AutoRef, AutoRefs, MedianBox, dab_sample, search_margin, search_reach};
+use super::auto_edge::{AutoColor, AutoRef, AutoRefs, MedianBox, dab_sample, median_radius, search_margin, search_reach};
 use super::{BrushDabs, accumulate, brush_dabs, dab_alpha, dab_pixel};
 use crate::for_rows;
 use crate::geometry::Frame;
@@ -137,9 +137,30 @@ pub fn rasterize(strokes: &[BrushStroke], frame: &Frame, w: usize, h: usize, img
     out
 }
 
+/// The plane `ctx` holds for exactly `strokes` in a `w × h` render (made the most recently used),
+/// as [`rasterize`] would return it: a renderer that has to fetch the image to stamp strokes asks
+/// this first.
+pub fn held_brush(strokes: &[BrushStroke], w: usize, h: usize, ctx: &mut BrushCtx<'_>) -> Option<Plane> {
+    let auto = strokes.iter().any(|s| s.auto_mask);
+    let base = brush_base(ctx.geo, ctx.image, auto, w, h);
+    let chain = brush_chain(strokes);
+    let i = ctx.cache.entries.iter().position(|e| e.base == base && !chain.is_empty() && e.chain == chain)?;
+    let e = ctx.cache.entries.remove(i);
+    let plane = (*e.plane).clone();
+    ctx.cache.entries.push(e);
+    Some(plane)
+}
+
 /// The references of an Auto Mask stroke's dabs ([`AutoRefs`]), and the colours of its box
-/// `x0..x1 × y0..y1` with the margin the dabs' samples look into ([`MedianBox`]).
-pub(crate) fn auto_refs(bd: &BrushDabs, img: &Rgb32f, log_l: &Plane, (x0, y0, x1, y1): (usize, usize, usize, usize)) -> (Vec<AutoRef>, MedianBox) {
+/// `x0..x1 × y0..y1` with the margin the dabs' samples look into ([`MedianBox`], medians of radius
+/// `rho`: [`median_radius`]).
+pub(crate) fn auto_refs(
+    bd: &BrushDabs,
+    img: &Rgb32f,
+    log_l: &Plane,
+    (x0, y0, x1, y1): (usize, usize, usize, usize),
+    rho: usize,
+) -> (Vec<AutoRef>, MedianBox) {
     use rayon::prelude::*;
     let (w, h) = (log_l.width, log_l.height);
     let m = search_margin(bd.r.max(0.5));
@@ -156,7 +177,7 @@ pub(crate) fn auto_refs(bd: &BrushDabs, img: &Rgb32f, log_l: &Plane, (x0, y0, x1
             }
         }
     }
-    let med = MedianBox::new(img, log_l, (mx0, my0, mx1, my1), |y| spans.get(y.wrapping_sub(my0)).copied().filter(|s| s.0 < s.1));
+    let med = MedianBox::new(img, log_l, (mx0, my0, mx1, my1), rho, |y| spans.get(y.wrapping_sub(my0)).copied().filter(|s| s.0 < s.1));
     let samples: Vec<AutoColor> = (0..bd.dabs.len())
         .into_par_iter()
         .map(|k| {
@@ -193,7 +214,8 @@ fn stamp(s: &BrushStroke, frame: &Frame, img: &Rgb32f, log_l: &Plane, out: &mut 
         return;
     }
     let (bw, bh) = (x1 - x0, y1 - y0);
-    let (refs, med) = if auto { auto_refs(&bd, img, log_l, (x0, y0, x1, y1)) } else { (Vec::new(), MedianBox::empty()) };
+    let (refs, med) =
+        if auto { auto_refs(&bd, img, log_l, (x0, y0, x1, y1), median_radius(frame.px_per_long(w))) } else { (Vec::new(), MedianBox::empty()) };
     let mut sp = Plane::new(bw, bh);
     for_rows(&mut sp.data, bw, |ry, row| {
         let y = y0 + ry;

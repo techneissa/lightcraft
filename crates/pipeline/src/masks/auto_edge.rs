@@ -1,7 +1,8 @@
 //! Auto Mask brush (issue #280): which pixels a dab paints.
 //!
-//! Pixels are compared by their 3 × 3 median colour ([`median3`]), which keeps edges and drops
-//! noise. Each dab samples the colour under its centre, moved to the flattest spot near it
+//! Pixels are compared by their median colour ([`median_at`]), which keeps edges and drops noise:
+//! 3 × 3 at a fit preview's scale, wider in proportion in a larger render ([`median_radius`]), so
+//! an export's extra pixel noise is dropped as the preview's downscaling drops it. Each dab samples the colour under its centre, moved to the flattest spot near it
 //! ([`dab_sample`]) so a centre on the blur of an edge samples the surface beside it rather than
 //! the mix of both. A dab's reference is the range of the stroke's recent samples that agree with
 //! their medoid ([`AutoRefs`]): a centre that slips over an edge for a moment still paints the
@@ -101,17 +102,71 @@ fn median9(mut p: [f32; 9]) -> f32 {
     p[4]
 }
 
+/// Render pixels per photo long edge at which pixels are compared by their 3 × 3 median (about a
+/// fit preview's).
+pub const AUTO_MEDIAN_LONG: f64 = 1600.0;
+
+/// The widest median radius (pixels): 17 × 17, from about five times [`AUTO_MEDIAN_LONG`].
+const MAX_MEDIAN_RADIUS: usize = 8;
+
+/// The radius (pixels) of the median pixels are compared by in a render of `px_per_long` pixels
+/// per photo long edge: 1 (3 × 3) up to [`AUTO_MEDIAN_LONG`], spanning as much of the photo as
+/// that 3 × 3 does in a larger render.
+pub fn median_radius(px_per_long: f64) -> usize {
+    let s = px_per_long / AUTO_MEDIAN_LONG;
+    if s.is_finite() { ((3.0 * s - 1.0) / 2.0).round().clamp(1.0, MAX_MEDIAN_RADIUS as f64) as usize } else { 1 }
+}
+
+/// The median of `v` (NaN sorts last); 0 when empty.
+#[inline]
+fn median_of(v: &mut [f32]) -> f32 {
+    let m = v.len() / 2;
+    if m < v.len() {
+        v.select_nth_unstable_by(m, f32::total_cmp);
+    }
+    v.get(m).copied().unwrap_or(0.0)
+}
+
+/// The per-channel median of the `2 rho + 1` colours `at(d)`, `d` in `-rho..=rho`.
+#[inline]
+fn median_line(at: impl Fn(isize) -> AutoColor, rho: usize) -> AutoColor {
+    let rho = rho.min(MAX_MEDIAN_RADIUS) as isize;
+    let mut v = [[0.0f32; 4]; 2 * MAX_MEDIAN_RADIUS + 1];
+    let n = (2 * rho + 1) as usize;
+    for (k, c) in v.iter_mut().take(n).enumerate() {
+        *c = at(k as isize - rho);
+    }
+    std::array::from_fn(|ch| {
+        let mut x = [0.0f32; 2 * MAX_MEDIAN_RADIUS + 1];
+        for (o, c) in x.iter_mut().zip(&v).take(n) {
+            *o = c[ch];
+        }
+        median_of(x.get_mut(..n).unwrap_or_default())
+    })
+}
+
+/// The median colour Auto Mask compares a pixel by, of radius `rho` ([`median_radius`]) over the
+/// colours `at(dx, dy)` around it: the 3 × 3 median ([`median3`]) at radius 1, past it the median
+/// of each column of the row medians (a separable median: it keeps straight edges as the square
+/// one does, at a fraction of its cost).
+pub fn median_at(at: impl Fn(isize, isize) -> AutoColor, rho: usize) -> AutoColor {
+    if rho <= 1 {
+        return median3(at);
+    }
+    median_line(|dy| median_line(|dx| at(dx, dy), rho), rho)
+}
+
 /// How far (pixels) a dab of radius `r` px looks for a flat spot to sample: a third of the radius.
 #[inline]
 pub fn search_reach(r: f64) -> isize {
     if r.is_finite() { (r / 3.0).round().clamp(0.0, 4096.0) as isize } else { 0 }
 }
 
-/// How far past its box (pixels) a stroke of radius `r` px reads median colours for its dabs'
-/// samples: their reach and one grid step more.
+/// How far past its box (pixels) a stroke of radius `r` px reads colours for its dabs' samples:
+/// their reach, one grid step and the widest median more.
 pub fn search_margin(r: f64) -> usize {
     let reach = search_reach(r);
-    (reach + (reach + SEARCH_STEPS - 1) / SEARCH_STEPS + 1) as usize
+    (reach + (reach + SEARCH_STEPS - 1) / SEARCH_STEPS + 1) as usize + MAX_MEDIAN_RADIUS
 }
 
 /// Positions a dab's search tries across its reach, each way from the centre.
@@ -197,7 +252,7 @@ impl AutoRefs {
 }
 
 /// The colours of a box of the photo an Auto Mask stroke reads: each pixel's, and the median
-/// ([`median3`]) of each pixel in the rows' spans it is made with (the pixels the stroke's dabs
+/// ([`median_at`]) of each pixel in the rows' spans it is made with (the pixels the stroke's dabs
 /// cover); any other pixel's median is worked out when asked for. Past the box, its edge pixels
 /// repeat.
 pub struct MedianBox {
@@ -205,19 +260,28 @@ pub struct MedianBox {
     y0: usize,
     w: usize,
     h: usize,
+    rho: usize,
     raw: Vec<AutoColor>,
-    /// (NaN luminance: not worked out)
+    /// The row medians a median past radius 1 is made of, and the medians (NaN luminance: not
+    /// worked out).
+    rows: Vec<AutoColor>,
     med: Vec<AutoColor>,
 }
 
 impl MedianBox {
-    /// The colours of the `x0..x1 × y0..y1` box of the photo (clamped to it), with medians in the
-    /// span `span(y)` (`x` from, to: exclusive) of each row `y`. Empty when `img` and `log_l` differ
-    /// in size.
+    /// No pixels.
+    pub fn empty() -> MedianBox {
+        MedianBox { x0: 0, y0: 0, w: 0, h: 0, rho: 1, raw: Vec::new(), rows: Vec::new(), med: Vec::new() }
+    }
+
+    /// The colours of the `x0..x1 × y0..y1` box of the photo (clamped to it), with medians of
+    /// radius `rho` in the span `span(y)` (`x` from, to: exclusive) of each row `y`. Empty when
+    /// `img` and `log_l` differ in size.
     pub fn new(
         img: &Rgb32f,
         log_l: &Plane,
         (x0, y0, x1, y1): (usize, usize, usize, usize),
+        rho: usize,
         span: impl Fn(usize) -> Option<(usize, usize)> + Sync,
     ) -> MedianBox {
         let (fw, fh) = (log_l.width, log_l.height);
@@ -226,6 +290,7 @@ impl MedianBox {
             return MedianBox::empty();
         }
         let (w, h) = (x1 - x0, y1 - y0);
+        let rho = rho.clamp(1, MAX_MEDIAN_RADIUS);
         let mut raw = vec![[0.0f32; 4]; w * h];
         crate::for_rows(&mut raw, w, |ry, row| {
             let y = y0 + ry;
@@ -234,23 +299,32 @@ impl MedianBox {
                 *c = auto_color(log_l.data.get(i).copied().unwrap_or(0.0), img.data.get(i).copied().unwrap_or([0.0; 3]));
             }
         });
-        let mut b = MedianBox { x0, y0, w, h, raw, med: Vec::new() };
+        let mut b = MedianBox { x0, y0, w, h, rho, raw, rows: Vec::new(), med: Vec::new() };
+        let fill =
+            |out: &mut Vec<AutoColor>, need: &(dyn Fn(usize) -> Option<(usize, usize)> + Sync), f: &(dyn Fn(isize, isize) -> AutoColor + Sync)| {
+                crate::for_rows(out, w, |ry, row| {
+                    let y = y0 + ry;
+                    let Some((a, z)) = need(y) else { return };
+                    let (a, z) = (a.clamp(x0, x1), z.clamp(x0, x1));
+                    for (c, x) in row.iter_mut().skip(a - x0).take(z.saturating_sub(a)).zip(a..) {
+                        *c = f(x as isize, y as isize);
+                    }
+                });
+            };
+        if rho > 1 {
+            // the row medians of the rows within `rho` of a span, across those spans
+            let need = |y: usize| {
+                let (lo, hi) = (y.saturating_sub(rho), y + rho);
+                (lo..=hi).filter_map(&span).reduce(|p, q| (p.0.min(q.0), p.1.max(q.1)))
+            };
+            let mut rows = vec![[f32::NAN; 4]; w * h];
+            fill(&mut rows, &need, &|x, y| b.row_median(x, y));
+            b.rows = rows;
+        }
         let mut med = vec![[f32::NAN; 4]; w * h];
-        crate::for_rows(&mut med, w, |ry, row| {
-            let y = y0 + ry;
-            let Some((a, z)) = span(y) else { return };
-            let (a, z) = (a.clamp(x0, x1), z.clamp(x0, x1));
-            for (c, x) in row.iter_mut().skip(a - x0).take(z.saturating_sub(a)).zip(a..) {
-                *c = b.median_of(x as isize, y as isize);
-            }
-        });
+        fill(&mut med, &span, &|x, y| b.median(x, y));
         b.med = med;
         b
-    }
-
-    /// No pixels.
-    pub fn empty() -> MedianBox {
-        MedianBox { x0: 0, y0: 0, w: 0, h: 0, raw: Vec::new(), med: Vec::new() }
     }
 
     /// The index of pixel `(x, y)` (frame pixels) clamped to the box.
@@ -262,8 +336,28 @@ impl MedianBox {
     }
 
     #[inline]
-    fn median_of(&self, x: isize, y: isize) -> AutoColor {
-        median3(|dx, dy| self.raw.get(self.index(x + dx, y + dy)).copied().unwrap_or([0.0; 4]))
+    fn raw_at(&self, x: isize, y: isize) -> AutoColor {
+        self.raw.get(self.index(x, y)).copied().unwrap_or([0.0; 4])
+    }
+
+    /// The median of the row through `(x, y)`, `rho` either side.
+    #[inline]
+    fn row_median(&self, x: isize, y: isize) -> AutoColor {
+        median_line(|dx| self.raw_at(x + dx, y), self.rho)
+    }
+
+    /// The median of pixel `(x, y)`, worked out from the colours (and the row medians made).
+    fn median(&self, x: isize, y: isize) -> AutoColor {
+        if self.rho <= 1 {
+            return median3(|dx, dy| self.raw_at(x + dx, y + dy));
+        }
+        median_line(
+            |dy| match self.rows.get(self.index(x, y + dy)) {
+                Some(c) if !c[0].is_nan() => *c,
+                _ => self.row_median(x, y + dy),
+            },
+            self.rho,
+        )
     }
 
     /// The median colour of pixel `(x, y)` (frame pixels).
@@ -271,7 +365,7 @@ impl MedianBox {
     pub fn at(&self, x: isize, y: isize) -> AutoColor {
         match self.med.get(self.index(x, y)) {
             Some(c) if !c[0].is_nan() => *c,
-            _ => self.median_of(x, y),
+            _ => self.median(x, y),
         }
     }
 }

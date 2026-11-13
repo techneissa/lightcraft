@@ -249,8 +249,8 @@ pub fn window_for_reads_checked(
         .collect();
     // Auto Mask strokes weigh each dab by the colours sampled by it and the dabs before it
     // (`masks::AutoRefs`: up to two radii back along the stroke, each sample read a third of a
-    // radius from its centre, through 3 × 3 medians): each dab reads pixels within 2.5 radii and a
-    // few pixels
+    // radius from its centre, through medians of `masks::median_radius`): each dab reads pixels
+    // within 2.5 radii, two median radii and a few pixels
     let mut dab_boxes: Vec<[f64; 4]> = Vec::new();
     for (on_photo, st) in autos {
         // One more than the window takes, so a stroke past it is still recognised as past it
@@ -261,7 +261,7 @@ pub fn window_for_reads_checked(
             continue;
         }
         for d in &dabs.dabs {
-            let m = 2.5 * r + 4.0;
+            let m = 2.5 * r + 2.0 * crate::masks::median_radius(ppl) as f64 + 4.0;
             let b = [d.x - m, d.y - m, d.x + m, d.y + m];
             if b.iter().all(|v| v.is_finite()) {
                 dab_boxes.push(b);

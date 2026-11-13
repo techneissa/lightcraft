@@ -15,7 +15,7 @@ use composite::{Blend, Mapping, PxRect};
 use egui::{Color32, ColorImage, Pos2, Rect, TextureHandle, TextureOptions, pos2};
 use lightcraft_geom::Point;
 use lightcraft_pipeline::masks::{
-    AutoRefs, accumulate, dab_alpha, dab_sample, pressure_flow, pressure_radius, push_dabs_counted, push_pressures, search_reach,
+    AutoRefs, accumulate, dab_alpha, dab_sample, median_radius, pressure_flow, pressure_radius, push_dabs_counted, push_pressures, search_reach,
 };
 use std::sync::Arc;
 
@@ -56,6 +56,9 @@ pub struct LiveImages {
 pub struct AutoCtx<'a> {
     pub guide: &'a auto::Guide,
     pub img_rect: Rect,
+    /// Screen points per photo long edge (as the brush's radius is measured): the scale of the
+    /// median pixels are compared by (`lightcraft_pipeline::masks::median_radius`).
+    pub long: f32,
 }
 
 /// The blended picture and the texture showing it.
@@ -180,6 +183,8 @@ impl LiveStroke {
         let base = (r, hard);
         // buffer pixel → fraction of the guide's picture
         let to_frac = |b: f64, lo: f32, origin: f32, extent: f32| ((b as f32 / scale + lo) - origin) / extent.max(1e-6);
+        // the median's radius at the scale of the guide's picture
+        let rho = auto.as_ref().map_or(1, |a| median_radius(f64::from(a.long * a.guide.size()[0] as f32 / a.img_rect.width().max(1e-6))));
         for (d, p) in dabs.into_iter().zip(pressures) {
             if !(d.x.is_finite() && d.y.is_finite()) {
                 continue;
@@ -194,7 +199,7 @@ impl LiveStroke {
                 );
                 // (the dab's radius in the picture's pixels)
                 let rg = r / f64::from(scale) * a.guide.size()[0] as f64 / f64::from(a.img_rect.width().max(1e-6));
-                self.refs.next(dab_sample(|x, y| a.guide.median(x, y), gx, gy, search_reach(rg)))
+                self.refs.next(dab_sample(|x, y| a.guide.median(x, y, rho), gx, gy, search_reach(rg)))
             });
             let x0 = (d.x - r).floor().clamp(0.0, self.w as f64) as usize;
             let x1 = (d.x + r).ceil().clamp(0.0, self.w as f64) as usize;
@@ -216,7 +221,7 @@ impl LiveStroke {
                             to_frac(x as f64 + 0.5, clip.left(), ctx.img_rect.left(), ctx.img_rect.width()),
                             to_frac(y as f64 + 0.5, clip.top(), ctx.img_rect.top(), ctx.img_rect.height()),
                         );
-                        a *= rf.weight(ctx.guide.median(gx, gy));
+                        a *= rf.weight(ctx.guide.median(gx, gy, rho));
                     }
                     *v = accumulate(*v, a, flow, density);
                 }
@@ -291,6 +296,8 @@ pub struct Look<'a> {
     pub tint: bool,
     /// Auto Mask: weigh the dabs by the picture under them.
     pub auto: bool,
+    /// Screen points per photo long edge (as the brush's radius is measured; Auto Mask).
+    pub long: f32,
     /// Egui time (seconds), for the hold after release.
     pub now: f64,
     /// The mask overlay of the committed strokes ([`crate::mask_tint`]: the loupe's render key and the picture's rect), drawn
@@ -418,7 +425,7 @@ pub fn paint(
     let Some(s) = slot else { return };
     let t0 = std::time::Instant::now();
     let guide = look.images.filter(|_| look.auto).map(|i| (auto::guide_for(i.key.0, &i.base), i.img_rect));
-    let new_dabs = s.stamp_with(points, pressure, guide.as_ref().map(|(guide, img_rect)| AutoCtx { guide, img_rect: *img_rect }));
+    let new_dabs = s.stamp_with(points, pressure, guide.as_ref().map(|(guide, img_rect)| AutoCtx { guide, img_rect: *img_rect, long: look.long }));
     let blended = look.images.is_some_and(|images| s.draw_blend(ctx, painter, images));
     if let (true, Some(over)) = (blended, &look.over) {
         over.paint(painter);
@@ -676,7 +683,7 @@ mod tests {
         let screen: Vec<Pos2> = stroke.points.iter().map(|p| to_out.apply(*p)).map(|q| pos2(q.x as f32, q.y as f32)).collect();
         let mut steps = LiveStroke::new(live);
         for n in 1..=screen.len() {
-            steps.stamp_with(&screen[..n], &[], Some(AutoCtx { guide: &guide, img_rect: clip }));
+            steps.stamp_with(&screen[..n], &[], Some(AutoCtx { guide: &guide, img_rect: clip, long: w as f32 }));
         }
         let worst = steps.alpha.iter().zip(&committed.data).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
         assert!(worst < 1e-4, "live and committed Auto Mask coverage differ by {worst}");
@@ -695,7 +702,7 @@ mod tests {
             .collect();
         let guide = auto::Guide::new(&ColorImage::new([400, 200], px));
         let img_rect = Rect::from_min_size(Pos2::ZERO, vec2(400.0, 200.0));
-        let ctx = || Some(AutoCtx { guide: &guide, img_rect });
+        let ctx = || Some(AutoCtx { guide: &guide, img_rect, long: 400.0 });
         // dabs of radius 30 along a grey line that ends 10 px short of the border at x = 200: the
         // last dab reaches 20 px over it
         let pts = [pos2(120.0, 100.0), pos2(190.0, 100.0)];

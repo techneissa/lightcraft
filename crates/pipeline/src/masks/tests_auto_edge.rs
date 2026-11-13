@@ -240,3 +240,91 @@ fn a_stroke_follows_a_gradient_and_a_move_to_another_surface() {
     let a = shape_alpha(&MaskShape::Brush { strokes: vec![across(true)] }, &f, W, H, &sc.img, &l, 0.0, None);
     assert!(a.get(60, 100) > 0.99 && a.get(340, 100) > 0.99, "{} {}", a.get(60, 100), a.get(340, 100));
 }
+
+/// The same stroke on the same noisy photo, rendered at the scale the comparison is tuned at (a fit preview) and at
+/// three times it (an export, with three times the pixel noise), paints the same mask, with no holes at either size.
+#[test]
+fn a_stroke_paints_the_same_mask_at_two_sizes() {
+    let (holes, leak, diff) = two_sizes(1.2);
+    assert!(holes[0] < 1.0 && holes[1] < 1.0, "holes {:.2} % at 1x, {:.2} % at 3x", holes[0], holes[1]);
+    assert!(leak[0] < 1.0 && leak[1] < 1.0, "leak {:.2} % at 1x, {:.2} % at 3x", leak[0], leak[1]);
+    assert!(diff < 1.0, "{diff:.2} % of the brush's pixels differ by over a quarter between the sizes");
+}
+
+/// Holes and leak (%, at 1x and 3x) of a stroke along an edge between two noisy surfaces, and the share (%) of the
+/// brush's pixels off the edge where the 3x mask, averaged down to 1x, differs from the 1x mask by over a quarter.
+/// `g`: the 3x picture's grain (EV per pixel; half of it on each channel).
+fn two_sizes(g: f32) -> ([f64; 2], [f64; 2], f64) {
+    // a square photo cropped to its middle fifth: 320 px renders it at 1600 px per long edge
+    let long = 1600usize;
+    let mut d = DevelopSettings::default();
+    d.crop.geometry.rect = lightcraft_geom::Rect::from_center(Point::new(0.5, 0.5), 0.2, 0.2);
+    let f = Frame::new(long, long, &d, true);
+    let (n1, n3) = (320usize, 960usize);
+    // the 3x picture: a noisy surface left of the middle, a darker noisy one right of it; the 1x picture is its
+    // 3 x 3 box average, as a preview is the photo scaled down
+    let big =
+        Rgb32f::from_fn(
+            n3,
+            n3,
+            |x, y| {
+                if x < n3 / 2 { grain([0.10, 0.09, 0.07], x, y, g, g / 2.0) } else { grain([0.035, 0.03, 0.035], x, y, g, g / 2.0) }
+            },
+        );
+    let small = Rgb32f::from_fn(n1, n1, |x, y| {
+        let mut s = [0.0f32; 3];
+        for k in 0..9 {
+            let c = big.get(3 * x + k % 3, 3 * y + k / 3);
+            s = std::array::from_fn(|i| s[i] + c[i] / 9.0);
+        }
+        s
+    });
+    // a stroke 6 px (at 1x) left of the edge, radius 20 px at 1x
+    let to_norm = f.out_to_norm(n1, n1);
+    let pt = |x: f64, y: f64| to_norm.apply(Point::new(x, y));
+    let stroke = |auto_mask| BrushStroke {
+        points: vec![pt(154.0, 40.0), pt(154.0, 280.0)],
+        size: 20.0 / long as f64,
+        feather: 50.0,
+        auto_mask,
+        ..Default::default()
+    };
+    let paint = |img: &Rgb32f, n: usize, auto: bool| {
+        let l = img.map(crate::local::log_lum);
+        shape_alpha(&MaskShape::Brush { strokes: vec![stroke(auto)] }, &f, n, n, img, &l, 0.0, None)
+    };
+    let (a1, a3) = (paint(&small, n1, true), paint(&big, n3, true));
+    let (p1, p3) = (paint(&small, n1, false), paint(&big, n3, false));
+    let score = |a: &Plane, p: &Plane, n: usize| {
+        let (mut holes, mut core, mut leak, mut far) = (0usize, 0usize, 0.0f64, 0usize);
+        for y in 0..n {
+            for x in 0..n {
+                let (a, p) = (a.get(x, y), p.get(x, y));
+                // (2 px at 1x either side of the edge count as the edge)
+                let u = x as f64 * n1 as f64 / n as f64;
+                if u < 158.0 && p > 0.95 {
+                    core += 1;
+                    holes += usize::from(a < 0.5);
+                } else if u > 162.0 && p > 0.0 {
+                    far += 1;
+                    leak += f64::from(a);
+                }
+            }
+        }
+        (100.0 * holes as f64 / core.max(1) as f64, 100.0 * leak / far.max(1) as f64)
+    };
+    let ((h1, l1), (h3, l3)) = (score(&a1, &p1, n1), score(&a3, &p3, n3));
+    let (mut differ, mut brush) = (0usize, 0usize);
+    for y in 0..n1 {
+        for x in 0..n1 {
+            // (the edge itself may sit a fraction of a 1x pixel apart)
+            if p1.get(x, y) <= 0.0 || (158..162).contains(&x) {
+                continue;
+            }
+            let down = (0..9).map(|k| a3.get(3 * x + k % 3, 3 * y + k / 3)).sum::<f32>() / 9.0;
+            brush += 1;
+            differ += usize::from((down - a1.get(x, y)).abs() > 0.25);
+        }
+    }
+    ([h1, h3], [l1, l3], 100.0 * differ as f64 / brush.max(1) as f64)
+}

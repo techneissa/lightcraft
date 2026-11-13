@@ -29,7 +29,11 @@ fn reference_brush(strokes: &[BrushStroke], frame: &Frame, w: usize, h: usize, i
         let (dens, erase, auto) = (bd.density, bd.erase, bd.auto);
         let mut stroke_alpha = Plane::new(w, h);
         // (Auto Mask: the dabs' references and the median colours of the whole frame)
-        let (refs, med) = if auto { brush::auto_refs(&bd, img, log_l, (0, 0, w, h)) } else { (Vec::new(), auto_edge::MedianBox::empty()) };
+        let (refs, med) = if auto {
+            brush::auto_refs(&bd, img, log_l, (0, 0, w, h), auto_edge::median_radius(frame.px_per_long(w)))
+        } else {
+            (Vec::new(), auto_edge::MedianBox::empty())
+        };
         for (k, d) in bd.dabs.iter().enumerate() {
             let (r, hard, flow) = bd.dab(k);
             let (x0, x1) = (((d.x - r).floor().max(0.0)) as usize, ((d.x + r).ceil().max(0.0) as usize).min(w));

@@ -9,7 +9,7 @@ use lightcraft_pipeline::finish::{MASK_TERMS, effect_terms_with};
 use lightcraft_pipeline::geometry::Frame;
 use lightcraft_pipeline::masks::grid::{PosGrid, Ramp};
 use lightcraft_pipeline::masks::{
-    AlphaKeys, BRUSH_ENTRIES, BrushCache, BrushCtx, Mattes, alpha_key, brush_base, brush_chain, brush_dabs, note_evaluation, note_stroke,
+    AlphaKeys, BRUSH_ENTRIES, BrushCache, BrushCtx, Mattes, alpha_key, brush_base, brush_chain, brush_dabs, held_brush, note_evaluation, note_stroke,
     rasterize_brush,
 };
 use lightcraft_raster::Rgb32f;
@@ -133,10 +133,16 @@ fn brush_part(cx: &mut Cx<'_>, env: &BrushEnv<'_>, strokes: &[BrushStroke], inve
 /// with its planes kept in `cache`, so a new stroke stamps only that stroke. `inverted`: the part is turned around.
 fn auto_brush_part(cx: &mut Cx<'_>, host: &mut Host, env: &BrushEnv<'_>, strokes: &[BrushStroke], inverted: bool, cache: &mut BrushCache) -> Buf {
     let (w, h) = (env.w, env.h);
-    let img = host.lin.get_or_insert_with(|| Arc::new(cx.read_rgb(env.lin, w, h))).clone();
-    let l = host.log_l.get_or_insert_with(|| Arc::new(cx.read_plane(env.log_l, w, h))).clone();
     let mut ctx = BrushCtx { cache, geo: env.keys.geo, image: env.keys.image };
-    let mut v = rasterize_brush(strokes, env.frame, w, h, &img, &l, Some(&mut ctx));
+    // (a part held whole needs no picture: the read-back is only for strokes to stamp)
+    let mut v = match held_brush(strokes, w, h, &mut ctx) {
+        Some(v) => v,
+        None => {
+            let img = host.lin.get_or_insert_with(|| Arc::new(cx.read_rgb(env.lin, w, h))).clone();
+            let l = host.log_l.get_or_insert_with(|| Arc::new(cx.read_plane(env.log_l, w, h))).clone();
+            rasterize_brush(strokes, env.frame, w, h, &img, &l, Some(&mut ctx))
+        }
+    };
     if inverted {
         v.data.iter_mut().for_each(|x| *x = 1.0 - *x);
     }

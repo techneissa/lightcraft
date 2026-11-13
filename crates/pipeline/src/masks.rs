@@ -26,8 +26,10 @@ mod planes;
 pub use alpha::note_evaluation;
 pub use alpha::{AlphaCache, AlphaKeys, KEPT_ALPHA_BYTES, KEPT_ALPHAS, MaskAlpha, alpha_key, guide_plane, mask_evaluations, reads, uses_guide};
 use alpha::{map_rows, zip_rows};
-pub use auto_edge::{AutoColor, AutoRef, AutoRefs, auto_color, dab_sample, median3, search_reach};
-pub use brush::{BRUSH_ENTRIES, BrushCache, BrushCtx, brush_base, brush_chain, note_stroke, rasterize as rasterize_brush, strokes_rasterized};
+pub use auto_edge::{AUTO_MEDIAN_LONG, AutoColor, AutoRef, AutoRefs, auto_color, dab_sample, median_at, median_radius, search_reach};
+pub use brush::{
+    BRUSH_ENTRIES, BrushCache, BrushCtx, brush_base, brush_chain, held_brush, note_stroke, rasterize as rasterize_brush, strokes_rasterized,
+};
 pub use color_range::color_range_tolerance;
 pub(crate) use color_range::tonemap_for_select;
 pub use planes::{MaskWant, PlanesAsk, PlanesOut, planes_signature, wanted};
