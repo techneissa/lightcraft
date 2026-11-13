@@ -851,11 +851,16 @@ fn describe_field(app: &mut LightcraftApp, ui: &mut egui::Ui, new_mask: bool) {
         return;
     }
     app.ui.describe = Some((op.clone(), text.clone()));
+    // zoomed in, it looks only in the part of the photo on screen (issue #281)
+    let region = crate::panels::detail::describe_area::region_for(app, &op);
+    if region.is_some() {
+        ui.label(egui::RichText::new(crate::i18n::tr("Limited to the zoomed area")).small().weak());
+    }
     if submit && !text.trim().is_empty() {
         let r = if op == "new" {
-            app.run_typed("mask.add", json!({"kind": "prompt", "text": text}))
+            app.run_typed("mask.add", json!({"kind": "prompt", "text": text, "region": region}))
         } else {
-            app.run_typed("mask.addComponent", json!({"op": op, "kind": "prompt", "text": text}))
+            app.run_typed("mask.addComponent", json!({"op": op, "kind": "prompt", "text": text, "region": region}))
         };
         match r {
             // the mask appears when the model has found it (a detail pass follows)
