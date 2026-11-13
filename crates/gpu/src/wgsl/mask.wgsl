@@ -36,8 +36,11 @@ fn pos(x: u32, y: u32) -> vec2<f32> {
 //   0 linear: a.xy, d.xy, |d|²         1 radial: centre.xy, cos, sin, rx, ry, feather, invert
 //   (0 and 1: then P[18] = grid, P[19..25] its table: see `grid_pos`)
 //   2 luminance range: lo, hi, lo feather, hi feather, ev
-//   3 colour range: tol, gain, sample count (OkLab triples in aux)
+//   3 colour range: tol, gain, sample count (`masks::color_range::Key`s in aux, 8 values each)
 //   (brush strokes: see `stroke`)
+// `masks::color_range::L_FLOOR`.
+const CR_L_FLOOR: f32 = 0.1;
+
 @compute @workgroup_size(16, 16)
 fn shape(@builtin(global_invocation_id) g: vec3<u32>) {
     let w = pu(0u);
@@ -77,15 +80,20 @@ fn shape(@builtin(global_invocation_id) g: vec3<u32>) {
     } else if (kind == 3u) {
         let tol = pf(10u);
         let gain = pf(11u);
+        // `masks::color_range::pixel`, then `distance` to each key (8 values: see `color_range::Key`)
         let c = vec3<f32>(img[3u * i], img[3u * i + 1u], img[3u * i + 2u]) * gain;
-        let lab = oklab(c / (1.0 + c));
+        let lab = oklab(c);
+        let ab = lab.yz / sqrt(lab.x * lab.x + CR_L_FLOOR * CR_L_FLOOR);
+        let l = oklab(c / (1.0 + c)).x;
         var best = 3.402823e38;
         for (var k = 0u; k < pu(12u); k++) {
-            let s = vec3<f32>(aux[3u * k], aux[3u * k + 1u], aux[3u * k + 2u]);
-            let da = lab.y - s.y;
-            let db = lab.z - s.z;
-            let dl = lab.x - s.x;
-            best = min(best, sqrt(da * da + db * db + 0.25 * (dl * dl)));
+            let o = 8u * k;
+            let d = ab - vec2<f32>(aux[o], aux[o + 1u]);
+            let u = vec2<f32>(aux[o + 3u], aux[o + 4u]);
+            let along = (d.x * u.x + d.y * u.y) * aux[o + 5u];
+            let across = (d.y * u.x - d.x * u.y) * aux[o + 6u];
+            let dl = (l - aux[o + 2u]) * aux[o + 7u];
+            best = min(best, sqrt(along * along + across * across + dl * dl));
         }
         v = 1.0 - sstep(tol * 0.5, tol, best);
     }

@@ -315,6 +315,7 @@ pub(crate) fn masks(
             let f32s = |v: &[f64]| v.iter().map(|x| (*x as f32).to_bits()).collect::<Vec<u32>>();
             let mut aux: Vec<f32> = Vec::new();
             let mut own: Option<Buf> = None;
+            let mut smooth: Option<f32> = None;
             let kind = match &comp.shape {
                 MaskShape::Linear { start, end } => {
                     let (a, b) = (frame.norm_to_long(*start), frame.norm_to_long(*end));
@@ -335,11 +336,14 @@ pub(crate) fn masks(
                     Some(2)
                 }
                 MaskShape::ColorRange { samples, refine } => {
-                    let tol = lightcraft_pipeline::masks::color_range_tolerance(*refine);
-                    // at most the CPU's samples (`MAX_COLOR_RANGE_SAMPLES`): cost is pixels x samples
-                    let samples = samples.iter().take(lightcraft_develop::MAX_COLOR_RANGE_SAMPLES);
-                    p.extend([tol.to_bits(), ev.exp2().to_bits(), samples.len() as u32]);
-                    aux.extend(samples.flat_map(|s| s.map(|v| v as f32)));
+                    use lightcraft_pipeline::masks::color_range;
+                    let tol = color_range::color_range_tolerance(*refine);
+                    // (as the CPU: at most `MAX_COLOR_RANGE_SAMPLES`, cost is pixels x samples; no sample, nothing selected)
+                    let keys = color_range::keys(samples);
+                    p.extend([tol.to_bits(), ev.exp2().to_bits(), keys.len() as u32]);
+                    aux.extend(keys.iter().flatten());
+                    // then smoothed along the photo's edges, as on the CPU (`color_range::fill`)
+                    smooth = (!keys.is_empty()).then(|| color_range::smooth_sigma(frame, w, h));
                     Some(3)
                 }
                 MaskShape::Brush { strokes } => {
@@ -360,7 +364,10 @@ pub(crate) fn masks(
                     p[2] = k;
                     let aux = (!aux.is_empty()).then(|| cx.gpu.upload(&aux));
                     cx.run("shape", &p, &[Some(lin), Some(&prep.log_l), aux.as_ref(), Some(&comp_plane), Some(&alpha)], groups2(w, h, [16, 16]));
-                    None
+                    // (the filter turns with an inverted part: smoothing `1 - c` gives `1 -` the smoothed `c`)
+                    smooth.map(|sigma| {
+                        guided_cross(cx, &prep.log_l, &comp_plane, w, h, sigma, lightcraft_pipeline::masks::color_range::SMOOTH_EPS, 1.0)
+                    })
                 }
                 None if lightcraft_pipeline::masks::uses_guide(&comp.shape) => {
                     // a stored selection, on the CPU: it follows the resampled photo's edges (made once per frame and kept), and

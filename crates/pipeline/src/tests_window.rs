@@ -253,7 +253,7 @@ fn a_mask_overlay_window_matches_the_whole_render() {
         ("linear refined", MaskShape::Linear { start: Point::new(0.45, 0.5), end: Point::new(0.55, 0.5) }, 100.0),
         ("sky", MaskShape::sky(), 0.0),
         // a model's grid, enlarged along the photo's edges (issue #3272)
-        ("prompt", MaskShape::Prompt { text: "middle".into(), seg: Some(middle_seg(32)), detail: vec![], edge: 0.0 }, 0.0),
+        ("prompt", MaskShape::Prompt { text: "middle".into(), seg: Some(middle_seg(32)), detail: vec![], edge: 0.0, region: None }, 0.0),
     ];
     for (name, shape, refine) in shapes {
         let mut s = DevelopSettings::default();

@@ -342,18 +342,55 @@ fn radial_body_contains(shape: &MaskShape, at: Point, map: &CanvasMap) -> bool {
     x * x + y * y <= 1.0
 }
 
-/// Colour Range eyedropper: a click samples the colour under it for the selected mask's
-/// colour range, at normalized frame coordinates (crop, rotation and zoom aware);
-/// ⇧-click adds a sample (up to 5).
-pub(super) fn color_range_pick(app: &mut LightcraftApp, ui: &egui::Ui, resp: &egui::Response, map: &CanvasMap) {
+/// Colour Range eyedropper: a click samples the colour under it for the selected mask's colour range, a drag samples
+/// the colours in the box it draws (normalized frame coordinates: crop, rotation and zoom aware); ⇧ adds to the
+/// colours (up to 5). `from_pin`: whether a press there is on another mask's pin, where a drag draws no box.
+pub(super) fn color_range_pick(app: &mut LightcraftApp, ui: &egui::Ui, resp: &egui::Response, map: &CanvasMap, from_pin: impl Fn(Pos2) -> bool) {
+    let add = ui.input(|i| i.modifiers.shift);
+    let sample = |app: &mut LightcraftApp, p: serde_json::Value| {
+        if let Err(e) = app.run("mask.sampleColor", p) {
+            app.toast(ui.ctx(), e);
+        }
+    };
     if resp.clicked()
         && let Some(q) = resp.interact_pointer_pos()
     {
         let n = map.norm(q);
-        let add = ui.input(|i| i.modifiers.shift);
-        if let Err(e) = app.run("mask.sampleColor", json!({"x": n.x, "y": n.y, "add": add})) {
-            app.toast(ui.ctx(), e);
-        }
+        sample(app, json!({"x": n.x, "y": n.y, "add": add}));
+        return;
+    }
+    // a drag: (where it began, where the pointer is) on screen
+    let key = egui::Id::unique("colorRangeBox");
+    if resp.drag_started() {
+        let from = ui.input(|i| i.pointer.press_origin()).or(resp.interact_pointer_pos()).filter(|q| !from_pin(*q));
+        ui.data_mut(|d| match from {
+            Some(a) => {
+                d.insert_temp(key, (a, a));
+            }
+            None => {
+                d.remove_temp::<(Pos2, Pos2)>(key);
+            }
+        });
+    }
+    // (the release frame reports `dragged()` too, so the last position is taken before the stop)
+    if resp.dragged()
+        && let Some(q) = resp.interact_pointer_pos()
+        && let Some((a, _)) = ui.data(|d| d.get_temp::<(Pos2, Pos2)>(key))
+    {
+        ui.data_mut(|d| d.insert_temp(key, (a, q)));
+    }
+    let Some((a, b)) = ui.data(|d| d.get_temp::<(Pos2, Pos2)>(key)) else { return };
+    if resp.drag_stopped() {
+        ui.data_mut(|d| d.remove_temp::<(Pos2, Pos2)>(key));
+        let (na, nb) = (map.norm(a), map.norm(b));
+        sample(app, json!({"x": na.x, "y": na.y, "x2": nb.x, "y2": nb.y, "add": add}));
+        return;
+    }
+    if resp.dragged() {
+        let r = Rect::from_two_pos(a, b);
+        let p = ui.painter_at(resp.rect);
+        p.rect_stroke(r, 0.0, Stroke::new(2.0, Color32::from_black_alpha(160)), StrokeKind::Middle);
+        p.rect_stroke(r, 0.0, Stroke::new(1.0, Color32::WHITE), StrokeKind::Middle);
     }
 }
 
@@ -370,6 +407,9 @@ pub(super) fn mask_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &eg
         painter.set_invisible();
     }
     let p = &painter;
+    if let Some(photo) = app.session.active() {
+        super::describe_area::note(app, photo, map);
+    }
     // (mask, component, handle, screen position) of everything that can be grabbed
     let mut grips: Vec<(u32, usize, u8, Pos2)> = Vec::new();
     // pins follow Show Pins and the Tool Overlay mode (Shift+H); Auto hides them while brushing
@@ -390,6 +430,10 @@ pub(super) fn mask_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &eg
         // painted region (`view_overlay` at detail.rs:1354 only covers masks with components).
         let show_outline = sel || (app.ui.mask_overlay_all && m.visible && !m.components.is_empty());
         for (ci, c) in m.components.iter().enumerate() {
+            // (a Describe limited to a part of the photo: that part, issue #281)
+            if sel && let Some(r) = c.shape.region() {
+                super::describe_area::outline(p, map, r);
+            }
             if show_outline {
                 // the selected part's handles are blue: the ones a drag takes
                 component_outline(ui, p, map, (m.id, ci, sel && app.session.active_part() == Some(ci)), &c.shape, sel, &mut grips);
@@ -427,7 +471,7 @@ pub(super) fn mask_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &eg
         if resp.hovered() && !over_pin {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
         }
-        color_range_pick(app, ui, resp, map);
+        color_range_pick(app, ui, resp, map, |q| other_pin_at(&grips, active, q).is_some());
         return;
     }
     if app.ui.tool == "object" {

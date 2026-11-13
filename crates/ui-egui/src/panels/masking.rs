@@ -149,7 +149,7 @@ fn show_mask_panel(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                             // an empty colour range; clicking the photo samples it
                             let _ = app.run("mask.add", json!({"kind": "colorRange"}));
                             app.ui.tool = "colorRange".into();
-                            app.toast(ui.ctx(), crate::i18n::tr("Click the photo to pick a colour · ⇧-click adds more"));
+                            app.toast(ui.ctx(), crate::i18n::tr("Click a colour in the photo, or drag a box over a range · ⇧ adds more"));
                         }
                         "object" => start_object(app, ui.ctx(), "new"),
                         "prompt" => start_describe(app, "new"),
@@ -663,7 +663,9 @@ pub(super) fn range_controls(app: &mut LightcraftApp, ui: &mut egui::Ui, comp: u
                 );
                 let picking = app.ui.tool == "colorRange";
                 if text_button(ui, &format!("colorPick{comp}"), crate::i18n::tr("Pick"), picking)
-                    .on_hover_text(crate::i18n::tr("Click the photo to pick a colour; ⇧-click adds more (up to 5)"))
+                    .on_hover_text(crate::i18n::tr(
+                        "Click a colour in the photo, or drag a box over a range of colours. ⇧ adds more, up to 5 colours.",
+                    ))
                     .clicked()
                 {
                     app.ui.tool = if picking { String::new() } else { "colorRange".into() };
@@ -851,11 +853,16 @@ fn describe_field(app: &mut LightcraftApp, ui: &mut egui::Ui, new_mask: bool) {
         return;
     }
     app.ui.describe = Some((op.clone(), text.clone()));
+    // zoomed in, it looks only in the part of the photo on screen (issue #281)
+    let region = crate::panels::detail::describe_area::region_for(app);
+    if region.is_some() {
+        ui.label(egui::RichText::new(crate::i18n::tr("Limited to the zoomed area")).small().weak());
+    }
     if submit && !text.trim().is_empty() {
         let r = if op == "new" {
-            app.run_typed("mask.add", json!({"kind": "prompt", "text": text}))
+            app.run_typed("mask.add", json!({"kind": "prompt", "text": text, "region": region}))
         } else {
-            app.run_typed("mask.addComponent", json!({"op": op, "kind": "prompt", "text": text}))
+            app.run_typed("mask.addComponent", json!({"op": op, "kind": "prompt", "text": text, "region": region}))
         };
         match r {
             // the mask appears when the model has found it (a detail pass follows)

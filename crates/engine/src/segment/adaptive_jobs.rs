@@ -12,6 +12,9 @@ use crate::Session;
 pub(crate) struct Request {
     #[cfg(feature = "sam")]
     kind: super::worker::Kind,
+    /// The part of the photo the model sees (a Describe limited to one, issue #281: rendered zoomed in); `None`, all of it.
+    #[cfg(feature = "sam")]
+    region: Option<[f64; 4]>,
 }
 
 /// How an AI part is found on a photo.
@@ -71,7 +74,7 @@ impl Session {
                 #[cfg(feature = "sam")]
                 {
                     match self.concept_kind(&c) {
-                        Ok((kind, _)) => Ask::Model { request: Request { kind }, invert: c.invert },
+                        Ok((kind, _)) => Ask::Model { request: Request { kind, region: None }, invert: c.invert },
                         Err(e) => Ask::Missing(e),
                     }
                 }
@@ -91,7 +94,7 @@ impl Session {
                 #[cfg(feature = "sam")]
                 {
                     let kind = super::worker::Kind::Clicks(Self::model_clicks(&clicks_of(hint, exclude)));
-                    Ask::Model { request: Request { kind }, invert: false }
+                    Ask::Model { request: Request { kind, region: None }, invert: false }
                 }
                 #[cfg(not(feature = "sam"))]
                 {
@@ -109,7 +112,9 @@ impl Session {
                 }
                 #[cfg(feature = "sam")]
                 {
-                    Ask::Model { request: Request { kind: super::worker::Kind::Text(text.to_string()) }, invert: false }
+                    // (a Describe limited to a part of the photo looks there, zoomed in, as when it was made: issue #281)
+                    let (kind, region) = super::text_kind(text, shape.region());
+                    Ask::Model { request: Request { kind, region }, invert: false }
                 }
                 #[cfg(not(feature = "sam"))]
                 Ask::Missing("AI masks are not available in this build".into())
@@ -122,7 +127,7 @@ impl Session {
     pub(crate) fn adaptive_wait(&mut self, id: PhotoId, request: Request) -> Result<Option<SegMask>, String> {
         #[cfg(feature = "sam")]
         {
-            self.segment_wait(id, request.kind, None)
+            self.segment_wait(id, request.kind, request.region)
         }
         #[cfg(not(feature = "sam"))]
         {
@@ -140,7 +145,7 @@ impl Session {
     ) -> Result<(u64, std::sync::Arc<std::sync::atomic::AtomicBool>), String> {
         #[cfg(feature = "sam")]
         {
-            let job = self.segment_job(id, request.kind, super::Tag::Wait, replies.channel.0.clone(), None)?;
+            let job = self.segment_job(id, request.kind, super::Tag::Wait, replies.channel.0.clone(), request.region)?;
             let out = (job.id, job.cancel.clone());
             self.segmenter.worker.submit(job)?;
             Ok(out)
@@ -150,5 +155,33 @@ impl Session {
             let _ = (id, request, replies);
             Err("AI masks are not available in this build".into())
         }
+    }
+}
+
+#[cfg(all(test, feature = "sam"))]
+mod tests {
+    use super::*;
+
+    /// Issue #281: Update AI Masks asks a Describe limited to a part of the photo there, zoomed in, as the Describe
+    /// field did (not on the whole photo, clipped afterwards). No model runs: only the request is looked at.
+    #[test]
+    fn a_describe_with_a_region_is_asked_zoomed_in_there() {
+        let mut s = Session::with_demo();
+        let dir = std::env::temp_dir().join(format!("lc-test-sam-adaptive-region-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("model.safetensors"), b"\x10\x00\x00\x00\x00\x00\x00\x00{}").unwrap();
+        std::fs::write(dir.join("vocab.json"), b"{}").unwrap();
+        std::fs::write(dir.join("merges.txt"), b"#version: 0.2\n").unwrap();
+        s.segmenter.dir = Some(dir.clone());
+        let id = s.active().unwrap();
+        let area = [0.1, 0.2, 0.3, 0.4];
+        let shape = MaskShape::Prompt { text: "eye".into(), seg: None, detail: Vec::new(), edge: 0.0, region: Some(area) };
+        let Ask::Model { request, .. } = s.adaptive_ask(id, &shape) else { panic!("asked of the model") };
+        assert_eq!(request.region, Some(area));
+        assert!(matches!(request.kind, super::super::worker::Kind::Detail { region, .. } if region == area));
+        let whole = MaskShape::prompt("eye");
+        let Ask::Model { request, .. } = s.adaptive_ask(id, &whole) else { panic!("asked of the model") };
+        assert!(request.region.is_none() && matches!(request.kind, super::super::worker::Kind::Text(_)));
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

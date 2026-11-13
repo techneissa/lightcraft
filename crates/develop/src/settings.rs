@@ -1198,6 +1198,11 @@ pub enum MaskShape {
         /// Edge −100..100, as for `Object`.
         #[serde(default, skip_serializing_if = "is_zero")]
         edge: f64,
+        /// The part of the photo the description was looked for in, normalized `[x0, y0, x1, y1]` in the mask's
+        /// coordinates (the loupe's zoomed-in view when it was made); `None`, the whole photo. Nothing outside it is
+        /// selected (issue #281).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        region: Option<[f64; 4]>,
     },
     People {
         person: u32,
@@ -1240,6 +1245,20 @@ impl MaskShape {
     /// A People shape of `parts` of person `person`, without a stored selection (fork, `fork/select-people.md`).
     pub fn people(person: u32, parts: Vec<String>) -> Self {
         MaskShape::People { person, parts, face: None, seg: None, detail: Vec::new(), edge: 0.0 }
+    }
+
+    /// A Describe shape for `text` over the whole photo, without a selection yet.
+    pub fn prompt(text: impl Into<String>) -> Self {
+        MaskShape::Prompt { text: text.into(), seg: None, detail: Vec::new(), edge: 0.0, region: None }
+    }
+
+    /// The part of the photo a Describe shape is limited to ([`MaskShape::Prompt`]'s `region`, cleaned by
+    /// [`prompt_region`]); `None` for the whole photo and every other shape.
+    pub fn region(&self) -> Option<[f64; 4]> {
+        match self {
+            MaskShape::Prompt { region: Some(r), .. } => prompt_region(*r),
+            _ => None,
+        }
     }
 
     /// The segmentation mask data for shapes that carry one (Object, Describe/Prompt, Subject, Sky, Background).
@@ -1296,6 +1315,26 @@ pub struct Mask {
     /// made (`lightcraft_engine::cmd::mask_invert`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub before_invert: Vec<(MaskOp, bool)>,
+}
+
+/// Smallest side of a Describe region, normalized: a smaller box (a slip of the mouse, a hostile document) is no area
+/// to look in.
+pub const MIN_PROMPT_REGION: f64 = 0.005;
+
+/// A Describe region (`[x0, y0, x1, y1]`, normalized) made safe to use: inside the photo, corners in order, each side
+/// at least [`MIN_PROMPT_REGION`]. `None` when it holds a non-finite number, is smaller than that, or covers (nearly)
+/// the whole photo: the whole photo is looked in then.
+pub fn prompt_region(r: [f64; 4]) -> Option<[f64; 4]> {
+    if !r.iter().all(|v| v.is_finite()) {
+        return None;
+    }
+    let (x0, x1) = (r[0].min(r[2]).clamp(0.0, 1.0), r[0].max(r[2]).clamp(0.0, 1.0));
+    let (y0, y1) = (r[1].min(r[3]).clamp(0.0, 1.0), r[1].max(r[3]).clamp(0.0, 1.0));
+    if x1 - x0 < MIN_PROMPT_REGION || y1 - y0 < MIN_PROMPT_REGION {
+        return None;
+    }
+    // (a view that shows all but a sliver of the photo is the whole photo)
+    ((x1 - x0) * (y1 - y0) < 0.98).then_some([x0, y0, x1, y1])
 }
 
 fn is_zero(v: &f64) -> bool {

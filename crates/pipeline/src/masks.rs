@@ -17,6 +17,7 @@ use crate::geometry::Frame;
 mod alpha;
 mod auto_edge;
 mod brush;
+pub mod color_range;
 pub mod grid;
 mod key;
 mod people;
@@ -27,6 +28,8 @@ pub use alpha::{AlphaCache, AlphaKeys, KEPT_ALPHA_BYTES, KEPT_ALPHAS, MaskAlpha,
 use alpha::{map_rows, zip_rows};
 pub use auto_edge::{AutoColor, AutoRef, AutoRefs, auto_color, dab_sample, median3, search_reach};
 pub use brush::{BRUSH_ENTRIES, BrushCache, BrushCtx, brush_base, brush_chain, note_stroke, rasterize as rasterize_brush, strokes_rasterized};
+pub use color_range::color_range_tolerance;
+pub(crate) use color_range::tonemap_for_select;
 pub use planes::{MaskWant, PlanesAsk, PlanesOut, planes_signature, wanted};
 
 /// What an embedded segmentation matte selects.
@@ -417,20 +420,7 @@ fn shape_alpha_in(
                 *v = smooth(lo - lf, lo, y) * (1.0 - smooth(hi, hi + hf, y));
             }
         }
-        MaskShape::ColorRange { samples, refine } => {
-            let tol = color_range_tolerance(*refine);
-            // (a settings value built in code can skip the deserializer's cap: cost is pixels x samples)
-            let samples: Vec<[f32; 3]> =
-                samples.iter().take(lightcraft_develop::MAX_COLOR_RANGE_SAMPLES).map(|s| [s[0] as f32, s[1] as f32, s[2] as f32]).collect();
-            for (v, c) in out.data.iter_mut().zip(&img.data) {
-                let lab = lightcraft_color::perceptual::oklab_from_2020(tonemap_for_select(c.map(|v| v * gain)));
-                let d = samples
-                    .iter()
-                    .map(|s| ((lab[1] - s[1]).powi(2) + (lab[2] - s[2]).powi(2) + 0.25 * (lab[0] - s[0]).powi(2)).sqrt())
-                    .fold(f32::MAX, f32::min);
-                *v = 1.0 - smooth(tol * 0.5, tol, d);
-            }
-        }
+        MaskShape::ColorRange { samples, refine } => color_range::fill(&mut out, img, log_l, samples, *refine, gain, frame),
         MaskShape::Object { seg, detail, edge, .. }
         | MaskShape::Prompt { seg, detail, edge, .. }
         | MaskShape::Subject { seg, detail, edge }
@@ -446,6 +436,10 @@ fn shape_alpha_in(
             // (the edges of the resampled photo: no later edit moves them, `uses_guide`)
             let guide = guide.filter(|g| (g.width, g.height) == (w, h)).unwrap_or(log_l);
             sample_seg(seg.as_ref(), detail, gain, frame, w, h, guide, &mut out);
+            // (issue #281: a Describe limited to a part of the photo selects nothing outside it)
+            if let Some(r) = shape.region() {
+                clip_to(&mut out, frame, w, h, r);
+            }
             if e > 0.0 {
                 smooth_plane(&mut out, e * 0.02 * frame_px(frame, w));
             }
@@ -611,6 +605,19 @@ fn sample_seg(seg: Option<&SegMask>, detail: &[SegMask], gain: f32, frame: &Fram
     out.map_in_place(|l| 1.0 / (1.0 + (-l).exp()));
 }
 
+/// Clears `out` (a `w × h` plane of `frame`) outside `r`, normalized `[x0, y0, x1, y1]` mask coordinates.
+fn clip_to(out: &mut Plane, frame: &Frame, w: usize, h: usize, r: [f64; 4]) {
+    let m = frame.out_to_mask(w, h);
+    for_rows(&mut out.data, w, |y, row| {
+        for (x, v) in row.iter_mut().enumerate() {
+            let n = m.apply(Point::new(x as f64 + 0.5, y as f64 + 0.5));
+            if !(n.x >= r[0] && n.x <= r[2] && n.y >= r[1] && n.y <= r[3]) {
+                *v = 0.0;
+            }
+        }
+    });
+}
+
 fn frame_px(frame: &Frame, w: usize) -> f32 {
     frame.px_per_long(w) as f32
 }
@@ -684,26 +691,6 @@ fn bilinear(p: &Plane, x: f32, y: f32) -> f32 {
     let a = p.get_clamped(x0, y0) + (p.get_clamped(x0 + 1, y0) - p.get_clamped(x0, y0)) * tx;
     let b = p.get_clamped(x0, y0 + 1) + (p.get_clamped(x0 + 1, y0 + 1) - p.get_clamped(x0, y0 + 1)) * tx;
     a + (b - a) * ty
-}
-
-/// A rough display mapping for colour picking (so samples taken on screen match).
-pub(crate) fn tonemap_for_select(c: [f32; 3]) -> [f32; 3] {
-    c.map(|v| v / (1.0 + v))
-}
-
-/// Colour range: the OkLab distance (a, b at full weight, L at a quarter) at which a pixel leaves
-/// the selection for a Refine amount of 0..100. A pixel is fully selected up to half of it and
-/// fades out over the other half (CPU here, `mask.wgsl` kind 3; both take this value).
-///
-/// Issue #157: `0.04 + 0.16·refine` selected the whole photo. Through [`tonemap_for_select`] a
-/// slightly teal mid-grey (sRGB 120,150,155) and a neutral light grey (200,198,195) are only ~0.063
-/// apart — L 0.60 vs 0.72, a/b ≤ 0.02 — so at the default Refine 50 (full selection below 0.06)
-/// the grey patch was 99 % selected, and at Refine 85 / 100 still most of it. A JND is ~0.01 on
-/// this scale, so Refine 50 now holds a surface up to ~2 JND from its sample and drops everything
-/// beyond ~4.5 (full to 0.0225, gone at 0.045); Refine 85 is gone at 0.066, past that grey patch;
-/// Refine 100 reaches 0.075 and Refine 0 is the sample's own shade (full to 0.0075, gone at 0.015).
-pub fn color_range_tolerance(refine: f64) -> f32 {
-    0.015 + 0.06 * (refine / 100.0).clamp(0.0, 1.0) as f32
 }
 
 /// A brush stroke resolved to output pixels: dab centres (spacing r/4 along the path), radius,
@@ -1011,6 +998,8 @@ fn guided_cross_fast(guide: &Plane, p: &mut Plane, sigma: f32, eps: f32, weight:
 mod tests;
 #[cfg(test)]
 mod tests_cache;
+#[cfg(test)]
+mod tests_color_range;
 #[cfg(test)]
 mod tests_grid;
 #[cfg(test)]

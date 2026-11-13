@@ -189,14 +189,7 @@ pub(super) fn curve_editor(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Photo
                 if sel {
                     ui.painter().line_segment([r.left_bottom() + vec2(4.0, 1.0), r.right_bottom() + vec2(-4.0, 1.0)], Stroke::new(2.0, t.text));
                 }
-                let name = match ch {
-                    "parametric" => "Parametric curve",
-                    "master" => "Point curve",
-                    "red" => "Red channel",
-                    "green" => "Green channel",
-                    _ => "Blue channel",
-                };
-                let resp = resp.on_hover_text(crate::i18n::tr_format!("{name} — double-click to reset it", name = name));
+                let resp = resp.on_hover_text(crate::i18n::tr(crate::control_help::curve_channel_help(ch)));
                 if resp.double_clicked() {
                     app.ui.curve_channel = ch.into();
                     let _ = app.run("curve.reset", json!({"channel": ch}));

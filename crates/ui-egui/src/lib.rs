@@ -20,6 +20,7 @@ pub mod brush_live;
 pub mod canvas_keys;
 mod command_error;
 pub mod control;
+mod control_help;
 mod debounce;
 pub mod destination;
 pub mod dialogs;
@@ -304,6 +305,9 @@ pub struct LightcraftApp {
     last_time: f64,
     /// Rect of the photo canvas and the displayed image (screen points) from the last frame.
     pub canvas_rect: Option<egui::Rect>,
+    /// The part of the photo the zoomed-in loupe showed last, while the Masking panel was open: where a Describe looks
+    /// (issue #281). `None` at Fit.
+    pub describe_area: Option<panels::detail::describe_area::DescribeArea>,
     pub image_rect: Option<egui::Rect>,
     /// Scroll offsets (points) of the photo grid (vertical) and the filmstrip (horizontal) as
     /// drawn last (`ui.inspect` → `scroll`).

@@ -1,5 +1,5 @@
 //! Headless tests of resetting a slider (issue #1436): double-clicking its name or its thumb puts it
-//! back to its default in one undo step, as in Lightroom, and resting the pointer on either says so.
+//! back to its default in one undo step, as in Lightroom, and resting the pointer on either says what the slider does.
 
 use std::time::Duration;
 
@@ -105,10 +105,10 @@ fn a_click_on_the_thumb_keeps_the_value() {
 }
 
 #[test]
-fn a_sliders_name_and_thumb_say_a_double_click_resets_it() {
+fn a_sliders_name_and_thumb_say_what_it_does() {
     let mut h = edit_panel();
     set(&mut h, "light.exposure", 1.25);
-    let hint = "Exposure — double-click to reset it";
+    let hint = "Exposure: brightens or darkens the whole photo.";
     let shown = |h: &Headless| h.painted_text().iter().any(|t| t == hint);
     let thumb = thumb_fx(&h, "light.exposure", 0.0);
     for (what, id, fx) in [("name", "sliderLabel:light.exposure", 0.1), ("thumb", "slider:light.exposure", thumb)] {

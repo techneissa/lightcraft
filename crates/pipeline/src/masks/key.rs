@@ -155,10 +155,14 @@ pub(super) fn shape(h: &mut Words, shape: &MaskShape) {
             h.points(exclude);
             h.segs(seg, detail, *edge);
         }
-        MaskShape::Prompt { text, seg, detail, edge } => {
+        MaskShape::Prompt { text, seg, detail, edge, region } => {
             h.word(11);
             h.write(text.as_bytes());
             h.segs(seg, detail, *edge);
+            // (issue #281: only when set, so a mask without one keeps its key)
+            if region.is_some() {
+                h.opt_f4(*region);
+            }
         }
         MaskShape::People { person, parts, seg, detail, edge, .. } => {
             h.word(12);
