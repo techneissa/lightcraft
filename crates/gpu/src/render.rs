@@ -166,7 +166,7 @@ impl GpuStages {
         self.decontam.each(&mut add);
         patches += self.spots.bytes();
         let host = self.host.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map_or(0, |k| k.bytes);
-        total + patches + host
+        total + patches + host + self.alphas.host_bytes()
     }
 
     /// Drop everything (e.g. when memory is needed).

@@ -62,8 +62,6 @@ const MODULES: &[Module] = &[
             "xguided_pre",
             "xguided_ab",
             "xguided_apply",
-            "xguided_stamp",
-            "crop_k",
             "fringe_lab",
             "fringe_apply",
         ],
@@ -437,8 +435,6 @@ fn constants() -> String {
     let y = lightcraft_pipeline::light_v3::PRO_Y;
     s += &format!("const PRO_Y = vec3<f32>({:?}, {:?}, {:?});\nconst LIGHT_N: u32 = {}u;\n", y[0], y[1], y[2], lightcraft_pipeline::light_v3::LUT_N);
     s += &format!("const EYE_WORDS: u32 = {}u;\n", lightcraft_pipeline::redeye::EYE_WORDS);
-    use lightcraft_pipeline::masks::{AUTO_TOL_CHROMA, AUTO_TOL_EV};
-    s += &format!("const AUTO_TOL_EV: f32 = {AUTO_TOL_EV:?};\nconst AUTO_TOL_CHROMA: f32 = {AUTO_TOL_CHROMA:?};\n");
     {
         use lightcraft_pipeline::recolor::{
             DARK_FADE, GREY_CHROMA, HUE_ONLY_CHROMA, LIGHT_FADE, MAX_CHROMA_RATIO, MAX_HUE_OFFSET, MIN_CHROMA, MIN_REF_L,

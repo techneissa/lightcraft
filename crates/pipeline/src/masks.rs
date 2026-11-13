@@ -15,6 +15,7 @@ use crate::for_rows;
 use crate::geometry::Frame;
 
 mod alpha;
+mod auto_edge;
 mod brush;
 pub mod color_range;
 pub mod grid;
@@ -25,7 +26,10 @@ mod planes;
 pub use alpha::note_evaluation;
 pub use alpha::{AlphaCache, AlphaKeys, KEPT_ALPHA_BYTES, KEPT_ALPHAS, MaskAlpha, alpha_key, guide_plane, mask_evaluations, reads, uses_guide};
 use alpha::{map_rows, zip_rows};
-pub use brush::{BRUSH_ENTRIES, BrushCache, BrushCtx, auto_pixels_filtered, brush_base, brush_chain, note_filtered, note_stroke, strokes_rasterized};
+pub use auto_edge::{AUTO_MEDIAN_LONG, AutoColor, AutoRef, AutoRefs, auto_color, dab_sample, median_at, median_radius, search_reach};
+pub use brush::{
+    BRUSH_ENTRIES, BrushCache, BrushCtx, brush_base, brush_chain, held_brush, note_stroke, rasterize as rasterize_brush, strokes_rasterized,
+};
 pub use color_range::color_range_tolerance;
 pub(crate) use color_range::tonemap_for_select;
 pub use planes::{MaskWant, PlanesAsk, PlanesOut, planes_signature, wanted};
@@ -700,7 +704,7 @@ pub struct BrushDabs {
     pub flow: f32,
     pub density: f32,
     pub erase: bool,
-    /// Auto Mask: paint only pixels like the one under each dab, then snap to edges.
+    /// Auto Mask: paint only pixels like the surface under the stroke (`auto_edge`).
     pub auto: bool,
     /// Pen pressure (0..1) of each dab, parallel to `dabs`; empty when the stroke has no pressure data (full pressure).
     pub pressure: Vec<f32>,
@@ -885,8 +889,8 @@ pub fn accumulate(v: f32, a: f32, flow: f32, density: f32) -> f32 {
     (v + a * flow * (1.0 - v)).min(density)
 }
 
-/// Auto Mask tolerances: a pixel takes a dab's paint fully up to half of these from the colour
-/// under the dab centre, none beyond them (log2 luminance, chromaticity `rgb / Y`).
+/// Auto Mask tolerances: a pixel takes a dab's paint fully up to half of these from the dab's
+/// reference, none beyond them (log2 luminance, chromaticity `rgb / Y`; see `auto_edge`).
 pub const AUTO_TOL_EV: f32 = 0.5;
 pub const AUTO_TOL_CHROMA: f32 = 0.25;
 
@@ -897,28 +901,14 @@ pub fn chromaticity(c: [f32; 3]) -> [f32; 3] {
     [c[0] / y, c[1] / y, c[2] / y]
 }
 
-/// Auto Mask: how much a pixel (log luminance `l`, chromaticity `ch`) is like the reference.
-#[inline]
-pub fn auto_similarity(l: f32, ch: [f32; 3], rl: f32, rch: [f32; 3]) -> f32 {
-    let dl = (l - rl) / AUTO_TOL_EV;
-    let dc = ((ch[0] - rch[0]).powi(2) + (ch[1] - rch[1]).powi(2) + (ch[2] - rch[2]).powi(2)).sqrt() / AUTO_TOL_CHROMA;
-    1.0 - smooth(0.5, 1.0, (dl * dl + dc * dc).sqrt())
-}
-
 /// The output pixel a dab at `d` samples its reference colour from. The position is taken at f32
-/// precision (like the GPU kernel): a dab on a pixel boundary must not fall on either side of it
+/// precision: a dab on a pixel boundary must not fall on either side of it
 /// by an f64 rounding error, which depends on where the window of a zoomed view starts.
 #[inline]
 pub fn dab_pixel(d: Point, w: usize, h: usize) -> usize {
     let x = ((d.x as f32).floor().max(0.0) as usize).min(w - 1);
     let y = ((d.y as f32).floor().max(0.0) as usize).min(h - 1);
     y * w + x
-}
-
-/// Guided-filter refinement of an Auto Mask stroke of radius `r` px: (sigma px, epsilon EV²). The
-/// stroke keeps the larger of its own and the refined alpha.
-pub fn auto_refine(r: f64) -> (f32, f32) {
-    ((0.25 * r).max(1.0) as f32, 0.02)
 }
 
 /// A guided filter's linear model at each pixel (`q = a · guide + b`, coefficients averaged over

@@ -867,6 +867,7 @@ fn brush_tool(
             overlay: shown,
             tint: shown,
             auto: app.ui.brush_auto_mask,
+            long: long as f32,
             now: ui.input(|i| i.time),
             // (the overlay of the committed strokes is drawn over the blend, which covers the one under it)
             over: app.renderer.textures.get(&crate::render::Slot::Main).map(|t| crate::brush_live::TintOver {

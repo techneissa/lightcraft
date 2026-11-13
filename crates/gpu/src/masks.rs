@@ -9,7 +9,8 @@ use lightcraft_pipeline::finish::{MASK_TERMS, effect_terms_with};
 use lightcraft_pipeline::geometry::Frame;
 use lightcraft_pipeline::masks::grid::{PosGrid, Ramp};
 use lightcraft_pipeline::masks::{
-    AlphaKeys, BRUSH_ENTRIES, Mattes, alpha_key, brush_base, brush_chain, brush_dabs, note_evaluation, note_filtered, note_stroke,
+    AlphaKeys, BRUSH_ENTRIES, BrushCache, BrushCtx, Mattes, alpha_key, brush_base, brush_chain, brush_dabs, held_brush, note_evaluation, note_stroke,
+    rasterize_brush,
 };
 use lightcraft_raster::Rgb32f;
 
@@ -36,6 +37,8 @@ struct Inner {
     /// The alphas by key, with the frame (`plan.geo`) each was evaluated for.
     slots: Vec<(u64, u64, Arc<Buf>)>,
     brushes: Vec<BrushPart>,
+    /// The planes of brush parts with Auto Mask strokes, which the CPU stamps (they read the photo around each dab).
+    cpu_brushes: BrushCache,
     /// The edges a stored selection follows (`masks::guide_plane` of the resampled photo) for the frame `plan.geo` keys.
     guide: Option<(u64, Arc<lightcraft_raster::Plane>)>,
 }
@@ -58,6 +61,11 @@ impl AlphaStore {
         *self.lock() = Inner::default();
     }
 
+    /// Host memory held (the planes of Auto Mask brush parts).
+    pub(crate) fn host_bytes(&self) -> usize {
+        self.lock().cpu_brushes.bytes()
+    }
+
     /// Hand every device buffer held to `add` (the caller counts each once).
     pub(crate) fn each(&self, mut add: impl FnMut(&Arc<Buf>)) {
         let g = self.lock();
@@ -78,11 +86,13 @@ struct BrushEnv<'a> {
 
 /// The plane of brush strokes `strokes` on the device (`masks::brush`), or `None` when the device can't hold their dabs
 /// (the CPU rasterizes the part). Strokes that extend a part held in `parts` are stamped over a copy of its plane; the
-/// result is kept there. `inverted`: the part is turned around.
+/// result is kept there. `inverted`: the part is turned around. Parts with Auto Mask strokes are not stamped here (`None`).
 fn brush_part(cx: &mut Cx<'_>, env: &BrushEnv<'_>, strokes: &[BrushStroke], inverted: bool, parts: &mut Vec<BrushPart>) -> Option<Buf> {
     let n = env.w * env.h;
-    let auto = strokes.iter().any(|s| s.auto_mask);
-    let base = brush_base(env.keys.geo, env.keys.image, auto, env.w, env.h);
+    if strokes.iter().any(|s| s.auto_mask) {
+        return None;
+    }
+    let base = brush_base(env.keys.geo, env.keys.image, false, env.w, env.h);
     let chain = brush_chain(strokes);
     // the part this one extends (the longest held prefix of its strokes)
     let hit = parts
@@ -119,12 +129,30 @@ fn brush_part(cx: &mut Cx<'_>, env: &BrushEnv<'_>, strokes: &[BrushStroke], inve
     Some(plane)
 }
 
-/// Stamp one stroke into `plane` inside its bounding box (the `stroke` kernel). An Auto Mask stroke is stamped
-/// alone, refined with the guided filter and combined, as on the CPU.
+/// A brush part with Auto Mask strokes, stamped on the CPU (they read the photo around each dab, `masks::auto_edge`)
+/// with its planes kept in `cache`, so a new stroke stamps only that stroke. `inverted`: the part is turned around.
+fn auto_brush_part(cx: &mut Cx<'_>, host: &mut Host, env: &BrushEnv<'_>, strokes: &[BrushStroke], inverted: bool, cache: &mut BrushCache) -> Buf {
+    let (w, h) = (env.w, env.h);
+    let mut ctx = BrushCtx { cache, geo: env.keys.geo, image: env.keys.image };
+    // (a part held whole needs no picture: the read-back is only for strokes to stamp)
+    let mut v = match held_brush(strokes, w, h, &mut ctx) {
+        Some(v) => v,
+        None => {
+            let img = host.lin.get_or_insert_with(|| Arc::new(cx.read_rgb(env.lin, w, h))).clone();
+            let l = host.log_l.get_or_insert_with(|| Arc::new(cx.read_plane(env.log_l, w, h))).clone();
+            rasterize_brush(strokes, env.frame, w, h, &img, &l, Some(&mut ctx))
+        }
+    };
+    if inverted {
+        v.data.iter_mut().for_each(|x| *x = 1.0 - *x);
+    }
+    cx.gpu.upload(&v.data)
+}
+
+/// Stamp one stroke (not Auto Mask) into `plane` inside its bounding box (the `stroke` kernel).
 fn stamp_stroke(cx: &mut Cx<'_>, env: &BrushEnv<'_>, s: &BrushStroke, plane: &Buf) -> bool {
     note_stroke();
     let (w, h) = (env.w, env.h);
-    let n = w * h;
     let bd = brush_dabs(s, env.frame, w, h);
     if bd.dabs.is_empty() {
         return true;
@@ -157,33 +185,9 @@ fn stamp_stroke(cx: &mut Cx<'_>, env: &BrushEnv<'_>, s: &BrushStroke, plane: &Bu
     let aux = cx.gpu.upload(&aux);
     let mut p = vec![w as u32, h as u32, 0, 0, 0, 0, 0, 0, 0, 0];
     p.extend([x0, y0, x1, y1, bd.dabs.len()].map(|v| v as u32));
-    p.extend([bd.density.to_bits(), bd.erase as u32, bd.auto as u32, 0]);
+    p.extend([bd.density.to_bits(), bd.erase as u32, 0, 0]);
     let grid = groups2(x1 - x0, y1 - y0, [16, 16]);
-    if !bd.auto {
-        cx.run("stroke", &p, &[Some(env.lin), Some(env.log_l), Some(&aux), Some(plane), None], grid);
-        return true;
-    }
-    // the stroke alone (mode 1), refined, then combined into the part in order
-    let own = cx.zeroed(n);
-    p[18] = 1;
-    cx.run("stroke", &p, &[Some(env.lin), Some(env.log_l), Some(&aux), Some(&own), None], grid);
-    let (sigma, eps) = lightcraft_pipeline::masks::auto_refine(bd.r);
-    // The filter only moves alpha within its reach of the stroke (two Gaussians in a row: twice the sum of the box radii,
-    // and a little over): it runs on that cut of the frame, not on all of it. Past the cut the refined alpha is 0.
-    let reach = lightcraft_raster::blur::radii_for(sigma, w, h).map_or(0, |r| 2 * r.iter().sum::<usize>() + 2);
-    let (cx0, cy0) = (x0.saturating_sub(reach), y0.saturating_sub(reach));
-    let (cx1, cy1) = (x1.saturating_add(reach).min(w), y1.saturating_add(reach).min(h));
-    let (cw, ch) = (cx1 - cx0, cy1 - cy0);
-    let cut = |cx: &mut Cx<'_>, plane: &Buf| {
-        let out = cx.gpu.buffer(cw * ch);
-        map(cx, "crop_k", cw * ch, &[cw as u32, w as u32, cx0 as u32, cy0 as u32], [Some(plane), None, None], &out);
-        out
-    };
-    let (guide, alone) = (cut(cx, env.log_l), cut(cx, &own));
-    note_filtered(cw * ch);
-    let ab = guided_ab(cx, &guide, &alone, (cw, ch), ((w, h), cy0), sigma, eps);
-    let op = if bd.erase { 2 } else { 1 };
-    map(cx, "xguided_stamp", cw * ch, &[cw as u32, w as u32, cx0 as u32, cy0 as u32, op], [Some(&guide), Some(&ab), Some(&alone)], plane);
+    cx.run("stroke", &p, &[Some(env.lin), Some(env.log_l), Some(&aux), Some(plane), None], grid);
     true
 }
 
@@ -351,7 +355,11 @@ pub(crate) fn masks(
                 MaskShape::Brush { strokes } => {
                     // (None: the device can't hold the dabs, and the CPU rasterizes the part)
                     let env = BrushEnv { lin, log_l: &prep.log_l, frame, w, h, keys };
-                    own = brush_part(cx, &env, strokes, inverted, &mut held.brushes);
+                    own = if strokes.iter().any(|s| s.auto_mask) {
+                        Some(auto_brush_part(cx, host, &env, strokes, inverted, &mut held.cpu_brushes))
+                    } else {
+                        brush_part(cx, &env, strokes, inverted, &mut held.brushes)
+                    };
                     None
                 }
                 _ => None,

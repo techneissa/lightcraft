@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use lightcraft_develop::{BrushStroke, DevelopSettings, LocalAdjustments, Mask, MaskComponent, MaskOp, MaskShape};
 use lightcraft_geom::Point;
-use lightcraft_pipeline::masks::{MaskWant, PlanesAsk, auto_pixels_filtered, mask_evaluations, strokes_rasterized};
+use lightcraft_pipeline::masks::{MaskWant, PlanesAsk, mask_evaluations, strokes_rasterized};
 use lightcraft_pipeline::{RenderRequest, SourceInfo, StageCache, render};
 use lightcraft_raster::{Rgb32f, Rgba8};
 
@@ -246,38 +246,8 @@ fn a_stored_sky_is_not_evaluated_by_a_global_exposure_tick() {
     }
 }
 
-/// An Auto Mask stroke's guided filter runs on the stroke's neighbourhood, not on the whole frame, and the picture is
-/// the CPU's (one stroke in the middle, one cut by the frame's corner).
-#[test]
-fn an_auto_mask_stroke_filters_only_its_neighbourhood() {
-    if !gpu() {
-        return;
-    }
-    let src = scene(960, 640);
-    let info = SourceInfo { raw: true, ..Default::default() };
-    let req = RenderRequest::fit(720, 720);
-    let stroke = |points: Vec<Point>| BrushStroke { points, size: 0.02, auto_mask: true, ..Default::default() };
-    let middle = stroke(vec![Point::new(0.45, 0.3), Point::new(0.52, 0.34), Point::new(0.58, 0.3)]);
-    let corner = stroke(vec![Point::new(0.02, 0.03), Point::new(0.06, 0.05)]);
-    let at = |strokes: Vec<BrushStroke>| {
-        with_masks(vec![Mask { components: vec![comp(MaskOp::Add, MaskShape::Brush { strokes })], adjust: adjust(), ..Default::default() }])
-    };
-    let frame_px = 720 * 480;
-    for (name, s) in [("middle", at(vec![middle.clone()])), ("corner", at(vec![corner])), ("both", at(vec![middle.clone(), middle]))] {
-        let before = auto_pixels_filtered();
-        let gpu_img = lightcraft_gpu::render(&src, &info, &s, &req, None)
-            .unwrap_or_else(|| panic!("{name}: gpu render failed: {:?}", lightcraft_gpu::last_fallback()))
-            .image;
-        let filtered = auto_pixels_filtered() - before;
-        let strokes = if name == "both" { 2 } else { 1 };
-        assert!(filtered > 0 && filtered * 6 < strokes * frame_px, "{name}: {filtered} px filtered of a {frame_px} px frame per stroke");
-        let cpu = render(&src, &info, &s, &req).image;
-        let (mean, max) = diff(&cpu, &gpu_img);
-        assert!(mean < 0.5 && max <= 3, "{name}: mean {mean:.4} LSB, max {max} LSB");
-    }
-}
-
-/// Adding a stroke to a brush part stamps that stroke, not the strokes the mask already holds; an undo is free.
+/// Adding a stroke to a brush part stamps that stroke, not the strokes the mask already holds; an undo is free. A part
+/// with Auto Mask strokes (stamped on the CPU) is kept the same way.
 #[test]
 fn a_new_stroke_stamps_one_stroke_on_the_device() {
     if !gpu() {
@@ -286,29 +256,35 @@ fn a_new_stroke_stamps_one_stroke_on_the_device() {
     let src = scene(960, 640);
     let info = SourceInfo { raw: true, ..Default::default() };
     let req = RenderRequest::fit(720, 720);
-    let all = strokes(31, false, true);
-    let at = |n: usize| {
-        with_masks(vec![Mask {
-            components: vec![comp(MaskOp::Add, MaskShape::Brush { strokes: all[..n].to_vec() })],
-            adjust: adjust(),
-            ..Default::default()
-        }])
-    };
-    let cache = StageCache::default();
-    let stamped = |s: &DevelopSettings| {
-        let before = strokes_rasterized();
-        let img = lightcraft_gpu::render(&src, &info, s, &req, Some(&cache)).expect("gpu").image;
-        (strokes_rasterized() - before, img)
-    };
-    let (n, first) = stamped(&at(30));
-    assert_eq!(n, 30);
-    let (n, extended) = stamped(&at(31));
-    assert_eq!(n, 1, "one more stroke stamped {n} strokes");
-    let fresh = lightcraft_gpu::render(&src, &info, &at(31), &req, None).expect("gpu").image;
-    assert_eq!(extended, fresh, "stamping over the held plane equals stamping everything");
-    let (n, undone) = stamped(&at(30));
-    assert_eq!(n, 0, "back to a held state: no stroke");
-    assert_eq!(undone, first);
+    for auto in [false, true] {
+        let all = strokes(31, auto, true);
+        let at = |n: usize| {
+            with_masks(vec![Mask {
+                components: vec![comp(MaskOp::Add, MaskShape::Brush { strokes: all[..n].to_vec() })],
+                adjust: adjust(),
+                ..Default::default()
+            }])
+        };
+        let cache = StageCache::default();
+        let stamped = |s: &DevelopSettings| {
+            let before = strokes_rasterized();
+            let img = lightcraft_gpu::render(&src, &info, s, &req, Some(&cache)).expect("gpu").image;
+            (strokes_rasterized() - before, img)
+        };
+        let (n, first) = stamped(&at(30));
+        assert_eq!(n, 30, "auto {auto}");
+        let (n, extended) = stamped(&at(31));
+        assert_eq!(n, 1, "auto {auto}: one more stroke stamped {n} strokes");
+        let fresh = lightcraft_gpu::render(&src, &info, &at(31), &req, None).expect("gpu").image;
+        assert_eq!(extended, fresh, "auto {auto}: stamping over the held plane equals stamping everything");
+        let (n, undone) = stamped(&at(30));
+        assert_eq!(n, 0, "auto {auto}: back to a held state: no stroke");
+        assert_eq!(undone, first);
+        if auto {
+            let (mean, max) = diff(&extended, &render(&src, &info, &at(31), &req).image);
+            assert!(mean < 0.5 && max <= 3, "auto: the CPU's picture (mean {mean:.4} LSB, max {max} LSB)");
+        }
+    }
 }
 
 /// The masks' alphas the loupe tints (`mask_planes`): the device's equal the CPU's for strokes, a gradient, an Amount and a window,

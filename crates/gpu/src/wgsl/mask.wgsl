@@ -41,19 +41,6 @@ fn pos(x: u32, y: u32) -> vec2<f32> {
 // `masks::color_range::L_FLOOR`.
 const CR_L_FLOOR: f32 = 0.1;
 
-// `masks::chromaticity` of pixel i.
-fn chroma_at(i: u32) -> vec3<f32> {
-    let c = vec3<f32>(img[3u * i], img[3u * i + 1u], img[3u * i + 2u]);
-    return c / max(lum2020(c), 1e-6);
-}
-
-// `masks::auto_similarity`.
-fn auto_similarity(l: f32, ch: vec3<f32>, rl: f32, rch: vec3<f32>) -> f32 {
-    let dl = (l - rl) / AUTO_TOL_EV;
-    let dc = length(ch - rch) / AUTO_TOL_CHROMA;
-    return 1.0 - sstep(0.5, 1.0, sqrt(dl * dl + dc * dc));
-}
-
 @compute @workgroup_size(16, 16)
 fn shape(@builtin(global_invocation_id) g: vec3<u32>) {
     let w = pu(0u);
@@ -161,9 +148,8 @@ fn finalize(@builtin(global_invocation_id) g: vec3<u32>, @builtin(num_workgroups
 
 // One brush stroke stamped inside its bounding box into `c` (`masks::brush`'s `stamp`): one dab is
 // five words in aux (x, y, r, hard, flow), pen pressure already applied. P: w, h, (unused 2..9),
-// box x0, y0, x1, y1 (10..13), dab count, density, erase, auto (14..17), mode (18): 0 combines the
-// stroke into `c` (max, or subtract when erasing), 1 writes the stroke's own alpha there (Auto Mask:
-// the caller refines it and combines it).
+// box x0, y0, x1, y1 (10..13), dab count, density, erase (14..16): the stroke is combined into `c`
+// (max, or subtract when erasing). (Auto Mask strokes are stamped on the CPU.)
 //
 // Each 16 × 16 tile first picks, 256 dabs at a time, the dabs that reach it into workgroup memory:
 // a pixel then reads the few dabs near it, not every dab of the stroke. A stroke's coverage is a
@@ -188,14 +174,6 @@ fn stroke(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation
     }
     workgroupBarrier();
     let cnt = workgroupUniformLoad(&dab_count);
-    let auto_mask = pu(17u) != 0u;
-    var lp = 0.0;
-    var chp = vec3<f32>(0.0);
-    if (inside && auto_mask) {
-        let i = y * w + x;
-        lp = log_l[i];
-        chp = chroma_at(i);
-    }
     var keep = 1.0;
     for (var base = 0u; base < cnt; base += 256u) {
         if (li == 0u) {
@@ -230,12 +208,6 @@ fn stroke(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation
                 if (dd > aux[o + 3u]) {
                     a = 1.0 - sstep(aux[o + 3u], r, dd);
                 }
-                if (auto_mask) {
-                    let rx = min(u32(max(floor(aux[o]), 0.0)), w - 1u);
-                    let ry = min(u32(max(floor(aux[o + 1u]), 0.0)), h - 1u);
-                    let ri = ry * w + rx;
-                    a *= auto_similarity(lp, chp, log_l[ri], chroma_at(ri));
-                }
                 keep *= 1.0 - a * aux[o + 4u];
             }
         }
@@ -245,9 +217,7 @@ fn stroke(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation
     if (inside) {
         let i = y * w + x;
         let sa = min(1.0 - keep, bitcast<f32>(pu(15u)));
-        if (pu(18u) == 1u) {
-            c[i] = sa;
-        } else if (pu(16u) != 0u) {
+        if (pu(16u) != 0u) {
             c[i] = c[i] * (1.0 - sa);
         } else {
             c[i] = max(c[i], sa);

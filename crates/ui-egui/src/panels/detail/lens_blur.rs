@@ -126,7 +126,7 @@ pub(super) fn lens_blur_brush_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui
             opacity: 0.45,
         };
         // (the stroke's coverage colour only: a Focus or Blur stroke has no adjustment to blend in live)
-        let look = crate::brush_live::Look { images: None, overlay: true, tint: true, auto: false, now: ui.input(|i| i.time), over: None };
+        let look = crate::brush_live::Look { images: None, overlay: true, tint: true, auto: false, long: 0.0, now: ui.input(|i| i.time), over: None };
         crate::brush_live::paint(&mut app.brush_live, ui.ctx(), p, params, &screen, pressure, &look);
     } else {
         app.brush_live = None;

@@ -28,12 +28,14 @@ fn reference_brush(strokes: &[BrushStroke], frame: &Frame, w: usize, h: usize, i
         let bd = brush_dabs(s, frame, w, h);
         let (dens, erase, auto) = (bd.density, bd.erase, bd.auto);
         let mut stroke_alpha = Plane::new(w, h);
+        // (Auto Mask: the dabs' references and the median colours of the whole frame)
+        let (refs, med) = if auto {
+            brush::auto_refs(&bd, img, log_l, (0, 0, w, h), auto_edge::median_radius(frame.px_per_long(w)))
+        } else {
+            (Vec::new(), auto_edge::MedianBox::empty())
+        };
         for (k, d) in bd.dabs.iter().enumerate() {
             let (r, hard, flow) = bd.dab(k);
-            let refc = auto.then(|| {
-                let j = dab_pixel(*d, w, h);
-                (log_l.data[j], chromaticity(img.data[j]))
-            });
             let (x0, x1) = (((d.x - r).floor().max(0.0)) as usize, ((d.x + r).ceil().max(0.0) as usize).min(w));
             let (y0, y1) = (((d.y - r).floor().max(0.0)) as usize, ((d.y + r).ceil().max(0.0) as usize).min(h));
             for y in y0..y1 {
@@ -44,18 +46,13 @@ fn reference_brush(strokes: &[BrushStroke], frame: &Frame, w: usize, h: usize, i
                     }
                     let mut a = dab_alpha(dd, r, hard);
                     let i = y * w + x;
-                    if let Some((rl, rch)) = refc {
-                        a *= auto_similarity(log_l.data[i], chromaticity(img.data[i]), rl, rch);
+                    if let Some(rf) = refs.get(k) {
+                        a *= rf.weight(med.at(x as isize, y as isize));
                     }
                     let v = &mut stroke_alpha.data[i];
                     *v = accumulate(*v, a, flow, dens);
                 }
             }
-        }
-        if auto {
-            let (sigma, eps) = auto_refine(bd.r);
-            let q = guided_cross(log_l, &stroke_alpha, sigma, eps);
-            stroke_alpha = stroke_alpha.zip_map(&q, f32::max);
         }
         for (o, a) in out.data.iter_mut().zip(&stroke_alpha.data) {
             *o = if erase { *o * (1.0 - a) } else { o.max(*a) };
@@ -111,8 +108,8 @@ fn bounded_strokes_equal_strokes_on_the_whole_frame() {
     assert!(got.data.iter().all(|v| *v == 0.0));
 }
 
-/// An Auto Mask stroke refines its alpha with a guided filter on the stroke's box and a margin; away from the paint
-/// the filter changes nothing, so it matches the filter on the whole frame (float rounding aside).
+/// An Auto Mask stroke reads the photo's colours in its box and the margin its dabs' samples look into; it matches the
+/// stroke stamped against the whole frame.
 #[test]
 fn bounded_auto_mask_strokes_match_strokes_on_the_whole_frame() {
     let (w, h) = (160, 100);
