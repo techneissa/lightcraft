@@ -852,7 +852,7 @@ fn describe_field(app: &mut LightcraftApp, ui: &mut egui::Ui, new_mask: bool) {
     }
     app.ui.describe = Some((op.clone(), text.clone()));
     // zoomed in, it looks only in the part of the photo on screen (issue #281)
-    let region = crate::panels::detail::describe_area::region_for(app, &op);
+    let region = crate::panels::detail::describe_area::region_for(app);
     if region.is_some() {
         ui.label(egui::RichText::new(crate::i18n::tr("Limited to the zoomed area")).small().weak());
     }

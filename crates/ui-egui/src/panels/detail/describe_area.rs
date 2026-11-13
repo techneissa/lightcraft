@@ -7,14 +7,12 @@ use lightcraft_catalog::PhotoId;
 use super::geometry::CanvasMap;
 use super::{Color32, LightcraftApp, Point, Pos2, Rect, Stroke};
 
-/// The part of the photo the loupe shows when zoomed in, normalized, in both of a mask's coordinate spaces.
+/// The part of the photo the loupe shows when zoomed in, normalized, on the photo as shot (`Mask::on_photo`): where
+/// the model looks, whatever mask the selection joins (an old mask is moved onto the photo before the model runs).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DescribeArea {
     pub photo: PhotoId,
-    /// On the photo as shot (`Mask::on_photo`: every new mask).
-    pub on_photo: [f64; 4],
-    /// On the corrected frame (an old mask's).
-    pub frame: [f64; 4],
+    pub region: [f64; 4],
 }
 
 /// Points along each edge of the view the area is found from: a lens warp bends its edges.
@@ -26,9 +24,7 @@ pub(super) fn note(app: &mut LightcraftApp, photo: PhotoId, map: &CanvasMap) {
     let canvas = app.canvas_rect.unwrap_or(map.rect);
     let shown = map.rect.intersect(canvas);
     let zoomed = !canvas.expand(1.0).contains_rect(map.rect) && shown.is_positive();
-    app.describe_area = zoomed
-        .then(|| Some(DescribeArea { photo, on_photo: area(&map.for_mask(true), shown)?, frame: area(&map.for_mask(false), shown)? }))
-        .flatten();
+    app.describe_area = zoomed.then(|| area(&map.for_mask(true), shown)).flatten().map(|region| DescribeArea { photo, region });
 }
 
 /// The box around screen rectangle `r` in `map`'s coordinates, cleaned as a Describe region (`None`: the whole
@@ -48,14 +44,10 @@ fn area(map: &CanvasMap, r: Rect) -> Option<[f64; 4]> {
     (x0 <= x1 && y0 <= y1).then_some([x0, y0, x1, y1]).and_then(lightcraft_develop::prompt_region)
 }
 
-/// The region a Describe started now looks in (`op` "new": a new mask, else a part of the selected mask), in that
-/// mask's coordinates; `None` for the whole photo.
-pub(crate) fn region_for(app: &LightcraftApp, op: &str) -> Option<[f64; 4]> {
+/// The region a Describe started now looks in; `None` for the whole photo.
+pub(crate) fn region_for(app: &LightcraftApp) -> Option<[f64; 4]> {
     let id = app.session.active()?;
-    let a = app.describe_area.filter(|a| a.photo == id)?;
-    let on_photo = op == "new"
-        || app.session.develop_of(id).is_none_or(|d| d.masks.iter().find(|m| Some(m.id) == app.session.active_mask).is_none_or(|m| m.on_photo));
-    Some(if on_photo { a.on_photo } else { a.frame })
+    app.describe_area.filter(|a| a.photo == id).map(|a| a.region)
 }
 
 /// Outline region `r` (normalized, `map`'s coordinates) on the photo: a thin dashed box, drawn through any warp.
