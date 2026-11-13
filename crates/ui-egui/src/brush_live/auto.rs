@@ -10,12 +10,17 @@ use lightcraft_pipeline::masks::{AutoColor, auto_color, median3};
 use std::cell::RefCell;
 use std::rc::Rc;
 
+/// The side (pixels) of the tiles the guide keeps median colours in.
+const TILE: usize = 32;
+
 /// The colour of every pixel of the picture a stroke is painted over, and its 3 × 3 median colour
-/// (worked out the first time a stroke reads it).
+/// (worked out the first time a stroke reads it, kept by tiles of [`TILE`]² pixels made as the
+/// brush reaches them).
 pub struct Guide {
     size: [usize; 2],
     colors: Vec<AutoColor>,
-    medians: RefCell<Vec<Option<AutoColor>>>,
+    /// (NaN luminance: not worked out)
+    medians: RefCell<Vec<Option<Box<[AutoColor]>>>>,
 }
 
 impl Guide {
@@ -30,8 +35,8 @@ impl Guide {
                 auto_color(log_lum(c), c)
             })
             .collect();
-        let medians = RefCell::new(vec![None; colors.len()]);
-        Guide { size: img.size, colors, medians }
+        let tiles = img.size[0].div_ceil(TILE) * img.size[1].div_ceil(TILE);
+        Guide { size: img.size, colors, medians: RefCell::new(vec![None; tiles]) }
     }
 
     /// The picture's size (pixels).
@@ -65,18 +70,20 @@ impl Guide {
     /// compares pixels.
     pub fn median(&self, x: isize, y: isize) -> AutoColor {
         let i = self.index(x, y);
-        let Ok(mut memo) = self.medians.try_borrow_mut() else {
-            return median3(|dx, dy| self.color(x + dx, y + dy));
-        };
-        match memo.get(i) {
-            Some(Some(c)) => *c,
-            _ => {
-                let c = median3(|dx, dy| self.color(x + dx, y + dy));
-                if let Some(slot) = memo.get_mut(i) {
-                    *slot = Some(c);
-                }
-                c
+        let w = self.size[0].max(1);
+        let (px, py) = (i % w, i / w);
+        let work = || median3(|dx, dy| self.color(px as isize + dx, py as isize + dy));
+        let Ok(mut memo) = self.medians.try_borrow_mut() else { return work() };
+        let Some(tile) = memo.get_mut(py / TILE * w.div_ceil(TILE) + px / TILE) else { return work() };
+        let slot = (py % TILE) * TILE + px % TILE;
+        let tile = tile.get_or_insert_with(|| vec![[f32::NAN; 4]; TILE * TILE].into_boxed_slice());
+        match tile.get_mut(slot) {
+            Some(c) if !c[0].is_nan() => *c,
+            Some(c) => {
+                *c = work();
+                *c
             }
+            None => work(),
         }
     }
 }
