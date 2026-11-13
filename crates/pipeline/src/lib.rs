@@ -1310,10 +1310,15 @@ fn render_impl(
     Rendered { image, histogram, deep: None }
 }
 
-/// The colour a colour-range mask would sample at normalized image point `p` (OkLab of the
-/// exposed scene colours, as [`MaskShape::ColorRange`](lightcraft_develop::MaskShape) compares
-/// them), averaged over 3 × 3 pixels of a render fitting `req`. `None` outside the image.
-pub fn color_range_sample(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest, p: lightcraft_geom::Point) -> Option<[f64; 3]> {
+/// A render fitting `req` in the space a colour-range mask compares in (OkLab of the exposed scene colours through
+/// [`masks::tonemap_for_select`]), its size, and normalized image points `pts` in its pixels.
+fn color_range_space(
+    src: &Rgb32f,
+    info: &SourceInfo,
+    s: &DevelopSettings,
+    req: &RenderRequest,
+    pts: &[lightcraft_geom::Point],
+) -> (usize, usize, Vec<[f32; 3]>, Vec<lightcraft_geom::Point>) {
     // Pick from the same settings as the render: disabled panels contribute nothing, and an
     // SDR preview of an HDR edit includes the SDR rendition's exposure offset.
     let effective = s.effective();
@@ -1321,25 +1326,55 @@ pub fn color_range_sample(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, 
     let plan = plan(src, info, &rendition, req);
     let mut img = plan.frame.sample(src, plan.w, plan.h);
     lin_cpu(&mut img, info, &plan);
-    let o = plan.frame.norm_to_out(plan.w, plan.h).apply(p);
-    let (cx, cy) = (o.x.floor() as i64, o.y.floor() as i64);
-    if cx < 0 || cy < 0 || cx >= plan.w as i64 || cy >= plan.h as i64 {
+    let to_out = plan.frame.norm_to_out(plan.w, plan.h);
+    let gain = (plan.settings.light.exposure as f32).exp2();
+    let labs = img.data.iter().map(|c| lightcraft_color::perceptual::oklab_from_2020(masks::tonemap_for_select(c.map(|v| v * gain)))).collect();
+    (plan.w, plan.h, labs, pts.iter().map(|p| to_out.apply(*p)).collect())
+}
+
+/// The colours of the pixels `x0..x1 × y0..y1` of a `w`-wide plane of `labs`.
+fn labs_in(labs: &[[f32; 3]], w: usize, (x0, x1): (usize, usize), (y0, y1): (usize, usize)) -> Vec<[f32; 3]> {
+    (y0..y1).flat_map(|y| (x0..x1).filter_map(move |x| labs.get(y * w + x).copied())).collect()
+}
+
+/// The colour a colour-range mask would sample at normalized image point `p` (OkLab of the
+/// exposed scene colours, as [`MaskShape::ColorRange`](lightcraft_develop::MaskShape) compares
+/// them): the median of a small neighbourhood of a render fitting `req` (0.6 % of its long edge around the point, so
+/// noise, texture or a stray pixel do not decide it). `None` outside the image.
+pub fn color_range_sample(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest, p: lightcraft_geom::Point) -> Option<[f64; 3]> {
+    let (w, h, labs, at) = color_range_space(src, info, s, req, &[p]);
+    let o = at.first()?;
+    let (cx, cy) = (o.x.floor(), o.y.floor());
+    if !(cx >= 0.0 && cy >= 0.0 && cx < w as f64 && cy < h as f64) {
         return None;
     }
-    let gain = (plan.settings.light.exposure as f32).exp2();
-    let mut acc = [0f64; 3];
-    let mut n = 0.0;
-    for y in (cy - 1).max(0)..=(cy + 1).min(plan.h as i64 - 1) {
-        for x in (cx - 1).max(0)..=(cx + 1).min(plan.w as i64 - 1) {
-            let c = img.data[y as usize * plan.w + x as usize].map(|v| v * gain);
-            let lab = lightcraft_color::perceptual::oklab_from_2020(masks::tonemap_for_select(c));
-            for k in 0..3 {
-                acc[k] += lab[k] as f64;
-            }
-            n += 1.0;
-        }
-    }
-    Some(acc.map(|v| v / n))
+    let (cx, cy, r) = (cx as usize, cy as usize, masks::color_range::pick_radius(w, h));
+    let near = labs_in(&labs, w, (cx.saturating_sub(r), (cx + r + 1).min(w)), (cy.saturating_sub(r), (cy + r + 1).min(h)));
+    masks::color_range::median(&near)
+}
+
+/// The colours (at most `max`) a colour-range mask would sample from the box between normalized image points `a` and
+/// `b` (a drag with the eyedropper): enough to cover the colours in it ([`masks::color_range::representatives`]).
+/// `None` when the box misses the image.
+pub fn color_range_box(
+    src: &Rgb32f,
+    info: &SourceInfo,
+    s: &DevelopSettings,
+    req: &RenderRequest,
+    (a, b): (lightcraft_geom::Point, lightcraft_geom::Point),
+    max: usize,
+) -> Option<Vec<[f64; 3]>> {
+    let (w, h, labs, at) = color_range_space(src, info, s, req, &[a, b]);
+    let (p, q) = (at.first()?, at.get(1)?);
+    let span = |u: f64, v: f64, n: usize| -> Option<(usize, usize)> {
+        let (lo, hi) = (u.min(v).floor().max(0.0), u.max(v).ceil().min(n as f64));
+        // (at least the pixel under a box thinner than one)
+        let hi = if hi <= lo { lo + 1.0 } else { hi };
+        (lo.is_finite() && hi.is_finite() && lo < n as f64).then(|| (lo as usize, (hi as usize).min(n)))
+    };
+    let (xs, ys) = (span(p.x, q.x, w)?, span(p.y, q.y, h)?);
+    let reps = masks::color_range::representatives(&labs_in(&labs, w, xs, ys), max);
+    (!reps.is_empty()).then_some(reps)
 }
 
 /// The plane an overlay shows: a sharpening view's detail plane, the alpha of a mask overlay

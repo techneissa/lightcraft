@@ -16,7 +16,7 @@ use crate::geometry::Frame;
 
 mod alpha;
 mod brush;
-mod color_range;
+pub mod color_range;
 pub mod grid;
 mod key;
 mod people;
@@ -418,7 +418,7 @@ fn shape_alpha_in(
                 *v = smooth(lo - lf, lo, y) * (1.0 - smooth(hi, hi + hf, y));
             }
         }
-        MaskShape::ColorRange { samples, refine } => color_range::fill(&mut out, img, samples, *refine, gain),
+        MaskShape::ColorRange { samples, refine } => color_range::fill(&mut out, img, log_l, samples, *refine, gain, frame),
         MaskShape::Object { seg, detail, edge, .. }
         | MaskShape::Prompt { seg, detail, edge, .. }
         | MaskShape::Subject { seg, detail, edge }
@@ -993,6 +993,8 @@ fn guided_cross_fast(guide: &Plane, p: &mut Plane, sigma: f32, eps: f32, weight:
 mod tests;
 #[cfg(test)]
 mod tests_cache;
+#[cfg(test)]
+mod tests_color_range;
 #[cfg(test)]
 mod tests_grid;
 #[cfg(test)]
