@@ -20,6 +20,7 @@ pub mod brush_live;
 pub mod canvas_keys;
 mod command_error;
 pub mod control;
+mod control_help;
 mod debounce;
 pub mod destination;
 pub mod dialogs;
