@@ -7,7 +7,7 @@ use std::sync::Arc;
 use lightcraft_develop::BrushStroke;
 use lightcraft_raster::{Plane, Rgb32f};
 
-use super::auto_edge::{AutoColor, AutoRef, AutoRefs, dab_sample, median_box, search_margin, search_reach};
+use super::auto_edge::{AutoColor, AutoRef, AutoRefs, MedianBox, dab_sample, search_margin, search_reach};
 use super::{BrushDabs, accumulate, brush_dabs, dab_alpha, dab_pixel};
 use crate::for_rows;
 use crate::geometry::Frame;
@@ -137,41 +137,36 @@ pub fn rasterize(strokes: &[BrushStroke], frame: &Frame, w: usize, h: usize, img
     out
 }
 
-/// The references of an Auto Mask stroke's dabs ([`AutoRefs`]), and the median colours
-/// ([`median_box`]) of its box `x0..x1 × y0..y1` with the margin the dabs' samples look into, and
-/// that box.
-#[allow(clippy::type_complexity)]
-pub(crate) fn auto_refs(
-    bd: &BrushDabs,
-    img: &Rgb32f,
-    log_l: &Plane,
-    (x0, y0, x1, y1): (usize, usize, usize, usize),
-) -> (Vec<AutoRef>, Vec<AutoColor>, (usize, usize, usize, usize)) {
+/// The references of an Auto Mask stroke's dabs ([`AutoRefs`]), and the colours of its box
+/// `x0..x1 × y0..y1` with the margin the dabs' samples look into ([`MedianBox`]).
+pub(crate) fn auto_refs(bd: &BrushDabs, img: &Rgb32f, log_l: &Plane, (x0, y0, x1, y1): (usize, usize, usize, usize)) -> (Vec<AutoRef>, MedianBox) {
     use rayon::prelude::*;
     let (w, h) = (log_l.width, log_l.height);
     let m = search_margin(bd.r.max(0.5));
-    let mbox = (x0.saturating_sub(m), y0.saturating_sub(m), (x1 + m).min(w), (y1 + m).min(h));
-    let med = median_box(img, log_l, mbox);
-    let (mx0, my0, mx1, my1) = mbox;
-    if med.is_empty() || mx0 >= mx1 || my0 >= my1 {
-        return (Vec::new(), med, mbox);
+    let (mx0, my0, mx1, my1) = (x0.saturating_sub(m), y0.saturating_sub(m), (x1 + m).min(w), (y1 + m).min(h));
+    // the pixels each row's dabs cover (from, to)
+    let mut spans = vec![(usize::MAX, 0usize); my1.saturating_sub(my0)];
+    let clamp = |v: f64, max: usize| v.clamp(0.0, max as f64) as usize;
+    for (k, d) in bd.dabs.iter().enumerate() {
+        let r = bd.dab(k).0;
+        let (a, z) = (clamp((d.x - r).floor(), w), clamp((d.x + r).ceil(), w));
+        for y in clamp((d.y - r).floor(), h).max(my0)..clamp((d.y + r).ceil(), h).min(my1) {
+            if let Some(s) = spans.get_mut(y - my0) {
+                *s = (s.0.min(a), s.1.max(z));
+            }
+        }
     }
-    let mbw = mx1 - mx0;
-    let at = |x: isize, y: isize| {
-        let x = x.clamp(mx0 as isize, mx1 as isize - 1) as usize - mx0;
-        let y = y.clamp(my0 as isize, my1 as isize - 1) as usize - my0;
-        med.get(y * mbw + x).copied().unwrap_or([0.0; 4])
-    };
+    let med = MedianBox::new(img, log_l, (mx0, my0, mx1, my1), |y| spans.get(y.wrapping_sub(my0)).copied().filter(|s| s.0 < s.1));
     let samples: Vec<AutoColor> = (0..bd.dabs.len())
         .into_par_iter()
         .map(|k| {
             let j = bd.dabs.get(k).map_or(0, |d| dab_pixel(*d, w, h));
-            dab_sample(at, (j % w) as isize, (j / w) as isize, search_reach(bd.dab(k).0))
+            dab_sample(|x, y| med.at(x, y), (j % w) as isize, (j / w) as isize, search_reach(bd.dab(k).0))
         })
         .collect();
     let mut chain = AutoRefs::default();
     let refs = samples.into_iter().map(|s| chain.next(s)).collect();
-    (refs, med, mbox)
+    (refs, med)
 }
 
 /// Stamp stroke `s` into `out`: its dabs inside their bounding box (flow accumulating up to density
@@ -198,8 +193,7 @@ fn stamp(s: &BrushStroke, frame: &Frame, img: &Rgb32f, log_l: &Plane, out: &mut 
         return;
     }
     let (bw, bh) = (x1 - x0, y1 - y0);
-    let (refs, med, mbox) = if auto { auto_refs(&bd, img, log_l, (x0, y0, x1, y1)) } else { (Vec::new(), Vec::new(), (0, 0, 0, 0)) };
-    let mbw = mbox.2 - mbox.0;
+    let (refs, med) = if auto { auto_refs(&bd, img, log_l, (x0, y0, x1, y1)) } else { (Vec::new(), MedianBox::empty()) };
     let mut sp = Plane::new(bw, bh);
     for_rows(&mut sp.data, bw, |ry, row| {
         let y = y0 + ry;
@@ -218,7 +212,7 @@ fn stamp(s: &BrushStroke, frame: &Frame, img: &Rgb32f, log_l: &Plane, out: &mut 
                 }
                 let mut a = dab_alpha(dd, r, hard);
                 if let Some(rf) = refs.get(k) {
-                    a *= med.get((y - mbox.1) * mbw + x - mbox.0).map_or(0.0, |c| rf.weight(*c));
+                    a *= rf.weight(med.at(x as isize, y as isize));
                 }
                 if let Some(v) = row.get_mut(x - x0) {
                     // flow accumulates within a stroke up to density

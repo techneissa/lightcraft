@@ -65,11 +65,40 @@ pub fn median3(at: impl Fn(isize, isize) -> AutoColor) -> AutoColor {
     for (k, c) in v.iter_mut().enumerate() {
         *c = at(k as isize % 3 - 1, k as isize / 3 - 1);
     }
-    std::array::from_fn(|ch| {
-        let mut s: [f32; 9] = std::array::from_fn(|k| v[k][ch]);
-        s.sort_unstable_by(f32::total_cmp);
-        s[4]
-    })
+    std::array::from_fn(|ch| median9(std::array::from_fn(|k| v[k][ch])))
+}
+
+/// The median of nine values: a sorting network of 19 exchanges that leaves the middle one in place
+/// (Paeth's, as in Devillard's "Fast median search").
+#[inline]
+fn median9(mut p: [f32; 9]) -> f32 {
+    const PAIRS: [(usize, usize); 19] = [
+        (1, 2),
+        (4, 5),
+        (7, 8),
+        (0, 1),
+        (3, 4),
+        (6, 7),
+        (1, 2),
+        (4, 5),
+        (7, 8),
+        (0, 3),
+        (5, 8),
+        (4, 7),
+        (3, 6),
+        (1, 4),
+        (2, 5),
+        (4, 7),
+        (4, 2),
+        (6, 4),
+        (4, 2),
+    ];
+    for (a, b) in PAIRS {
+        let (lo, hi) = (p[a].min(p[b]), p[a].max(p[b]));
+        p[a] = lo;
+        p[b] = hi;
+    }
+    p[4]
 }
 
 /// How far (pixels) a dab of radius `r` px looks for a flat spot to sample: a third of the radius.
@@ -167,38 +196,94 @@ impl AutoRefs {
     }
 }
 
-/// The median colours ([`median3`]) of the `x0..x1 × y0..y1` box of the photo, row by row (the
-/// frame's edge pixels repeat past it). Empty when `img` and `log_l` differ in size.
-pub fn median_box(img: &Rgb32f, log_l: &Plane, (x0, y0, x1, y1): (usize, usize, usize, usize)) -> Vec<AutoColor> {
-    let (w, h) = (log_l.width, log_l.height);
-    if w == 0 || h == 0 || img.width != w || img.height != h || x0 >= x1 || y0 >= y1 {
-        return Vec::new();
+/// The colours of a box of the photo an Auto Mask stroke reads: each pixel's, and the median
+/// ([`median3`]) of each pixel in the rows' spans it is made with (the pixels the stroke's dabs
+/// cover); any other pixel's median is worked out when asked for. Past the box, its edge pixels
+/// repeat.
+pub struct MedianBox {
+    x0: usize,
+    y0: usize,
+    w: usize,
+    h: usize,
+    raw: Vec<AutoColor>,
+    /// (NaN luminance: not worked out)
+    med: Vec<AutoColor>,
+}
+
+impl MedianBox {
+    /// The colours of the `x0..x1 × y0..y1` box of the photo (clamped to it), with medians in the
+    /// span `span(y)` (`x` from, to: exclusive) of each row `y`. Empty when `img` and `log_l` differ
+    /// in size.
+    pub fn new(
+        img: &Rgb32f,
+        log_l: &Plane,
+        (x0, y0, x1, y1): (usize, usize, usize, usize),
+        span: impl Fn(usize) -> Option<(usize, usize)> + Sync,
+    ) -> MedianBox {
+        let (fw, fh) = (log_l.width, log_l.height);
+        let (x1, y1) = (x1.min(fw), y1.min(fh));
+        if img.width != fw || img.height != fh || x0 >= x1 || y0 >= y1 {
+            return MedianBox::empty();
+        }
+        let (w, h) = (x1 - x0, y1 - y0);
+        let mut raw = vec![[0.0f32; 4]; w * h];
+        crate::for_rows(&mut raw, w, |ry, row| {
+            let y = y0 + ry;
+            for (c, x) in row.iter_mut().zip(x0..) {
+                let i = y * fw + x;
+                *c = auto_color(log_l.data.get(i).copied().unwrap_or(0.0), img.data.get(i).copied().unwrap_or([0.0; 3]));
+            }
+        });
+        let mut b = MedianBox { x0, y0, w, h, raw, med: Vec::new() };
+        let mut med = vec![[f32::NAN; 4]; w * h];
+        crate::for_rows(&mut med, w, |ry, row| {
+            let y = y0 + ry;
+            let Some((a, z)) = span(y) else { return };
+            let (a, z) = (a.clamp(x0, x1), z.clamp(x0, x1));
+            for (c, x) in row.iter_mut().skip(a - x0).take(z.saturating_sub(a)).zip(a..) {
+                *c = b.median_of(x as isize, y as isize);
+            }
+        });
+        b.med = med;
+        b
     }
-    let (x1, y1) = (x1.min(w), y1.min(h));
-    let (bw, bh) = (x1.saturating_sub(x0), y1.saturating_sub(y0));
-    // the colours with a 1 px margin
-    let (mx0, my0) = (x0.saturating_sub(1), y0.saturating_sub(1));
-    let (mx1, my1) = ((x1 + 1).min(w), (y1 + 1).min(h));
-    let mw = mx1 - mx0;
-    let mut raw = vec![[0.0f32; 4]; mw * (my1 - my0)];
-    crate::for_rows(&mut raw, mw, |ry, row| {
-        let y = my0 + ry;
-        for (c, x) in row.iter_mut().zip(mx0..) {
-            let i = y * w + x;
-            *c = auto_color(log_l.data.get(i).copied().unwrap_or(0.0), img.data.get(i).copied().unwrap_or([0.0; 3]));
+
+    /// No pixels.
+    pub fn empty() -> MedianBox {
+        MedianBox { x0: 0, y0: 0, w: 0, h: 0, raw: Vec::new(), med: Vec::new() }
+    }
+
+    /// The index of pixel `(x, y)` (frame pixels) clamped to the box.
+    #[inline]
+    fn index(&self, x: isize, y: isize) -> usize {
+        let cx = (x - self.x0 as isize).clamp(0, self.w.saturating_sub(1) as isize) as usize;
+        let cy = (y - self.y0 as isize).clamp(0, self.h.saturating_sub(1) as isize) as usize;
+        cy * self.w + cx
+    }
+
+    #[inline]
+    fn median_of(&self, x: isize, y: isize) -> AutoColor {
+        median3(|dx, dy| self.raw.get(self.index(x + dx, y + dy)).copied().unwrap_or([0.0; 4]))
+    }
+
+    /// The median colour of pixel `(x, y)` (frame pixels).
+    #[inline]
+    pub fn at(&self, x: isize, y: isize) -> AutoColor {
+        match self.med.get(self.index(x, y)) {
+            Some(c) if !c[0].is_nan() => *c,
+            _ => self.median_of(x, y),
         }
-    });
-    let at = |x: isize, y: isize| {
-        let x = x.clamp(mx0 as isize, mx1 as isize - 1) as usize - mx0;
-        let y = y.clamp(my0 as isize, my1 as isize - 1) as usize - my0;
-        raw.get(y * mw + x).copied().unwrap_or([0.0; 4])
-    };
-    let mut out = vec![[0.0f32; 4]; bw * bh];
-    crate::for_rows(&mut out, bw, |ry, row| {
-        let y = (y0 + ry) as isize;
-        for (c, x) in row.iter_mut().zip(x0 as isize..) {
-            *c = median3(|dx, dy| at(x + dx, y + dy));
-        }
-    });
-    out
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn the_network_finds_the_median() {
+    // every order of a few sets of nine values
+    for k in 0..2000u32 {
+        let v: [f32; 9] = std::array::from_fn(|i| ((k.wrapping_mul(2_654_435_761).rotate_left(i as u32 * 7) >> 20) % 13) as f32);
+        let mut s = v;
+        s.sort_unstable_by(f32::total_cmp);
+        assert_eq!(median9(v), s[4], "{v:?}");
+    }
 }

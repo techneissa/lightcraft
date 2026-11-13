@@ -29,7 +29,7 @@ fn reference_brush(strokes: &[BrushStroke], frame: &Frame, w: usize, h: usize, i
         let (dens, erase, auto) = (bd.density, bd.erase, bd.auto);
         let mut stroke_alpha = Plane::new(w, h);
         // (Auto Mask: the dabs' references and the median colours of the whole frame)
-        let (refs, med, _) = if auto { brush::auto_refs(&bd, img, log_l, (0, 0, w, h)) } else { (Vec::new(), Vec::new(), (0, 0, 0, 0)) };
+        let (refs, med) = if auto { brush::auto_refs(&bd, img, log_l, (0, 0, w, h)) } else { (Vec::new(), auto_edge::MedianBox::empty()) };
         for (k, d) in bd.dabs.iter().enumerate() {
             let (r, hard, flow) = bd.dab(k);
             let (x0, x1) = (((d.x - r).floor().max(0.0)) as usize, ((d.x + r).ceil().max(0.0) as usize).min(w));
@@ -43,7 +43,7 @@ fn reference_brush(strokes: &[BrushStroke], frame: &Frame, w: usize, h: usize, i
                     let mut a = dab_alpha(dd, r, hard);
                     let i = y * w + x;
                     if let Some(rf) = refs.get(k) {
-                        a *= rf.weight(med[i]);
+                        a *= rf.weight(med.at(x as isize, y as isize));
                     }
                     let v = &mut stroke_alpha.data[i];
                     *v = accumulate(*v, a, flow, dens);
