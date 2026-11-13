@@ -64,6 +64,7 @@ mod vision_edges;
 #[cfg(feature = "sam")]
 mod birefnet;
 mod brush_area;
+mod describe_region;
 mod journal_growth;
 #[cfg(target_os = "macos")]
 mod macos_colour;

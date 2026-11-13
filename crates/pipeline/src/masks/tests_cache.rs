@@ -500,8 +500,8 @@ fn a_change_to_any_one_number_of_a_mask_is_a_new_key() {
         ),
         (
             "prompt",
-            MaskShape::Prompt { text: "the car".into(), seg: None, detail: Vec::new(), edge: 0.0 },
-            MaskShape::Prompt { text: "the cat".into(), seg: None, detail: Vec::new(), edge: 0.0 },
+            MaskShape::Prompt { text: "the car".into(), seg: None, detail: Vec::new(), edge: 0.0, region: None },
+            MaskShape::Prompt { text: "the cat".into(), seg: None, detail: Vec::new(), edge: 0.0, region: None },
         ),
         ("people", MaskShape::people(1, vec!["face".into()]), MaskShape::people(1, vec!["hair".into()])),
         ("landscape", MaskShape::Landscape { class: "water".into() }, MaskShape::Landscape { class: "sky".into() }),

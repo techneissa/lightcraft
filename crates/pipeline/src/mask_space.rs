@@ -169,9 +169,15 @@ fn remap(m: &mut Mask, fwd: &dyn Fn(Point) -> Point, back: &dyn Fn(Point) -> Poi
                 hint.iter_mut().chain(exclude.iter_mut()).for_each(|p| *p = fwd(*p));
                 remap_segs(seg, detail, fwd, back);
             }
+            // (its region, issue #281, moves as a box around what it covered)
+            MaskShape::Prompt { seg, detail, region, .. } => {
+                if let Some(r) = region.as_mut() {
+                    *r = map_rect(*r, fwd);
+                }
+                remap_segs(seg, detail, fwd, back);
+            }
             // (Subject, Sky and Background keep the segmentation they were computed with, like Prompt)
-            MaskShape::Prompt { seg, detail, .. }
-            | MaskShape::Subject { seg, detail, .. }
+            MaskShape::Subject { seg, detail, .. }
             | MaskShape::Sky { seg, detail, .. }
             | MaskShape::Background { seg, detail, .. }
             | MaskShape::People { seg, detail, .. } => remap_segs(seg, detail, fwd, back),

@@ -252,7 +252,7 @@ fn a_part_changed_while_its_photo_is_being_found_is_found_as_it_is_now() {
     assert!(s.adaptive_busy());
     // A's first mask now selects what a description names; pasted to B while B's search runs
     let mut d = (*s.develop_of(a).unwrap()).clone();
-    d.masks[0].components[0].shape = MaskShape::Prompt { text: "dog".into(), seg: Some(describe(a)), detail: vec![], edge: 0.0 };
+    d.masks[0].components[0].shape = MaskShape::Prompt { text: "dog".into(), seg: Some(describe(a)), detail: vec![], edge: 0.0, region: None };
     s.set_develop(a, d, "Describe").unwrap();
     s.execute("develop.copy", &json!({"groups": ["masks"]})).unwrap();
     s.execute("develop.paste", &json!({"ids": [b.0]})).unwrap();

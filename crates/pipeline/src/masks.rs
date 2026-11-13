@@ -444,6 +444,10 @@ fn shape_alpha_in(
             // (the edges of the resampled photo: no later edit moves them, `uses_guide`)
             let guide = guide.filter(|g| (g.width, g.height) == (w, h)).unwrap_or(log_l);
             sample_seg(seg.as_ref(), detail, gain, frame, w, h, guide, &mut out);
+            // (issue #281: a Describe limited to a part of the photo selects nothing outside it)
+            if let Some(r) = shape.region() {
+                clip_to(&mut out, frame, w, h, r);
+            }
             if e > 0.0 {
                 smooth_plane(&mut out, e * 0.02 * frame_px(frame, w));
             }
@@ -607,6 +611,19 @@ fn sample_seg(seg: Option<&SegMask>, detail: &[SegMask], gain: f32, frame: &Fram
         guided_cross_fast(log_l, out, (SEG_WINDOW * cell) as f32, SEG_EPS, |mean| 1.0 - smooth(3.0 * gain, 7.0 * gain, mean.abs()));
     }
     out.map_in_place(|l| 1.0 / (1.0 + (-l).exp()));
+}
+
+/// Clears `out` (a `w × h` plane of `frame`) outside `r`, normalized `[x0, y0, x1, y1]` mask coordinates.
+fn clip_to(out: &mut Plane, frame: &Frame, w: usize, h: usize, r: [f64; 4]) {
+    let m = frame.out_to_mask(w, h);
+    for_rows(&mut out.data, w, |y, row| {
+        for (x, v) in row.iter_mut().enumerate() {
+            let n = m.apply(Point::new(x as f64 + 0.5, y as f64 + 0.5));
+            if !(n.x >= r[0] && n.x <= r[2] && n.y >= r[1] && n.y <= r[3]) {
+                *v = 0.0;
+            }
+        }
+    });
 }
 
 fn frame_px(frame: &Frame, w: usize) -> f32 {

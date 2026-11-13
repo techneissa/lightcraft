@@ -42,7 +42,7 @@ fn two_ai_submasks() -> Headless {
     // a selection each (found by the AI): the Edge slider is enabled for a submask that has one
     let seg = SegMask::from_logits(16, &vec![8.0; 16 * 16]);
     let object = MaskShape::Object { hint: vec![Point::new(0.6, 0.5)], exclude: vec![], seg: Some(seg.clone()), detail: vec![], edge: 0.0 };
-    let prompt = MaskShape::Prompt { text: "circle".into(), seg: Some(seg), detail: vec![], edge: 0.0 };
+    let prompt = MaskShape::Prompt { text: "circle".into(), seg: Some(seg), detail: vec![], edge: 0.0, region: None };
     exec(&mut h, "mask.add", json!({"kind": "radial", "center": [0.5, 0.5], "rx": 0.1, "ry": 0.1}));
     exec(&mut h, "mask.update", json!({"component": 0, "shape": object}));
     exec(&mut h, "mask.addComponent", json!({"kind": "radial", "op": "add", "center": [0.5, 0.5], "rx": 0.1, "ry": 0.1}));
