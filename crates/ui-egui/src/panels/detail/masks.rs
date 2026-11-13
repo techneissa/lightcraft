@@ -430,10 +430,6 @@ pub(super) fn mask_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &eg
         // painted region (`view_overlay` at detail.rs:1354 only covers masks with components).
         let show_outline = sel || (app.ui.mask_overlay_all && m.visible && !m.components.is_empty());
         for (ci, c) in m.components.iter().enumerate() {
-            // (a Describe limited to a part of the photo: that part, issue #281)
-            if sel && let Some(r) = c.shape.region() {
-                super::describe_area::outline(p, map, r);
-            }
             if show_outline {
                 // the selected part's handles are blue: the ones a drag takes
                 component_outline(ui, p, map, (m.id, ci, sel && app.session.active_part() == Some(ci)), &c.shape, sel, &mut grips);

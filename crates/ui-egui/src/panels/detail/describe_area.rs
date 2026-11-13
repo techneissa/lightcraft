@@ -1,11 +1,11 @@
 //! Issue #281: zoomed in, a Describe mask looks only in the part of the photo the loupe shows. The loupe notes that
 //! part each frame the Masking panel is open ([`note`]); the Describe field sends it as the mask's `region`
-//! ([`region_for`]); a selected mask's region is outlined on the photo ([`outline`]).
+//! ([`region_for`]). The region is not outlined on the photo (techneissa: the box always showing was in the way).
 
 use lightcraft_catalog::PhotoId;
 
 use super::geometry::CanvasMap;
-use super::{Color32, LightcraftApp, Point, Pos2, Rect, Stroke};
+use super::{LightcraftApp, Pos2, Rect};
 
 /// The part of the photo the loupe shows when zoomed in, normalized, on the photo as shot (`Mask::on_photo`): where
 /// the model looks, whatever mask the selection joins (an old mask is moved onto the photo before the model runs).
@@ -48,24 +48,4 @@ fn area(map: &CanvasMap, r: Rect) -> Option<[f64; 4]> {
 pub(crate) fn region_for(app: &LightcraftApp) -> Option<[f64; 4]> {
     let id = app.session.active()?;
     app.describe_area.filter(|a| a.photo == id).map(|a| a.region)
-}
-
-/// Outline region `r` (normalized, `map`'s coordinates) on the photo: a thin dashed box, drawn through any warp.
-pub(super) fn outline(p: &egui::Painter, map: &CanvasMap, r: [f64; 4]) {
-    let corners = [Point::new(r[0], r[1]), Point::new(r[2], r[1]), Point::new(r[2], r[3]), Point::new(r[0], r[3])];
-    let mut pts: Vec<Pos2> = Vec::with_capacity(4 * EDGE_SAMPLES + 1);
-    for (i, a) in corners.iter().enumerate() {
-        let b = corners[(i + 1) % 4];
-        for k in 0..EDGE_SAMPLES {
-            let t = k as f64 / EDGE_SAMPLES as f64;
-            pts.push(map.screen(Point::new(a.x + t * (b.x - a.x), a.y + t * (b.y - a.y))));
-        }
-    }
-    if let Some(first) = pts.first().copied() {
-        pts.push(first);
-    }
-    let dark = Stroke::new(2.5, Color32::from_black_alpha(110));
-    let light = Stroke::new(1.0, Color32::from_white_alpha(220));
-    p.add(egui::Shape::line(pts.clone(), dark));
-    p.extend(egui::Shape::dashed_line(&pts, light, 6.0, 4.0));
 }
