@@ -1660,7 +1660,7 @@ fn general_interaction(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::
         return;
     }
     if app.ui.tool == "colorRange" {
-        color_range_pick(app, ui, resp, map);
+        color_range_pick(app, ui, resp, map, |_| false);
         return;
     }
     if app.ui.tool == "pointColor" {

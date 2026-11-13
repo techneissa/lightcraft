@@ -1518,7 +1518,7 @@ fn preview_build_at_the_test_gate_completes_without_cancel() {
 }
 
 /// Colour range: a click samples the colour under it, so the mask selects that colour (white
-/// in the mask view) and not a different one; ⇧ adds samples, up to five.
+/// in the mask view) and not a different one; ⇧ adds samples, up to five; a dragged box samples the colours in it.
 #[test]
 fn color_range_sampling_selects_the_clicked_colour() {
     use lightcraft_pipeline::{MaskView, Overlay};
@@ -1554,6 +1554,18 @@ fn color_range_sampling_selects_the_clicked_colour() {
     // a plain click starts over
     assert_eq!(s.execute("mask.sampleColor", &json!({"x": 0.5, "y": 0.5})).unwrap()["samples"].as_array().unwrap().len(), 1);
     assert!(s.execute("mask.sampleColor", &json!({"x": 1.5, "y": 0.5})).is_err());
+    // a box samples the colours in it, so the mask takes most of the box (issue #279)
+    let n = s.execute("mask.sampleColor", &json!({"x": 0.5, "y": 0.5, "x2": 0.03, "y2": 0.03})).unwrap()["samples"].as_array().unwrap().len();
+    assert!((2..=4).contains(&n), "{n} colours");
+    let img = mask(&mut s);
+    let inside: Vec<u8> =
+        (0..20).flat_map(|j| (0..20).map(move |i| (0.04 + 0.022 * i as f64, 0.04 + 0.022 * j as f64))).map(|(x, y)| at(&img, x, y)).collect();
+    let taken = inside.iter().filter(|v| **v > 200).count();
+    assert!(taken * 4 >= inside.len() * 3, "{taken} of {} points of the box are selected", inside.len());
+    assert!(s.execute("mask.sampleColor", &json!({"x": 0.5, "y": 0.5, "x2": 0.6})).is_err(), "a box needs both corners");
+    // a box in the margin left of or above the photo misses it, rather than sampling its edge
+    assert!(s.execute("mask.sampleColor", &json!({"x": -0.2, "y": 0.4, "x2": -0.1, "y2": 0.6})).is_err(), "a box left of the photo");
+    assert!(s.execute("mask.sampleColor", &json!({"x": 0.4, "y": -0.2, "x2": 0.6, "y2": -0.1})).is_err(), "a box above the photo");
 }
 
 #[test]
