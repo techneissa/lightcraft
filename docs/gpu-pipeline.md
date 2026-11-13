@@ -186,8 +186,8 @@ walks the drive.
   RTX 5070 vs 4.3–5.2 ms on 32 CPU threads (`crates/gpu/tests/it/thumbs_bench.rs`), and the cores stay
   free for raw decoding.
 - 8-bit renders take the GPU path with LUT profiles (the `.cube` table rides in the kernel's
-  `aux` buffer, trilinear like `Lut3d::apply`, after grain), masks with Refine Edges (the cross
-  guided filter of Auto Mask, blended by √refine before the mask's invert and amount) and soft
+  `aux` buffer, trilinear like `Lut3d::apply`, after grain), masks with Refine Edges (a cross
+  guided filter on log luminance, blended by √refine before the mask's invert and amount) and soft
   proofs into a colour space (proof-space gamut mapping and both gamut warnings, into an output
   space or a display). The float HDR render (`OutputDepth::F32Hdr`) takes the GPU path too: the
   `finish` kernel keeps values up to the edit's peak, encodes with the exact sRGB curve and writes
@@ -500,11 +500,11 @@ bounding box. Each 16 × 16 tile first picks, 256 dabs at a time, the dabs that 
 memory, so a stroke of tens of thousands of dabs costs what its box and its dabs near each pixel cost; the
 old kernel took at most 4,096 dabs across the whole mask and sent the part to the CPU past that. A dab is
 five words (x, y, radius, hard core, flow), pen pressure applied on the CPU, so pressure stays on the
-device. An Auto Mask stroke is stamped alone, refined with the guided filter and combined in order; the filter runs
-on a cut of the frame, the stroke's box plus twice the filter's reach, and `xguided_stamp` combines the refined
-alpha back into the part (`lightcraft_pipeline::masks::auto_pixels_filtered` counts the pixels filtered). A part
-whose strokes extend a held part stamps only the new strokes over a copy of its plane; the last four parts
-stay on the device.
+device. A part with Auto Mask strokes is stamped on the CPU (`masks::auto_edge`: each dab compares 3 × 3 median
+colours with a reference built from the stroke's recent samples, issue #280) from the render's colours read back
+once, and uploaded; the CPU keeps the last four such parts (`masks::BrushCache`, counted in the stages' bytes), so a
+new stroke stamps only that stroke there too. A part whose strokes extend a held part stamps only the new strokes
+over a copy of its plane; the last four parts stay on the device.
 
 ### The overlay's alphas (issue #75)
 

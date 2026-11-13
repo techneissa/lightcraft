@@ -14,7 +14,9 @@ pub mod target;
 use composite::{Blend, Mapping, PxRect};
 use egui::{Color32, ColorImage, Pos2, Rect, TextureHandle, TextureOptions, pos2};
 use lightcraft_geom::Point;
-use lightcraft_pipeline::masks::{accumulate, auto_similarity, dab_alpha, pressure_flow, pressure_radius, push_dabs_counted, push_pressures};
+use lightcraft_pipeline::masks::{
+    AutoRefs, accumulate, dab_alpha, dab_sample, pressure_flow, pressure_radius, push_dabs_counted, push_pressures, search_reach,
+};
 use std::sync::Arc;
 
 /// The largest live-stroke buffer edge (pixels); a bigger canvas is painted at a lower resolution.
@@ -79,6 +81,8 @@ pub struct LiveStroke {
     last: Option<Point>,
     /// The pen pressure of the last stamped sample.
     last_pressure: f32,
+    /// Auto Mask: the references of the dabs stamped so far, as the committed stroke makes them.
+    refs: AutoRefs,
     /// Buffer pixels painted since the last upload: (x0, y0, x1, y1), exclusive ends.
     dirty: Option<(usize, usize, usize, usize)>,
     texture: Option<TextureHandle>,
@@ -118,6 +122,7 @@ impl LiveStroke {
             emitted: 0,
             last: None,
             last_pressure: 1.0,
+            refs: AutoRefs::default(),
             dirty: None,
             texture: None,
             blend_dirty: None,
@@ -148,8 +153,8 @@ impl LiveStroke {
         self.stamp_with(points, pressure, None)
     }
 
-    /// [`Self::stamp`] with Auto Mask: each pixel takes a dab's paint by how much it looks like the
-    /// pixel under the dab's centre in `auto`'s picture.
+    /// [`Self::stamp`] with Auto Mask: each pixel takes a dab's paint by how close its colour in
+    /// `auto`'s picture is to the dab's reference (`lightcraft_pipeline::masks::AutoRefs`).
     pub fn stamp_with(&mut self, points: &[Pos2], pressure: &[f32], auto: Option<AutoCtx>) -> bool {
         let Some(new) = points.get(self.placed..) else { return false };
         if new.is_empty() {
@@ -179,15 +184,18 @@ impl LiveStroke {
             if !(d.x.is_finite() && d.y.is_finite()) {
                 continue;
             }
-            let reference = auto.as_ref().map(|a| {
-                a.guide.at(
-                    to_frac(d.x, clip.left(), a.img_rect.left(), a.img_rect.width()),
-                    to_frac(d.y, clip.top(), a.img_rect.top(), a.img_rect.height()),
-                )
-            });
             let r = pressure_radius(base.0, p);
             let hard = if base.0 > 0.0 { base.1 * r / base.0 } else { base.1 };
             let flow = pressure_flow(flow, p);
+            let reference = auto.as_ref().map(|a| {
+                let (gx, gy) = a.guide.pixel(
+                    to_frac(d.x, clip.left(), a.img_rect.left(), a.img_rect.width()),
+                    to_frac(d.y, clip.top(), a.img_rect.top(), a.img_rect.height()),
+                );
+                // (the dab's radius in the picture's pixels)
+                let rg = r / f64::from(scale) * a.guide.size()[0] as f64 / f64::from(a.img_rect.width().max(1e-6));
+                self.refs.next(dab_sample(|x, y| a.guide.median(x, y), gx, gy, search_reach(rg)))
+            });
             let x0 = (d.x - r).floor().clamp(0.0, self.w as f64) as usize;
             let x1 = (d.x + r).ceil().clamp(0.0, self.w as f64) as usize;
             let y0 = (d.y - r).floor().clamp(0.0, self.h as f64) as usize;
@@ -203,11 +211,12 @@ impl LiveStroke {
                         continue;
                     }
                     let mut a = dab_alpha(dd, r, hard);
-                    if let (Some(ctx), Some((rl, rch))) = (auto.as_ref(), reference) {
-                        let fx = to_frac(x as f64 + 0.5, clip.left(), ctx.img_rect.left(), ctx.img_rect.width());
-                        let fy = to_frac(y as f64 + 0.5, clip.top(), ctx.img_rect.top(), ctx.img_rect.height());
-                        let (l, ch) = ctx.guide.at(fx, fy);
-                        a *= auto_similarity(l, ch, rl, rch);
+                    if let (Some(ctx), Some(rf)) = (auto.as_ref(), reference) {
+                        let (gx, gy) = ctx.guide.pixel(
+                            to_frac(x as f64 + 0.5, clip.left(), ctx.img_rect.left(), ctx.img_rect.width()),
+                            to_frac(y as f64 + 0.5, clip.top(), ctx.img_rect.top(), ctx.img_rect.height()),
+                        );
+                        a *= rf.weight(ctx.guide.median(gx, gy));
                     }
                     *v = accumulate(*v, a, flow, density);
                 }
@@ -613,6 +622,67 @@ mod tests {
             assert!(worst < 1e-5, "feather {feather}: live and committed coverage differ by {worst}");
             assert!(committed.data.iter().any(|v| *v > 0.5));
         }
+    }
+
+    /// Auto Mask: the live stroke, painted frame by frame over the picture at the output's resolution, is the mask the
+    /// pipeline builds from the committed stroke (issue #280): along a blurred edge with grain, the centre slipping
+    /// over it.
+    #[test]
+    fn auto_mask_live_stroke_equals_the_committed_mask() {
+        use lightcraft_color::transfer::srgb_to_linear;
+        use lightcraft_develop::{BrushStroke, MaskShape};
+        use lightcraft_pipeline::{
+            geometry::Frame,
+            local::log_lum,
+            masks::{brush_dabs, shape_alpha},
+        };
+        use lightcraft_raster::Rgb32f;
+
+        let (w, h) = (200usize, 120usize);
+        // dark on the left, light on the right, the edge at x = 100 blurred over a few pixels
+        let px: Vec<Color32> = (0..h)
+            .flat_map(|y| {
+                (0..w).map(move |x| {
+                    let t = 1.0 / (1.0 + (-(x as f32 + 0.5 - 100.0)).exp());
+                    let n = ((x * 7 + y * 13) % 11) as f32 - 5.0;
+                    let v = |a: f32, b: f32| (a + (b - a) * t + n).clamp(0.0, 255.0) as u8;
+                    Color32::from_rgb(v(60.0, 200.0), v(70.0, 190.0), v(90.0, 150.0))
+                })
+            })
+            .collect();
+        let guide = auto::Guide::new(&ColorImage::new([w, h], px.clone()));
+        let lin = Rgb32f::from_fn(w, h, |x, y| {
+            let c = px[y * w + x];
+            [c.r(), c.g(), c.b()].map(|v| srgb_to_linear(v as f32 / 255.0))
+        });
+        let log_l = lin.map(log_lum);
+        let frame = Frame::new(w, h, &Default::default(), true);
+        let points = (0..=10).map(|k| Point::new(if k % 2 == 0 { 0.43 } else { 0.515 }, 0.1 + 0.08 * k as f64)).collect();
+        let stroke = BrushStroke { points, size: 0.06, feather: 50.0, flow: 80.0, auto_mask: true, ..Default::default() };
+        let committed = shape_alpha(&MaskShape::Brush { strokes: vec![stroke.clone()] }, &frame, w, h, &lin, &log_l, 0.0, None);
+        let bd = brush_dabs(&stroke, &frame, w, h);
+        let clip = Rect::from_min_size(Pos2::ZERO, vec2(w as f32, h as f32));
+        let live = LiveParams {
+            clip,
+            scale: 1.0,
+            r: bd.r as f32,
+            hard: bd.hard as f32,
+            flow: bd.flow,
+            density: bd.density,
+            color: [255, 0, 0],
+            opacity: 1.0,
+        };
+        let to_out = frame.norm_to_out(w, h);
+        let screen: Vec<Pos2> = stroke.points.iter().map(|p| to_out.apply(*p)).map(|q| pos2(q.x as f32, q.y as f32)).collect();
+        let mut steps = LiveStroke::new(live);
+        for n in 1..=screen.len() {
+            steps.stamp_with(&screen[..n], &[], Some(AutoCtx { guide: &guide, img_rect: clip }));
+        }
+        let worst = steps.alpha.iter().zip(&committed.data).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+        assert!(worst < 1e-4, "live and committed Auto Mask coverage differ by {worst}");
+        // (the dark side is painted, the light side is not)
+        let (dark, light) = (committed.get(90, 60), committed.get(108, 60));
+        assert!(dark > 0.9 && light < 0.01, "{dark} {light}");
     }
 
     /// Auto Mask while painting: a stroke started on one surface does not paint the surface next to

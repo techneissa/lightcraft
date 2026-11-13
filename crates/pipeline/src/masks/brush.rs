@@ -7,25 +7,13 @@ use std::sync::Arc;
 use lightcraft_develop::BrushStroke;
 use lightcraft_raster::{Plane, Rgb32f};
 
-use super::{accumulate, auto_refine, auto_similarity, brush_dabs, chromaticity, dab_alpha, dab_pixel, guided_cross};
+use super::auto_edge::{AutoColor, AutoRef, AutoRefs, dab_sample, median_box, search_margin, search_reach};
+use super::{BrushDabs, accumulate, brush_dabs, dab_alpha, dab_pixel};
 use crate::for_rows;
 use crate::geometry::Frame;
 
 thread_local! {
     static STROKES: Cell<usize> = const { Cell::new(0) };
-    static FILTERED: Cell<usize> = const { Cell::new(0) };
-}
-
-/// Count `px` pixels filtered by an Auto Mask stroke's guided filter ([`auto_pixels_filtered`]): for a renderer that
-/// filters strokes itself.
-pub fn note_filtered(px: usize) {
-    FILTERED.with(|c| c.set(c.get().saturating_add(px)));
-}
-
-/// How many pixels Auto Mask strokes' guided filters have covered on this thread: a test checks that a small stroke
-/// filters a small part of the frame.
-pub fn auto_pixels_filtered() -> usize {
-    FILTERED.with(Cell::get)
 }
 
 /// How many strokes have been stamped into a brush plane on this thread: a test counts what adding
@@ -99,8 +87,8 @@ pub fn brush_chain(strokes: &[BrushStroke]) -> Vec<u64> {
 /// The plane of brush strokes `strokes` (max-combine; erase strokes subtract), `w × h`. With a
 /// `ctx`, strokes that extend a part it holds are stamped over that part's plane and nothing else.
 ///
-/// Auto Mask strokes weight each dab by [`auto_similarity`] to the pixel under its centre and are
-/// refined with [`guided_cross`] on log luminance.
+/// Auto Mask strokes weight each dab's paint by how close each pixel's colour is to the dab's
+/// reference ([`auto_refs`]).
 pub fn rasterize(strokes: &[BrushStroke], frame: &Frame, w: usize, h: usize, img: &Rgb32f, log_l: &Plane, ctx: Option<&mut BrushCtx<'_>>) -> Plane {
     if w == 0 || h == 0 {
         return Plane::new(w, h);
@@ -149,13 +137,41 @@ pub fn rasterize(strokes: &[BrushStroke], frame: &Frame, w: usize, h: usize, img
     out
 }
 
-/// The rectangle `[x0, x1) × [y0, y1)` of `p`, as a plane.
-fn crop(p: &Plane, x0: usize, y0: usize, x1: usize, y1: usize) -> Plane {
-    let mut data = Vec::with_capacity((x1 - x0) * (y1 - y0));
-    for y in y0..y1 {
-        data.extend_from_slice(&p.row(y)[x0..x1]);
+/// The references of an Auto Mask stroke's dabs ([`AutoRefs`]), and the median colours
+/// ([`median_box`]) of its box `x0..x1 × y0..y1` with the margin the dabs' samples look into, and
+/// that box.
+#[allow(clippy::type_complexity)]
+pub(crate) fn auto_refs(
+    bd: &BrushDabs,
+    img: &Rgb32f,
+    log_l: &Plane,
+    (x0, y0, x1, y1): (usize, usize, usize, usize),
+) -> (Vec<AutoRef>, Vec<AutoColor>, (usize, usize, usize, usize)) {
+    use rayon::prelude::*;
+    let (w, h) = (log_l.width, log_l.height);
+    let m = search_margin(bd.r.max(0.5));
+    let mbox = (x0.saturating_sub(m), y0.saturating_sub(m), (x1 + m).min(w), (y1 + m).min(h));
+    let med = median_box(img, log_l, mbox);
+    let (mx0, my0, mx1, my1) = mbox;
+    if med.is_empty() || mx0 >= mx1 || my0 >= my1 {
+        return (Vec::new(), med, mbox);
     }
-    Plane { width: x1 - x0, height: y1 - y0, data }
+    let mbw = mx1 - mx0;
+    let at = |x: isize, y: isize| {
+        let x = x.clamp(mx0 as isize, mx1 as isize - 1) as usize - mx0;
+        let y = y.clamp(my0 as isize, my1 as isize - 1) as usize - my0;
+        med.get(y * mbw + x).copied().unwrap_or([0.0; 4])
+    };
+    let samples: Vec<AutoColor> = (0..bd.dabs.len())
+        .into_par_iter()
+        .map(|k| {
+            let j = bd.dabs.get(k).map_or(0, |d| dab_pixel(*d, w, h));
+            dab_sample(at, (j % w) as isize, (j / w) as isize, search_reach(bd.dab(k).0))
+        })
+        .collect();
+    let mut chain = AutoRefs::default();
+    let refs = samples.into_iter().map(|s| chain.next(s)).collect();
+    (refs, med, mbox)
 }
 
 /// Stamp stroke `s` into `out`: its dabs inside their bounding box (flow accumulating up to density
@@ -182,16 +198,8 @@ fn stamp(s: &BrushStroke, frame: &Frame, img: &Rgb32f, log_l: &Plane, out: &mut 
         return;
     }
     let (bw, bh) = (x1 - x0, y1 - y0);
-    let refs: Vec<Option<(f32, [f32; 3])>> = bd
-        .dabs
-        .iter()
-        .map(|d| {
-            auto.then(|| {
-                let j = dab_pixel(*d, w, h);
-                (log_l.data[j], chromaticity(img.data[j]))
-            })
-        })
-        .collect();
+    let (refs, med, mbox) = if auto { auto_refs(&bd, img, log_l, (x0, y0, x1, y1)) } else { (Vec::new(), Vec::new(), (0, 0, 0, 0)) };
+    let mbw = mbox.2 - mbox.0;
     let mut sp = Plane::new(bw, bh);
     for_rows(&mut sp.data, bw, |ry, row| {
         let y = y0 + ry;
@@ -209,9 +217,8 @@ fn stamp(s: &BrushStroke, frame: &Frame, img: &Rgb32f, log_l: &Plane, out: &mut 
                     continue;
                 }
                 let mut a = dab_alpha(dd, r, hard);
-                if let Some(Some((rl, rch))) = refs.get(k) {
-                    let i = y * w + x;
-                    a *= auto_similarity(log_l.data[i], chromaticity(img.data[i]), *rl, *rch);
+                if let Some(rf) = refs.get(k) {
+                    a *= med.get((y - mbox.1) * mbw + x - mbox.0).map_or(0.0, |c| rf.weight(*c));
                 }
                 if let Some(v) = row.get_mut(x - x0) {
                     // flow accumulates within a stroke up to density
@@ -220,48 +227,16 @@ fn stamp(s: &BrushStroke, frame: &Frame, img: &Rgb32f, log_l: &Plane, out: &mut 
             }
         }
     });
-    // (the rectangle the stroke can change in `out`)
-    let mut region = (x0, y0, x1, y1);
-    if auto {
-        // The refinement fills gaps along edges; it never takes paint away. Its filter reaches
-        // `reach` px from the paint (two blurs), so it runs on the stroke's box plus twice that,
-        // where the box's edge cannot change what is within `reach` of the paint, and nothing past
-        // `reach` changes.
-        let (sigma, eps) = auto_refine(bd.r);
-        let reach = 2 * lightcraft_raster::blur::box_radii(sigma).iter().sum::<usize>() + 2;
-        let (cx0, cy0) = (x0.saturating_sub(2 * reach), y0.saturating_sub(2 * reach));
-        let (cx1, cy1) = ((x1 + 2 * reach).min(w), (y1 + 2 * reach).min(h));
-        let guide = crop(log_l, cx0, cy0, cx1, cy1);
-        let mut padded = Plane::new(cx1 - cx0, cy1 - cy0);
-        for ry in 0..bh {
-            let dst = (y0 - cy0 + ry) * padded.width + (x0 - cx0);
-            if let (Some(d), Some(src)) = (padded.data.get_mut(dst..dst + bw), sp.data.get(ry * bw..(ry + 1) * bw)) {
-                d.copy_from_slice(src);
-            }
-        }
-        note_filtered(guide.width * guide.height);
-        let q = guided_cross(&guide, &padded, sigma, eps);
-        region = (x0.saturating_sub(reach).max(cx0), y0.saturating_sub(reach).max(cy0), (x1 + reach).min(cx1), (y1 + reach).min(cy1));
-        let (rx0, ry0, rx1, ry1) = region;
-        sp = Plane::new(rx1 - rx0, ry1 - ry0);
-        for ry in 0..sp.height {
-            let y = ry0 + ry;
-            let row = &mut sp.data[ry * sp.width..(ry + 1) * sp.width];
-            for (rx, v) in row.iter_mut().enumerate() {
-                let (px, py) = (rx0 + rx - cx0, y - cy0);
-                let own = if (x0..x1).contains(&(rx0 + rx)) && (y0..y1).contains(&y) { padded.data[py * padded.width + px] } else { 0.0 };
-                *v = own.max(q.data[py * q.width + px]);
-            }
-        }
-    }
-    let (rx0, ry0, rx1, ry1) = region;
-    let rw = rx1 - rx0;
-    let Some(rows) = out.data.get_mut(ry0 * w..ry1 * w) else { return };
+    let Some(rows) = out.data.get_mut(y0 * w..y1 * w) else { return };
     for_rows(rows, w, |ry, row| {
-        let Some(src) = sp.data.get(ry * rw..(ry + 1) * rw) else { return };
-        let Some(dst) = row.get_mut(rx0..rx1) else { return };
+        let Some(src) = sp.data.get(ry * bw..(ry + 1) * bw) else { return };
+        let Some(dst) = row.get_mut(x0..x1) else { return };
         for (o, a) in dst.iter_mut().zip(src) {
             *o = if erase { *o * (1.0 - a) } else { o.max(*a) };
         }
     });
 }
+
+#[cfg(test)]
+#[path = "tests_auto_edge.rs"]
+mod tests_auto_edge;
