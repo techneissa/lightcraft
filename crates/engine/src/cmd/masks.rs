@@ -55,9 +55,13 @@ fn shape_from(kind: &str, p: &Value, c: &str) -> Result<MaskShape> {
             MaskShape::ColorRange { samples, refine: f64_or(p, "refine", 50.0) }
         }
         "object" => MaskShape::Object { hint: points(p, "points"), exclude: points(p, "exclude"), seg: seg_param(p), detail: vec![], edge: 0.0 },
-        "prompt" => {
-            MaskShape::Prompt { text: str_param(p, "text").unwrap_or_default().trim().to_string(), seg: seg_param(p), detail: vec![], edge: 0.0 }
-        }
+        "prompt" => MaskShape::Prompt {
+            text: str_param(p, "text").unwrap_or_default().trim().to_string(),
+            seg: seg_param(p),
+            detail: vec![],
+            edge: 0.0,
+            region: region_param(p, c)?,
+        },
         other => {
             return Err(bad(
                 c,
@@ -75,6 +79,18 @@ fn points(p: &Value, key: &str) -> Vec<Point> {
         .unwrap_or_default()
 }
 
+/// The part of the photo a Describe looks in (`region: [x0, y0, x1, y1]`, normalized; issue #281), cleaned by
+/// [`lightcraft_develop::prompt_region`]: `None` when absent, or when it is (nearly) the whole photo. Malformed is an
+/// error.
+fn region_param(p: &Value, c: &str) -> Result<Option<[f64; 4]>> {
+    let Some(v) = p.get("region").filter(|v| !v.is_null()) else { return Ok(None) };
+    let r: [f64; 4] = serde_json::from_value(v.clone()).map_err(|_| bad(c, "`region` must be [x0, y0, x1, y1], normalized 0..1"))?;
+    if !r.iter().all(|v| v.is_finite()) {
+        return Err(bad(c, "`region` must be [x0, y0, x1, y1], normalized 0..1"));
+    }
+    Ok(lightcraft_develop::prompt_region(r))
+}
+
 /// A segmentation passed in (`seg`: a stored or replayed AI mask; the model isn't needed).
 fn seg_param(p: &Value) -> Option<lightcraft_develop::SegMask> {
     p.get("seg").and_then(|v| serde_json::from_value(v.clone()).ok())
@@ -85,8 +101,9 @@ enum Later {
     Nothing,
     /// Background mode: these Object clicks are segmented on the worker.
     Clicks(Vec<Point>, Vec<Point>),
-    /// Background mode: the Describe selection is computed first; the mask is added when found.
-    Text(String),
+    /// Background mode: the Describe selection (in that part of the photo) is computed first; the mask is added when
+    /// found.
+    Text(String, Option<[f64; 4]>),
     /// Background mode: the Subject, Sky or Background selection is computed first; the mask (or
     /// part) is added when found, as for Describe, so no rough mask shows while SAM 3 runs.
     Concept(super::concepts::Concept),
@@ -124,16 +141,17 @@ fn resolve_ai(s: &mut Session, shape: &mut MaskShape, c: &str) -> Result<Later> 
                 segment(s, |s| s.segment_prepare(id))?;
             }
         }
-        MaskShape::Prompt { text, .. } if background => {
+        MaskShape::Prompt { text, region, .. } if background => {
             s.segmenter.require_model()?;
             if text.trim().is_empty() {
                 return Err(ai_err("describe what to select"));
             }
-            return Ok(Later::Text(text.clone()));
+            return Ok(Later::Text(text.clone(), *region));
         }
-        MaskShape::Prompt { text, seg, .. } => {
-            let found = segment(s, |s| s.segment_text(id, text))?;
-            *seg = Some(found.ok_or_else(|| ai_err(format!("nothing matching “{text}” was found in this photo")))?);
+        MaskShape::Prompt { text, seg, region, .. } => {
+            let found = segment(s, |s| s.segment_text_in(id, text, *region))?;
+            let where_ = if region.is_some() { "the zoomed area" } else { "this photo" };
+            *seg = Some(found.ok_or_else(|| ai_err(format!("nothing matching “{text}” was found in {where_}")))?);
         }
         MaskShape::Subject { seg: None, .. } | MaskShape::Sky { seg: None, .. } | MaskShape::Background { seg: None, .. }
             if super::concepts::wanted(s, id, shape) =>
@@ -154,7 +172,7 @@ fn resolve_ai(s: &mut Session, shape: &mut MaskShape, c: &str) -> Result<Later> 
 fn queue_later(s: &mut Session, later: Later, mask: u32, comp: usize, mut out: Value) -> Result<Value> {
     out["id"] = json!(mask);
     match later {
-        Later::Nothing | Later::Text(_) | Later::Concept(_) => {}
+        Later::Nothing | Later::Text(..) | Later::Concept(_) => {}
         Later::Clicks(hint, exclude) => {
             let id = s.active().ok_or_else(|| ai_err("no active photo"))?;
             segment(s, |s| s.segment_clicks_later(id, mask, comp, hint, exclude))?;
@@ -286,7 +304,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Create New Mask",
             [],
             None,
-            "{kind: brush|linear|radial|sky|subject|background|luminanceRange|colorRange|object|prompt, ...shape params (start/end, center/rx/ry/angle/feather, lo/hi…; object: points/exclude [[x,y],…]; prompt: text; object/prompt: seg? a stored segmentation, no model needed), name?} — AI kinds need the SAM 3 model; in the app a prompt returns {pending} and the mask appears when found",
+            "{kind: brush|linear|radial|sky|subject|background|luminanceRange|colorRange|object|prompt, ...shape params (start/end, center/rx/ry/angle/feather, lo/hi…; object: points/exclude [[x,y],…]; prompt: text, region? [x0,y0,x1,y1] normalized, looked in only; object/prompt: seg? a stored segmentation, no model needed), name?} — AI kinds need the SAM 3 model; in the app a prompt returns {pending} and the mask appears when found",
             has_active,
             |s, p| {
                 let kind = str_param(p, "kind").unwrap_or("radial").to_string();
@@ -295,9 +313,9 @@ pub fn specs() -> Vec<CommandSpec> {
                 let later = resolve_ai(s, &mut shape, "mask.add")?;
                 s.segmenter.attach_refined(&mut shape);
                 let name = str_param(p, "name").map(str::to_string);
-                if let Later::Text(text) = &later {
+                if let Later::Text(text, region) = &later {
                     let id = s.active().ok_or_else(|| bad("mask.add", "no active photo"))?;
-                    segment(s, |s| s.segment_text_later(id, None, "add", name, text))?;
+                    segment(s, |s| s.segment_text_later(id, None, "add", name, text, *region))?;
                     return Ok(json!({"pending": true}));
                 }
                 if let Later::Concept(concept) = &later {
@@ -343,9 +361,9 @@ pub fn specs() -> Vec<CommandSpec> {
                 let mut shape = shape_from(&kind, p, "mask.addComponent")?;
                 let later = resolve_ai(s, &mut shape, "mask.addComponent")?;
                 s.segmenter.attach_refined(&mut shape);
-                if let Later::Text(text) = &later {
+                if let Later::Text(text, region) = &later {
                     let op = p.get("op").and_then(Value::as_str).unwrap_or("add");
-                    segment(s, |s| s.segment_text_later(id, Some(mid), op, None, text))?;
+                    segment(s, |s| s.segment_text_later(id, Some(mid), op, None, text, *region))?;
                     return Ok(json!({"pending": true}));
                 }
                 if let Later::Concept(concept) = &later {

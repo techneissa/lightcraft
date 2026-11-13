@@ -20,6 +20,7 @@ mod brush_panel;
 pub(crate) mod brush_preview;
 pub(crate) mod brush_resize;
 mod crop;
+pub(crate) mod describe_area;
 mod film_bar;
 mod filmstrip;
 mod find_overlay;

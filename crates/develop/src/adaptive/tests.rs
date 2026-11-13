@@ -68,7 +68,7 @@ fn a_photo_keeps_its_own_selection_of_the_same_part() {
     assert_eq!(adapt(Some(&own), &mut turned), 1);
     // a different description is a different part
     let mut other = with_subject();
-    other.masks[0].components[0].shape = MaskShape::Prompt { text: "dog".into(), seg: Some(found()), detail: vec![], edge: 0.0 };
+    other.masks[0].components[0].shape = MaskShape::Prompt { text: "dog".into(), seg: Some(found()), detail: vec![], edge: 0.0, region: None };
     assert_eq!(adapt(Some(&own), &mut other), 1);
 }
 

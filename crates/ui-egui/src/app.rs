@@ -95,6 +95,7 @@ impl LightcraftApp {
             fonts_ready: false,
             last_time: 0.0,
             canvas_rect: None,
+            describe_area: None,
             image_rect: None,
             grid_scroll: None,
             film_scroll: None,

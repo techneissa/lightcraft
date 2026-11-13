@@ -256,10 +256,7 @@ pub struct Worker {
 
 impl Worker {
     fn counter(&self, job: &Job) -> &AtomicUsize {
-        match job.kind {
-            Kind::Detail { .. } => &self.shared.detail,
-            _ => &self.shared.pending,
-        }
+        if is_detail(job) { &self.shared.detail } else { &self.shared.pending }
     }
 
     /// Whether the thread has ended (it never should); its counters are then meaningless.
@@ -350,6 +347,12 @@ impl State {
     }
 }
 
+/// Whether `job` is a zoomed-in pass that refines a selection (counted apart: the app shows no "working" for it). A
+/// Describe limited to a part of the photo (issue #281) runs as one too, but is what the user waits for.
+pub(crate) fn is_detail(job: &Job) -> bool {
+    matches!(job.kind, Kind::Detail { .. }) && !matches!(job.tag, Tag::NewPrompt { .. })
+}
+
 /// Whether `later` makes `job` pointless (it asks for the same selection again).
 fn supersedes(later: &Job, job: &Job) -> bool {
     match (&later.tag, &job.tag) {
@@ -405,7 +408,7 @@ fn run(rx: &mpsc::Receiver<Job>, shared: &Shared, idle: Duration, mut placement:
             queue.push_back(j);
         }
         let Some(mut job) = queue.pop_front() else { continue };
-        let is_detail = matches!(job.kind, Kind::Detail { .. });
+        let is_detail = is_detail(&job);
         // counts the job as pending until just before its reply goes out: a caller woken by the
         // reply must not still see the worker busy with it
         let done = Done(if is_detail { &shared.detail } else { &shared.pending });

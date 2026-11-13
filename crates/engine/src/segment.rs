@@ -64,8 +64,9 @@ pub(crate) enum Tag {
     Prepare,
     /// Object clicks on component `comp` of mask `mask`.
     Clicks { photo: PhotoId, mask: u32, comp: usize, hint: Vec<Point>, exclude: Vec<Point> },
-    /// A Describe selection: a new mask (`mask: None`) or a component combined by `op`.
-    NewPrompt { photo: PhotoId, mask: Option<u32>, op: String, name: Option<String>, text: String },
+    /// A Describe selection: a new mask (`mask: None`) or a component combined by `op`; `region`: looked for in that
+    /// part of the photo only (issue #281).
+    NewPrompt { photo: PhotoId, mask: Option<u32>, op: String, name: Option<String>, text: String, region: Option<[f64; 4]> },
     /// A Subject, Sky or Background selection: a new mask (`mask: None`) or a component combined by `op`, added when
     /// SAM 3 has found it (`invert`: Background, the subject turned around).
     NewConcept {
@@ -549,6 +550,14 @@ pub fn detail_region(seg: &SegMask, aspect: f64) -> Option<[f64; 4]> {
     ((out[2] - out[0]) * (out[3] - out[1]) < 0.8).then_some(out)
 }
 
+/// `region` inside `limit` (both normalized), when that is at most half of `limit`: a zoomed-in pass over more of it would
+/// see the selection no larger than the pass over `limit` did.
+fn within(region: [f64; 4], limit: [f64; 4]) -> Option<[f64; 4]> {
+    let r = [region[0].max(limit[0]), region[1].max(limit[1]), region[2].min(limit[2]), region[3].min(limit[3])];
+    let area = |r: [f64; 4]| (r[2] - r[0]).max(0.0) * (r[3] - r[1]).max(0.0);
+    (r[2] > r[0] && r[3] > r[1] && area(r) <= 0.5 * area(limit)).then_some(r)
+}
+
 /// `shape` without its detail patches (what a detail pass was computed from)
 #[cfg_attr(not(feature = "sam"), allow(dead_code))]
 fn strip_detail(mut shape: MaskShape) -> MaskShape {
@@ -565,6 +574,16 @@ fn strip_detail(mut shape: MaskShape) -> MaskShape {
         _ => {}
     }
     shape
+}
+
+/// The worker request for a Describe of `text` in `region` (cleaned: `None` for the whole photo), and the region the
+/// photo is rendered for: a region is a zoomed-in pass over that part, as a detail pass is.
+#[cfg(feature = "sam")]
+fn text_kind(text: &str, region: Option<[f64; 4]>) -> (worker::Kind, Option<[f64; 4]>) {
+    match region.and_then(lightcraft_develop::prompt_region) {
+        Some(region) => (worker::Kind::Detail { prompt: Prompt::Text(text.to_string()), region }, Some(region)),
+        None => (worker::Kind::Text(text.to_string()), None),
+    }
 }
 
 fn clicks_of(include: &[Point], exclude: &[Point]) -> Vec<Click> {
@@ -770,8 +789,8 @@ impl Session {
     #[cfg(feature = "sam")]
     fn segment_queue(&mut self, id: PhotoId, kind: worker::Kind, tag: Tag, region: Option<[f64; 4]>) -> Result<(), String> {
         let reply = self.segmenter.results.0.clone();
-        let detail = matches!(kind, worker::Kind::Detail { .. });
         let job = self.segment_job(id, kind, tag.clone(), reply, region)?;
+        let detail = worker::is_detail(&job);
         let job_id = job.id;
         let cancel = job.cancel.clone();
         self.segmenter.worker.submit(job)?;
@@ -819,6 +838,13 @@ impl Session {
     /// Segment everything `text` describes on photo `id`, waiting for the model; `Ok(None)`
     /// when nothing matches.
     pub fn segment_text(&mut self, id: PhotoId, text: &str) -> Result<Option<SegMask>, String> {
+        self.segment_text_in(id, text, None)
+    }
+
+    /// [`Self::segment_text`] in `region` of the photo only (normalized, the mask's coordinates; issue #281): that part
+    /// is cropped and scaled up to the model's input, so a small thing gets the model's full resolution, and the
+    /// selection covers that part only. `None`: the whole photo.
+    pub fn segment_text_in(&mut self, id: PhotoId, text: &str, region: Option<[f64; 4]>) -> Result<Option<SegMask>, String> {
         self.segmenter.model_dir()?;
         let text = text.trim();
         if text.is_empty() {
@@ -826,11 +852,12 @@ impl Session {
         }
         #[cfg(feature = "sam")]
         {
-            self.segment_wait(id, worker::Kind::Text(text.to_string()), None)
+            let (kind, region) = text_kind(text, region);
+            self.segment_wait(id, kind, region)
         }
         #[cfg(not(feature = "sam"))]
         {
-            let _ = id;
+            let _ = (id, region);
             Err("AI masks are not available in this build".into())
         }
     }
@@ -874,7 +901,15 @@ impl Session {
 
     /// Background mode: queue a Describe selection; the mask (or component, combined by `op`
     /// into mask `mask`) is created by [`Session::segment_poll`] when something matches.
-    pub(crate) fn segment_text_later(&mut self, id: PhotoId, mask: Option<u32>, op: &str, name: Option<String>, text: &str) -> Result<(), String> {
+    pub(crate) fn segment_text_later(
+        &mut self,
+        id: PhotoId,
+        mask: Option<u32>,
+        op: &str,
+        name: Option<String>,
+        text: &str,
+        region: Option<[f64; 4]>,
+    ) -> Result<(), String> {
         self.segmenter.model_dir()?;
         let text = text.trim();
         if text.is_empty() {
@@ -882,12 +917,13 @@ impl Session {
         }
         #[cfg(feature = "sam")]
         {
-            let tag = Tag::NewPrompt { photo: id, mask, op: op.to_string(), name, text: text.to_string() };
-            self.segment_queue(id, worker::Kind::Text(text.to_string()), tag, None)
+            let (kind, region) = text_kind(text, region);
+            let tag = Tag::NewPrompt { photo: id, mask, op: op.to_string(), name, text: text.to_string(), region };
+            self.segment_queue(id, kind, tag, region)
         }
         #[cfg(not(feature = "sam"))]
         {
-            let _ = (id, mask, op, name);
+            let _ = (id, mask, op, name, region);
             Err("AI masks are not available in this build".into())
         }
     }
@@ -972,6 +1008,15 @@ impl Session {
         let (pw, ph) = (f64::from(p.width.max(1)), f64::from(p.height.max(1)));
         let aspect = if d.orientation.swaps_axes() { ph / pw } else { pw / ph };
         let Some(region) = detail_region(&seg, aspect) else { return Ok(false) };
+        // (issue #281: a Describe limited to a part of the photo was looked for there at the model's full size already;
+        // a pass is worth it only well inside that part, and looks no further)
+        let region = match shape.region() {
+            Some(limit) => match within(region, limit) {
+                Some(r) => r,
+                None => return Ok(false),
+            },
+            None => region,
+        };
         #[cfg(feature = "sam")]
         {
             let kind = worker::Kind::Detail { prompt, region };
@@ -1066,9 +1111,10 @@ impl Session {
                     Err(e) => polled.messages.push(e.to_string()),
                 }
             }
-            Tag::NewPrompt { photo, mask, op, name, text } => {
+            Tag::NewPrompt { photo, mask, op, name, text, region } => {
                 let seg = match o.result {
                     Ok(Some(seg)) => seg,
+                    Ok(None) if region.is_some() => return polled.messages.push(format!("Nothing matching “{text}” was found in the zoomed area.")),
                     Ok(None) => return polled.messages.push(format!("Nothing matching “{text}” was found in this photo.")),
                     Err(e) => return polled.messages.push(e),
                 };
@@ -1077,6 +1123,9 @@ impl Session {
                 }
                 let Ok(seg) = serde_json::to_value(seg) else { return };
                 let mut p = serde_json::json!({"kind": "prompt", "text": text, "seg": seg});
+                if let Some(r) = region {
+                    p["region"] = serde_json::json!(r);
+                }
                 if let Some(n) = name {
                     p["name"] = serde_json::json!(n);
                 }
@@ -1185,7 +1234,7 @@ impl Session {
                     }
                 };
                 let text = lightcraft_segment::SUBJECT_CONCEPTS.join(", ");
-                c.shape = MaskShape::Prompt { text, seg: Some(seg), detail: Vec::new(), edge };
+                c.shape = MaskShape::Prompt { text, seg: Some(seg), detail: Vec::new(), edge, region: None };
                 match self.set_develop(photo, d, "Find Subject") {
                     Ok(()) => polled.changed = true,
                     Err(e) => polled.messages.push(e.to_string()),
@@ -1259,6 +1308,30 @@ mod tests {
     fn concept_outcome(photo: PhotoId, mask: Option<u32>, kind: &str, invert: bool, seg: SegMask) -> worker::Outcome {
         let tag = Tag::NewConcept { photo, mask, op: "add".into(), name: None, kind: kind.into(), invert, model: birefnet::SelectionModel::Sam3 };
         worker::Outcome { id: 0, tag, result: Ok(Some(seg)), superseded: false, notice: None, detail: Vec::new() }
+    }
+
+    /// Issue #281: a Describe limited to the zoomed-in area is asked as a zoomed-in pass over that area, shown as work
+    /// the user waits for (not as a detail pass), and the mask it adds keeps the area.
+    #[cfg(feature = "sam")]
+    #[test]
+    fn a_describe_in_an_area_asks_there_and_keeps_the_area() {
+        let (mut s, dir) = session_with_a_model("describe-area");
+        let photo = s.active().unwrap();
+        let area = [0.1, 0.2, 0.3, 0.4];
+        let r = s.execute("mask.add", &serde_json::json!({"kind": "prompt", "text": "eye", "region": area})).unwrap();
+        assert_eq!(r["pending"], true);
+        let job = s.segmenter.in_flight.last().unwrap();
+        assert!(matches!(&job.tag, Tag::NewPrompt { region: Some(r), .. } if *r == area), "{:?}", job.tag);
+        assert!(!job.detail, "the user waits for it");
+        let tag = job.tag.clone();
+        let outcome = |result| worker::Outcome { id: 0, tag: tag.clone(), result, superseded: false, notice: None, detail: Vec::new() };
+        s.segmenter.results.0.send(outcome(Ok(Some(SegMask::from_logits_in(4, &[5.0; 16], area))))).unwrap();
+        assert!(s.segment_poll().changed);
+        assert_eq!(s.develop_of(photo).unwrap().masks[0].components[0].shape.region(), Some(area));
+        s.segmenter.results.0.send(outcome(Ok(None))).unwrap();
+        let said = s.segment_poll().messages;
+        assert!(said.iter().any(|m| m.contains("found in the zoomed area")), "{said:?}");
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     /// Subject, Sky and Background wait for SAM 3 like Describe: no rough mask shows meanwhile, the work has a row in

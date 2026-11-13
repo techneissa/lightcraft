@@ -23,7 +23,7 @@ fn stored_segmentations_render_at_any_size_and_follow_the_crop() {
     let seg = SegMask::from_logits(side, &logits);
     for shape in [
         MaskShape::Object { hint: vec![Point::new(0.25, 0.5)], exclude: vec![], seg: Some(seg.clone()), detail: vec![], edge: 0.0 },
-        MaskShape::Prompt { text: "left".into(), seg: Some(seg.clone()), detail: vec![], edge: 0.0 },
+        MaskShape::Prompt { text: "left".into(), seg: Some(seg.clone()), detail: vec![], edge: 0.0, region: None },
     ] {
         for (w, h) in [(40, 20), (400, 200)] {
             let a = shape_alpha(&shape, &frame(w, h), w, h, &Rgb32f::new(w, h), &Plane::new(w, h), 0.0, None);
@@ -38,7 +38,7 @@ fn stored_segmentations_render_at_any_size_and_follow_the_crop() {
     let mut d = DevelopSettings::default();
     d.crop.geometry.rect = lightcraft_geom::Rect::from_center(Point::new(0.75, 0.5), 0.5, 1.0);
     let f = Frame::new(40, 20, &d, true);
-    let shape = MaskShape::Prompt { text: "left".into(), seg: Some(seg), detail: vec![], edge: 0.0 };
+    let shape = MaskShape::Prompt { text: "left".into(), seg: Some(seg), detail: vec![], edge: 0.0, region: None };
     let a = shape_alpha(&shape, &f, 20, 20, &Rgb32f::new(20, 20), &Plane::new(20, 20), 0.0, None);
     assert!(a.data.iter().all(|v| *v < 0.05));
 }
@@ -78,7 +78,7 @@ fn the_edge_setting_hardens_or_feathers_the_transition() {
     let seg = SegMask::from_logits(side, &l);
     let (w, h) = (400, 40);
     let soft_px = |edge: f64| {
-        let shape = MaskShape::Prompt { text: "x".into(), seg: Some(seg.clone()), detail: vec![], edge };
+        let shape = MaskShape::Prompt { text: "x".into(), seg: Some(seg.clone()), detail: vec![], edge, region: None };
         let a = shape_alpha(&shape, &frame(w, h), w, h, &Rgb32f::new(w, h), &Plane::new(w, h), 0.0, None);
         assert!(a.get(2, h / 2) > 0.9 && a.get(w - 3, h / 2) < 0.1, "still the same selection at {edge}");
         (0..w).filter(|x| (0.1..0.9).contains(&a.get(*x, h / 2))).count()
@@ -127,7 +127,7 @@ fn across_disc_edge(a: &Plane, d: i32) -> f32 {
 fn ai_masks_follow_the_photos_edge_when_enlarged() {
     let (n, side) = (512, 32); // 16 px cells, as a 288² grid on a ~4600 px export
     let (img, log_l, seg) = disc_scene(n, side);
-    let shape = MaskShape::Prompt { text: "disc".into(), seg: Some(seg), detail: vec![], edge: 0.0 };
+    let shape = MaskShape::Prompt { text: "disc".into(), seg: Some(seg), detail: vec![], edge: 0.0, region: None };
     let f = frame(n, n);
     let a = shape_alpha(&shape, &f, n, n, &img, &log_l, 0.0, None);
     for d in [1, 2] {
@@ -161,7 +161,7 @@ fn refine_edges_on_an_enlarged_ai_mask_neither_halos_nor_tightens() {
             name: None,
             op: MaskOp::Add,
             invert: false,
-            shape: MaskShape::Prompt { text: "disc".into(), seg: Some(seg.clone()), detail: vec![], edge: 0.0 },
+            shape: MaskShape::Prompt { text: "disc".into(), seg: Some(seg.clone()), detail: vec![], edge: 0.0, region: None },
         }],
         refine,
         ..Default::default()
@@ -186,7 +186,7 @@ fn enlarged_ai_masks_put_the_edge_in_the_same_place_at_any_size() {
     let mut edges = Vec::new();
     for n in [256, 512, 1024] {
         let (img, log_l, seg) = disc_scene(n, side);
-        let shape = MaskShape::Prompt { text: "disc".into(), seg: Some(seg), detail: vec![], edge: 0.0 };
+        let shape = MaskShape::Prompt { text: "disc".into(), seg: Some(seg), detail: vec![], edge: 0.0, region: None };
         let a = shape_alpha(&shape, &frame(n, n), n, n, &img, &log_l, 0.0, None);
         // the edge's sub-pixel position along the row: the integral of alpha past the centre
         let covered: f32 = (n / 2..n).map(|x| a.get(x, n / 2)).sum();
@@ -202,12 +202,13 @@ fn ai_shapes_without_a_segmentation_select_nothing() {
     let (img, l) = (Rgb32f::new(30, 30), Plane::new(30, 30));
     for shape in [
         MaskShape::Object { hint: vec![], exclude: vec![], seg: None, detail: vec![], edge: 0.0 },
-        MaskShape::Prompt { text: "sky".into(), seg: None, detail: vec![], edge: 0.0 },
+        MaskShape::Prompt { text: "sky".into(), seg: None, detail: vec![], edge: 0.0, region: None },
         MaskShape::Prompt {
             text: "sky".into(),
             seg: Some(SegMask { side: 4, data: "damaged!".into(), rect: None, model: None, grid: None }),
             detail: vec![],
             edge: 0.0,
+            region: None,
         },
     ] {
         assert!(shape_alpha(&shape, &f, 30, 30, &img, &l, 0.0, None).data.iter().all(|v| *v == 0.0));
@@ -784,4 +785,28 @@ fn intersect_first_component_selects_its_shape() {
     let m = Mask { components: vec![MaskComponent { name: None, op: MaskOp::Intersect, invert: false, shape }], ..Default::default() };
     let a = evaluate_one(&m, &f, 100, 100, &img, &l, 0.0, None);
     assert!(a.get(50, 50) > 0.99 && a.get(5, 5) < 0.01, "intersect first: {} {}", a.get(50, 50), a.get(5, 5));
+}
+
+/// Issue #281: a Describe limited to a part of the photo selects nothing outside it: not what its selection holds
+/// there (two eyes found, one in the region), nor the edge of a grid over just the region stretched past it.
+#[test]
+fn a_describe_region_drops_what_lies_outside_it() {
+    // two "eyes": the left and right quarters, selected on a whole-photo grid
+    let side = 16;
+    let both: Vec<f32> = (0..side * side).map(|i| if !(side / 4..3 * side / 4).contains(&(i % side)) { 12.0 } else { -12.0 }).collect();
+    let (w, h) = (200, 100);
+    let alpha = |shape: &MaskShape| shape_alpha(shape, &frame(w, h), w, h, &Rgb32f::new(w, h), &Plane::new(w, h), 0.0, None);
+    let whole = MaskShape::Prompt { text: "eye".into(), seg: Some(SegMask::from_logits(side, &both)), detail: vec![], edge: 0.0, region: None };
+    let a = alpha(&whole);
+    assert!(a.get(10, 50) > 0.99 && a.get(190, 50) > 0.99, "without a region, both");
+    let MaskShape::Prompt { text, seg, .. } = whole else { panic!("a Describe") };
+    let left = MaskShape::Prompt { text, seg, detail: vec![], edge: 0.0, region: Some([0.0, 0.0, 0.5, 1.0]) };
+    let a = alpha(&left);
+    assert!(a.get(10, 50) > 0.99, "the eye inside the region");
+    assert!(a.get(190, 50) == 0.0, "the eye outside it is dropped");
+    // a selection made over the region only (what the model returns there), all selected: not stretched past it
+    let inside = SegMask::from_logits_in(side, &[12.0; 256], [0.0, 0.0, 0.5, 1.0]);
+    let shape = MaskShape::Prompt { text: "eye".into(), seg: Some(inside), detail: vec![], edge: 0.0, region: Some([0.0, 0.0, 0.5, 1.0]) };
+    let a = alpha(&shape);
+    assert!(a.get(40, 50) > 0.99 && a.get(160, 50) == 0.0);
 }

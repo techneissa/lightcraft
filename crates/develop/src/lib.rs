@@ -124,6 +124,12 @@ impl DevelopSettings {
             let old = before.crop.geometry.rect;
             g.rect = if old.is_empty() { lightcraft_geom::Rect::UNIT } else { old };
         }
+        // a Describe's region inside the photo, or none (issue #281)
+        for c in self.masks.iter_mut().flat_map(|m| m.components.iter_mut()) {
+            if let MaskShape::Prompt { region, .. } = &mut c.shape {
+                *region = region.and_then(prompt_region);
+            }
+        }
     }
 
     /// Stable 64-bit hash of the settings (FNV-1a over canonical JSON), for preview cache keys.
@@ -259,6 +265,9 @@ impl DevelopSettings {
 
 #[cfg(test)]
 mod tests_process;
+
+#[cfg(test)]
+mod tests_prompt_region;
 
 #[cfg(test)]
 mod tests {

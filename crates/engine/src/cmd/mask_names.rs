@@ -168,7 +168,7 @@ mod tests {
                 name: None,
                 op: lightcraft_develop::MaskOp::Add,
                 invert: false,
-                shape: lightcraft_develop::MaskShape::Prompt { text: "red car".into(), seg: None, detail: vec![], edge: 0.0 },
+                shape: lightcraft_develop::MaskShape::Prompt { text: "red car".into(), seg: None, detail: vec![], edge: 0.0, region: None },
             }],
             ..Default::default()
         };
