@@ -11,6 +11,11 @@ use super::{CommandSpec, bad, bool_or, cmd, f64_or, has_active, ok, point, str_p
 use crate::segment::{Click, MAX_CLICKS};
 use crate::{Result, Session};
 
+/// How many colours `mask.sampleColor` keeps in a colour range (clicks and boxes together; ⇧ adds until then).
+const PICKED_COLORS: usize = 5;
+/// How many colours one box dragged with the eyedropper may add.
+const BOX_COLORS: usize = 4;
+
 /// Caps a colour-range shape's sample list at [`MAX_COLOR_RANGE_SAMPLES`] (render cost is pixels x samples).
 fn cap_color_range_samples(shape: &mut MaskShape) {
     if let MaskShape::ColorRange { samples, .. } = shape {
@@ -478,7 +483,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Sample Mask Color",
             [],
             None,
-            "{x, y: normalized image point, add?: bool (⇧: add to the samples, max 5), id?, component?} — the colour range of the selected mask (its first colour-range component) samples the colour there → {samples}",
+            "{x, y: normalized image point, x2?, y2?: the opposite corner of a box to sample a range of colours from, add?: bool (⇧: add to the samples, max 5 colours), id?, component?} — the colour range of the selected mask (its first colour-range component) samples the colour there (a click: its small neighbourhood's median; a box: up to 4 colours covering it) → {samples}",
             has_active,
             |s, p| {
                 let c = "mask.sampleColor";
@@ -491,8 +496,19 @@ pub fn specs() -> Vec<CommandSpec> {
                 let info = s.source_info(id);
                 let d = s.develop_of(id).unwrap_or_default();
                 let req = lightcraft_pipeline::RenderRequest::fit(384, 384);
-                let lab = lightcraft_pipeline::color_range_sample(&src, &info, &d, &req, lightcraft_geom::Point::new(x, y))
-                    .ok_or_else(|| bad(c, "the point is outside the photo"))?;
+                let at = lightcraft_geom::Point::new(x, y);
+                let corner = match (p.get("x2").and_then(Value::as_f64), p.get("y2").and_then(Value::as_f64)) {
+                    (Some(x2), Some(y2)) => Some(lightcraft_geom::Point::new(x2, y2)),
+                    (None, None) => None,
+                    _ => return Err(bad(c, "a box needs both x2 and y2")),
+                };
+                let labs = match corner {
+                    Some(b) => lightcraft_pipeline::color_range_box(&src, &info, &d, &req, (at, b), BOX_COLORS)
+                        .ok_or_else(|| bad(c, "the box is outside the photo"))?,
+                    None => vec![
+                        lightcraft_pipeline::color_range_sample(&src, &info, &d, &req, at).ok_or_else(|| bad(c, "the point is outside the photo"))?,
+                    ],
+                };
                 let mut out = Vec::new();
                 masks_edit(s, c, "Color Range", |masks, _| {
                     let i = find(masks, mid, c)?;
@@ -505,9 +521,8 @@ pub fn specs() -> Vec<CommandSpec> {
                     if !add {
                         samples.clear();
                     }
-                    if samples.len() < 5 {
-                        samples.push(lab);
-                    }
+                    let room = PICKED_COLORS.saturating_sub(samples.len());
+                    samples.extend(labs.into_iter().take(room));
                     out = samples.clone();
                     Ok(())
                 })?;
