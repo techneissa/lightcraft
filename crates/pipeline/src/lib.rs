@@ -1367,6 +1367,10 @@ pub fn color_range_box(
     let (w, h, labs, at) = color_range_space(src, info, s, req, &[a, b]);
     let (p, q) = (at.first()?, at.get(1)?);
     let span = |u: f64, v: f64, n: usize| -> Option<(usize, usize)> {
+        // (a box wholly left of or above the photo, in the margin around it, misses it: not its edge pixels)
+        if u.max(v) <= 0.0 {
+            return None;
+        }
         let (lo, hi) = (u.min(v).floor().max(0.0), u.max(v).ceil().min(n as f64));
         // (at least the pixel under a box thinner than one)
         let hi = if hi <= lo { lo + 1.0 } else { hi };

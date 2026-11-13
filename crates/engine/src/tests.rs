@@ -1562,6 +1562,9 @@ fn color_range_sampling_selects_the_clicked_colour() {
     let taken = inside.iter().filter(|v| **v > 200).count();
     assert!(taken * 4 >= inside.len() * 3, "{taken} of {} points of the box are selected", inside.len());
     assert!(s.execute("mask.sampleColor", &json!({"x": 0.5, "y": 0.5, "x2": 0.6})).is_err(), "a box needs both corners");
+    // a box in the margin left of or above the photo misses it, rather than sampling its edge
+    assert!(s.execute("mask.sampleColor", &json!({"x": -0.2, "y": 0.4, "x2": -0.1, "y2": 0.6})).is_err(), "a box left of the photo");
+    assert!(s.execute("mask.sampleColor", &json!({"x": 0.4, "y": -0.2, "x2": 0.6, "y2": -0.1})).is_err(), "a box above the photo");
 }
 
 #[test]
