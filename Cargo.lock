@@ -4285,6 +4285,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "lightcraft-relight"
+version = "0.21.0"
+dependencies = [
+ "image",
+ "lightcraft-color",
+ "lightcraft-raster",
+ "rayon",
+]
+
+[[package]]
 name = "lightcraft-retouch"
 version = "0.21.0"
 dependencies = [

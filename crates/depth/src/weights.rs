@@ -95,7 +95,9 @@ impl Weights {
     /// Tensor `name` as F32 on the CPU.
     pub fn read(&self, name: &str) -> Result<Tensor> {
         let e = self.entries.get(name).ok_or_else(|| Error::Model(format!("missing tensor `{name}`")))?;
-        let Some(dtype) = e.dtype else { return Err(Error::Model(format!("{name}: unsupported dtype (the depth model's weights are F16, BF16 or F32)"))) };
+        let Some(dtype) = e.dtype else {
+            return Err(Error::Model(format!("{name}: unsupported dtype (the depth model's weights are F16, BF16 or F32)")));
+        };
         let len = usize::try_from(e.end.saturating_sub(e.start)).map_err(|_| Error::Model(format!("{name}: too large")))?;
         let mut bytes = vec![0u8; len];
         {

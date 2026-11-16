@@ -1,0 +1,42 @@
+//! Relight (issue #288): a light placed in the photo that lights it by depth. Near things catch it, far things
+//! fall off, surfaces facing it brighten while the rest stays as it was.
+//!
+//! - [`Field`]: what no control changes, made once per photo from its depth map (the file's own, or a depth
+//!   model's) and a guide picture of it, and kept: depth brought to the guide's size edge-aware, smoothed normals,
+//!   the guide's luminance.
+//! - [`Light`], [`Field::rig`] and [`Field::shading`]: the light, and what it does to each pixel of the field: a
+//!   gain on scene-linear light in stops and the share of the pixel's light that is the new light's (which takes its
+//!   colour). A drag of the light or a slider makes one [`Shading`]; each render reads its [`Planes`] from it.
+//!
+//! Positions are normalized photo coordinates (before the crop and the lens corrections) plus a depth between the
+//! photo's nearest and farthest, so a draft, the loupe and an export make the same picture.
+#![forbid(unsafe_code)]
+#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+
+pub mod field;
+pub mod filter;
+pub mod light;
+
+pub use field::{DepthMap, Field, Kind};
+pub use light::{Light, Planes, Rig, Shade, Shading, warmth_tilt};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Error {
+    /// The depth map can't be used (its shape, its size, its values).
+    BadDepth(String),
+    /// The guide picture can't be used.
+    BadGuide(String),
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Error::BadDepth(e) => write!(f, "the depth map can't be used: {e}"),
+            Error::BadGuide(e) => write!(f, "the photo can't be read for its depth: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for Error {}
+
+pub type Result<T> = std::result::Result<T, Error>;
