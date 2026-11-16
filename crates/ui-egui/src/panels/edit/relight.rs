@@ -120,7 +120,7 @@ fn depth_box(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings, id
         ui.painter().rect_filled(rect, 4.0, t.inset);
         register(ui, "relight:depthBox", rect);
         let status = app.session.relight_status(id);
-        missing(app, ui, rect, &status);
+        missing(app, ui, rect, &status, lightcraft_pipeline::relight::light_of(d).is_some());
         return;
     };
     let (tw, th) = (m.thumb.0.max(1) as f32, m.thumb.1.max(1) as f32);
@@ -198,7 +198,8 @@ fn depth_track(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings, 
 }
 
 /// What the box shows while the depth is not there: being found, the model to download, or why it can't be.
-fn missing(app: &mut LightcraftApp, ui: &mut egui::Ui, rect: Rect, status: &Value) {
+/// `on`: whether the light changes the photo (Find Depth needs it).
+fn missing(app: &mut LightcraftApp, ui: &mut egui::Ui, rect: Rect, status: &Value, on: bool) {
     let t = Tokens::get(ui.ctx());
     let finding = status["finding"].as_bool().unwrap_or(false);
     let model = &status["model"];
@@ -208,6 +209,10 @@ fn missing(app: &mut LightcraftApp, ui: &mut egui::Ui, rect: Rect, status: &Valu
     if finding {
         p.text(c, Align2::CENTER_CENTER, crate::i18n::tr("Finding Depth…"), t.font(12.5), t.text_label);
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
+        return;
+    }
+    if status["cancelled"].as_bool() == Some(true) && !on {
+        p.text(c, Align2::CENTER_CENTER, crate::i18n::tr("Finding Depth Cancelled"), t.font(12.5), t.text_label);
         return;
     }
     if status["cancelled"].as_bool() == Some(true) {

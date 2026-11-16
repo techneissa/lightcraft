@@ -50,7 +50,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let bytes = std::fs::read(std::path::Path::new(dump).join("depth.f32"))?;
     let depth: Vec<f32> = bytes.as_chunks::<4>().0.iter().map(|b| f32::from_le_bytes(*b)).collect();
     let t = std::time::Instant::now();
-    let field = Field::prepare(DepthMap { width: dw, height: dh, values: &depth, kind: Kind::Depth }, &lin)?;
+    let field = Field::prepare_model(DepthMap { width: dw, height: dh, values: &depth, kind: Kind::Depth }, &lin)?;
     eprintln!("field {w} × {h} in {:.0} ms", t.elapsed().as_secs_f64() * 1e3);
     let t = std::time::Instant::now();
     let rig = field.rig(&light, 0.0);

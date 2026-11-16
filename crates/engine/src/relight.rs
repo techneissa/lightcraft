@@ -6,8 +6,9 @@
 //! photo ([`FIELD_EDGE`] on its long side, as it was shot: no edits but its rotation, before the crop and the lens
 //! corrections) with its normals and edges.
 //!
-//! It is made off the UI thread, by one worker taking the newest request first ([`QUEUE`] wait at most), with a row
-//! in the activity stack, the first time a render of a photo with Relight on asks for it. It is kept in memory by the
+//! It is made off the UI thread, by one worker taking the newest request first ([`QUEUE`] wait at most), the first
+//! time a render of a photo with Relight on asks for it. It is background work (`Activity::start_background`): the
+//! desktop app shows it in the top-bar activity ring, where it can be cancelled. It is kept in memory by the
 //! photo's content and rotation while it is among the most recently used ([`BUDGET`] bytes): no edit of the photo
 //! makes it again, but a photo out of that set, or any photo after a restart, finds its depth again. Renders get it
 //! in their `SourceInfo` once it is there, so their keys change and the photo is drawn again; until then they render
@@ -16,7 +17,7 @@
 //! or an export tries it again. On the web nothing is made: Relight needs the desktop app.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
 
 use lightcraft_catalog::{Photo, PhotoId};
@@ -30,8 +31,8 @@ use crate::Session;
 
 /// The guide's long side (pixels): the field's size.
 pub const FIELD_EDGE: usize = 1600;
-/// Memory the kept fields may hold (bytes; a 1600-pixel field holds about 42 MB, so about seven are kept). The
-/// newest is always kept.
+/// Memory the kept fields may hold (bytes). A field holds up to 36 bytes a pixel (24, and 12 more along its depth
+/// edges), 52–92 MB at 1600 pixels on the long side, so 3–6 photos are kept. The newest is always kept.
 pub const BUDGET: usize = 300 << 20;
 /// Photos waiting for their depth at most (a grid of pasted settings asks for many at once): past it the oldest
 /// request is dropped, and a later render of that photo asks again.
@@ -95,7 +96,7 @@ struct State {
     /// Being made or waiting in `queue`.
     busy: Vec<String>,
     failed: Vec<(String, String)>,
-    /// Cancelled from the activity stack: renders don't start it again.
+    /// Cancelled from the activity ring: renders don't start it again.
     cancelled: Vec<String>,
     /// Newest last.
     queue: std::collections::VecDeque<Queued>,
@@ -116,6 +117,41 @@ struct Shared {
     model: Mutex<Option<lightcraft_depth::DepthModel>>,
     #[cfg(feature = "sam")]
     download: crate::segment::download::Downloader,
+    /// The session is setting up a guide render ([`Session::relight_maker`]): that render asks for no field.
+    building: AtomicBool,
+    /// The session is setting up an export's render ([`Session::relight_held`]): it takes a kept field and starts
+    /// none (the export's worker makes it).
+    hold: AtomicBool,
+}
+
+/// One of the store's flags while the session sets up renders.
+#[derive(Clone, Copy)]
+enum Flag {
+    Building,
+    Hold,
+}
+
+impl Shared {
+    fn flag(&self, f: Flag) -> &AtomicBool {
+        match f {
+            Flag::Building => &self.building,
+            Flag::Hold => &self.hold,
+        }
+    }
+}
+
+/// A flag set by [`RelightStore::raise`], put back as it was when dropped, also when a panic unwinds past it (a
+/// flag left set would stop every photo's field without a word).
+struct Raised {
+    shared: Arc<Shared>,
+    flag: Flag,
+    was: bool,
+}
+
+impl Drop for Raised {
+    fn drop(&mut self) {
+        self.shared.flag(self.flag).store(self.was, Ordering::SeqCst);
+    }
 }
 
 /// Every photo's Relight field (shared by the session and its workers).
@@ -125,11 +161,6 @@ pub struct RelightStore {
     /// The folder holding the model's folder (`ArtCraft/models` on the Mac); `None`: no model (fields come only from
     /// files' depth maps).
     pub root: Option<PathBuf>,
-    /// The session is setting up a guide render ([`Session::relight_maker`]): that render asks for no field.
-    building: bool,
-    /// The session is setting up an export's render ([`Session::relight_held`]): it takes a kept field and starts
-    /// none (the export's worker makes it).
-    hold: bool,
     /// Tests: a flat depth in place of the model's.
     #[cfg(test)]
     fake_model: bool,
@@ -142,6 +173,16 @@ pub fn default_root() -> Option<PathBuf> {
 }
 
 impl RelightStore {
+    /// Set flag `f` until the returned guard is dropped.
+    fn raise(&self, f: Flag) -> Raised {
+        let was = self.shared.flag(f).swap(true, Ordering::SeqCst);
+        Raised { shared: self.shared.clone(), flag: f, was }
+    }
+
+    fn is(&self, f: Flag) -> bool {
+        self.shared.flag(f).load(Ordering::SeqCst)
+    }
+
     fn lock(&self) -> std::sync::MutexGuard<'_, State> {
         self.shared.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
@@ -376,7 +417,7 @@ impl Maker {
             }
         }
         let depth = model_depth(store, &img, cancel)?;
-        let field = Field::prepare(DepthMap { width: depth.width, height: depth.height, values: &depth.data, kind: Kind::Depth }, &guide)
+        let field = Field::prepare_model(DepthMap { width: depth.width, height: depth.height, values: &depth.data, kind: Kind::Depth }, &guide)
             .map_err(|e| e.to_string())?;
         Ok(made(&key, field, Source::Model))
     }
@@ -462,9 +503,9 @@ impl Session {
     /// Set up the making of photo `p`'s field.
     fn relight_maker(&mut self, p: &Photo) -> Result<Maker, String> {
         // (the guide render is of the photo with its light: it must not ask for the field it is the guide of)
-        self.relight.building = true;
+        let raised = self.relight.raise(Flag::Building);
         let guide = self.render_job(p.id, FIELD_EDGE, FIELD_EDGE, false, false);
-        self.relight.building = false;
+        drop(raised);
         let mut guide = guide.ok_or("no such photo")?;
         // the photo as it was shot, turned as it is: no edit moves or changes what the depth is found on
         guide.settings = Arc::new(DevelopSettings { orientation: p.develop.orientation, ..DevelopSettings::default() });
@@ -489,14 +530,14 @@ impl Session {
     /// off: every other render keeps its key) and the field for its `SourceInfo`. Starts making the field when the
     /// light is on and it is not there.
     pub(crate) fn relight_for(&mut self, p: &Photo, s: &DevelopSettings) -> (u64, Option<Input>) {
-        if self.relight.building || lightcraft_pipeline::relight::light_of(s).is_none() {
+        if self.relight.is(Flag::Building) || lightcraft_pipeline::relight::light_of(s).is_none() {
             return (0, None);
         }
         let key = self.relight_key(p);
         if let Some(m) = self.relight.get(&key) {
             return (m.input.key, Some(m.input.clone()));
         }
-        if !self.relight.hold {
+        if !self.relight.is(Flag::Hold) {
             self.relight_start(p, &key);
         }
         (unknown_salt(p.id), None)
@@ -514,10 +555,8 @@ impl Session {
 
     /// `f` with no field started for the renders it sets up (an export's: its worker makes the field).
     pub(crate) fn relight_held<T>(&mut self, f: impl FnOnce(&mut Session) -> T) -> T {
-        let was = std::mem::replace(&mut self.relight.hold, true);
-        let r = f(self);
-        self.relight.hold = was;
-        r
+        let _raised = self.relight.raise(Flag::Hold);
+        f(self)
     }
 
     /// Queue making photo `p`'s field (`key`), unless it is being made, failed or was cancelled.
@@ -540,9 +579,13 @@ impl Session {
         }
     }
 
-    /// Find photo `id`'s depth again after it was cancelled or failed (the section's Find Depth).
+    /// Find photo `id`'s depth again after it was cancelled or failed (the section's Find Depth). Nothing while its
+    /// light is off (no model run, no kept field pushed out).
     pub fn relight_retry(&mut self, id: PhotoId) {
         let Some(p) = self.catalog.photo(id).cloned() else { return };
+        if lightcraft_pipeline::relight::light_of(&p.develop).is_none() {
+            return;
+        }
         let key = self.relight_key(&p);
         {
             let mut st = self.relight.lock();
@@ -777,6 +820,27 @@ mod tests {
         let lit = serde_json::to_value(s.develop_of(vis[0]).unwrap()).unwrap();
         let preset = crate::portrait_presets::make("p", "g", &Default::default(), lit);
         assert!(preset.settings.get(lightcraft_develop::relight::KEY).is_none());
+    }
+
+    #[test]
+    fn a_panic_while_rendering_for_an_export_leaves_no_flag_set() {
+        let (mut s, ids) = relit(1);
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| s.relight_held(|_| panic!("a render set-up failed"))));
+        assert!(r.is_err());
+        assert!(!s.relight.is(Flag::Hold) && !s.relight.is(Flag::Building));
+        // so a render still starts the photo's field
+        let _ = s.render_job(ids[0], 64, 64, false, true);
+        assert!(s.relight_busy() || s.relight_made(ids[0]).is_some());
+    }
+
+    #[test]
+    fn finding_depth_again_does_nothing_while_the_light_is_off() {
+        let (mut s, ids) = relit(0);
+        let id = s.catalog.photos().next().unwrap().id;
+        assert!(ids.is_empty());
+        s.relight_retry(id);
+        assert!(!s.relight_busy());
+        assert!(s.execute("relight.findDepth", &json!({"id": id.0})).is_err());
     }
 
     #[test]

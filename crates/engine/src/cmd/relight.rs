@@ -26,7 +26,10 @@ fn status(s: &mut Session, p: &Value) -> Result<Value> {
 fn find(s: &mut Session, p: &Value) -> Result<Value> {
     let c = "relight.findDepth";
     let id = photo_id(p, c)?.or_else(|| s.active()).ok_or_else(|| bad(c, "no photo"))?;
-    s.catalog.photo(id).ok_or_else(|| bad(c, format!("no photo {}", id.0)))?;
+    let photo = s.catalog.photo(id).ok_or_else(|| bad(c, format!("no photo {}", id.0)))?;
+    if lightcraft_pipeline::relight::light_of(&photo.develop).is_none() {
+        return Err(bad(c, "Relight is off for this photo: raise Amount or Darken Surroundings first"));
+    }
     s.relight_retry(id);
     Ok(s.relight_status(id))
 }
@@ -68,7 +71,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Find Depth",
             [],
             None,
-            "{id?} → relight.status's fields — find the photo's depth again after it was cancelled (renders don't start a cancelled one) or failed",
+            "{id?} → relight.status's fields — find the photo's depth again after it was cancelled (renders don't start a cancelled one) or failed; an error while the photo's light is off",
             always,
             find
         ),
