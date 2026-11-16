@@ -69,6 +69,8 @@ pub mod previews;
 mod print;
 mod query;
 pub mod recheck;
+/// Fork (issue #288): Relight's status and model download.
+mod relight;
 pub mod reload;
 mod retouch;
 mod retouch_background;
@@ -244,6 +246,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(activity::specs());
         v.extend(retouch::specs());
         v.extend(retouch_background::specs());
+        v.extend(relight::specs());
         v.extend(portrait_presets::specs());
         v.extend(map::specs());
         v

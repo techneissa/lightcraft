@@ -63,6 +63,8 @@ struct RenderWork {
     /// Background Swap's picture and the depth map, waited for when the export runs (fork,
     /// `fork/retouch-background.md`).
     backdrop: Option<crate::retouch_background::ExportBackdrop>,
+    /// Relight's field, made or waited for when the export runs (fork, issue #288).
+    relight: Option<crate::relight::ExportRelight>,
 }
 
 enum Work {
@@ -141,6 +143,7 @@ fn prepare_guarded(
         let gain_map = o.hdr_output() && o.format == ExportFormat::Jpeg;
         let faces = session.retouch_export_faces(id);
         let backdrop = session.retouch_export_backdrop(id);
+        let relight = session.relight_export(id);
         let mut job = session.export_job(id, w, h, o.effective_space(), o.effective_depth())?;
         job.request.exact_size = true;
         job.key ^= 0x86e2_fadc_0917_b435;
@@ -156,7 +159,7 @@ fn prepare_guarded(
         } else {
             None
         };
-        (Work::Render(Box::new(RenderWork { job, hdr_job, meta, opts: o.clone(), faces, backdrop })), weight)
+        (Work::Render(Box::new(RenderWork { job, hdr_job, meta, opts: o.clone(), faces, backdrop, relight })), weight)
     } else {
         let lightcraft_catalog::Source::File { path } = &p.source else {
             return Err(format!("{} is a generated demo photo: it has no original file to export", p.file_name));
@@ -249,12 +252,15 @@ impl PreparedExport {
         let file_name = self.file_name;
         match self.work {
             Work::Render(w) => {
-                let RenderWork { mut job, mut hdr_job, meta, opts, faces, backdrop } = *w;
+                let RenderWork { mut job, mut hdr_job, meta, opts, faces, backdrop, relight } = *w;
                 if let Some(faces) = faces {
                     faces.fill(&mut [&mut job].into_iter().chain(hdr_job.as_mut()).collect::<Vec<_>>());
                 }
                 if let Some(b) = backdrop {
                     b.fill(&mut [&mut job].into_iter().chain(hdr_job.as_mut()).collect::<Vec<_>>())?;
+                }
+                if let Some(r) = relight {
+                    r.fill(&mut [&mut job].into_iter().chain(hdr_job.as_mut()).collect::<Vec<_>>())?;
                 }
                 let result = job.run();
                 let r = result.rendered?;

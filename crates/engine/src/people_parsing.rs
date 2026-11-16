@@ -866,7 +866,9 @@ pub(crate) fn measured_units(
 impl crate::Session {
     /// Use the default models folder, cache folder and choice file for people parsing. Hosts (the app, MCP) ask for
     /// it; a bare session has none, so tests stay hermetic.
-    pub fn with_default_parsing_models(self) -> Self {
+    pub fn with_default_parsing_models(mut self) -> Self {
+        // (fork, issue #288: Relight's depth model, in the same folder)
+        self.relight.root = crate::relight::default_root();
         self.parsing.set_paths(
             default_models_dir(),
             crate::config::cache_dir().map(|d| d.join("people-parsing")),

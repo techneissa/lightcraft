@@ -283,6 +283,8 @@ impl DecodedSource {
                     lens: pinned_lens(info.lens, header.lens),
                     // (the faces portrait retouching works on are the session's, not the decoder's)
                     retouch: header.retouch,
+                    // (and so is Relight's field, fork issue #288)
+                    relight: header.relight,
                     ..info.clone()
                 }
             }
