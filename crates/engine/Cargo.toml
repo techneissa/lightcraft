@@ -20,6 +20,7 @@ lightcraft-raster = { workspace = true }
 lightcraft-develop = { workspace = true }
 lightcraft-scenes = { workspace = true }
 lightcraft-pipeline = { workspace = true }
+lightcraft-relight = { workspace = true }
 lightcraft-edgerefine = { workspace = true }
 lightcraft-inpaint = { workspace = true }
 lightcraft-gpu = { workspace = true }
@@ -58,6 +59,8 @@ unicode-normalization = "0.1"
 unicode-segmentation = "1.13"
 lightcraft-segment = { workspace = true, optional = true }
 lightcraft-birefnet = { workspace = true, optional = true }
+# Relight's depth model (fork, issue #288), with the other AI models
+lightcraft-depth = { workspace = true, optional = true }
 # Learn My Edits (fork/learn-my-edits.md)
 lightcraft-learn = { workspace = true }
 # per-person part masks (fork/people-parsing.md); its models run natively only
@@ -115,7 +118,7 @@ required-features = ["sam"]
 # Test-only hooks for the crates that test against the engine (a dev-dependency feature; never enabled in a product build).
 test-hooks = []
 # AI masks with SAM 3 (Object / Describe). Off for the web and CLI builds.
-sam = ["dep:lightcraft-segment", "dep:lightcraft-birefnet"]
+sam = ["dep:lightcraft-segment", "dep:lightcraft-birefnet", "dep:lightcraft-depth"]
 denoise = ["dep:lightcraft-denoise", "lightcraft-denoise/runtime", "lightcraft-gpu/denoise"]
 rawnind-model = ["denoise", "lightcraft-denoise/rawnind-model", "lightcraft-denoise-core/rawnind-model"]
 # LightCraft's own denoise model offered as a download (MIT OR Apache-2.0 weights, CC0 training data); needs its hosted file.

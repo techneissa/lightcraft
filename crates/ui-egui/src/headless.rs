@@ -438,6 +438,8 @@ impl Headless {
             || self.app.session.sidecar_writes_pending() > 0
             || self.app.session.denoise_busy()
             || self.app.session.adaptive_busy()
+            // (fork, issue #288: a photo's Relight depth being found: its renders wait for it)
+            || self.app.session.relight_busy()
             || self.app.survey_motion.moving(self.time)
             || !self.app.tasks.is_empty()
             || !self.app.synthetic.is_empty()

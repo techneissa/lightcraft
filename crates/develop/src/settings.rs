@@ -179,6 +179,9 @@ pub struct DevelopSettings {
     /// the default, read leniently (a build without it, or a malformed block, reads as off).
     #[serde(rename = "fork_retouch", skip_serializing_if = "crate::retouch::Retouch::is_default")]
     pub retouch: crate::retouch::Retouch,
+    /// Relight (fork feature, issue #288, `fork/relight.md`), in its own namespace like `fork_retouch`.
+    #[serde(rename = "fork_relight", skip_serializing_if = "crate::relight::Relight::is_default")]
+    pub relight: crate::relight::Relight,
 }
 
 impl Default for DevelopSettings {
@@ -215,6 +218,7 @@ impl Default for DevelopSettings {
             look: crate::residual_look::ResidualLook::default(),
             disabled_sections: Vec::new(),
             retouch: Default::default(),
+            relight: Default::default(),
         }
     }
 }

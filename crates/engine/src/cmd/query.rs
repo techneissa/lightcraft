@@ -211,6 +211,12 @@ pub fn specs() -> Vec<CommandSpec> {
                         v["value"] = json!(controls::get(&d, c.id));
                         v
                     }))
+                    // Relight (fork, issue #288)
+                    .chain(lightcraft_develop::relight::specs().filter(|c| sec.is_none_or(|x| x == c.section)).map(|c| {
+                        let mut v = serde_json::to_value(c).unwrap_or_default();
+                        v["value"] = json!(controls::get(&d, c.id));
+                        v
+                    }))
                     // indexed controls of the list elements that exist (`pointColor.0.hueShift`, …)
                     .chain(controls::indexed_instances(&d).into_iter().chain(lightcraft_develop::retouch::face_instances(&d)).filter(|(_, c)| sec.is_none_or(|x| x == c.section)).map(|(id, c)| {
                         let mut v = serde_json::to_value(c).unwrap_or_default();

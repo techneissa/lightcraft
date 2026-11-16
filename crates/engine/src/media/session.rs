@@ -108,6 +108,8 @@ impl crate::Session {
         let profile_salt = self.media.camera_profile_salt(&settings.profile.id);
         let lens = super::quick::lens_key(&p);
         let (retouch, faces) = self.retouch_for(&p, &settings);
+        // (fork, issue #288: Relight's field)
+        let (relight, relight_in) = self.relight_for(&p, &settings);
         let key = settings_hash
             ^ ((max_w as u64) << 40)
             ^ ((max_h as u64) << 20)
@@ -122,7 +124,8 @@ impl crate::Session {
             // (an imported camera profile's file: likewise nothing for every other photo)
             ^ profile_salt.rotate_left(43)
             ^ decoder.rotate_left(47)
-            ^ retouch.rotate_left(53);
+            ^ retouch.rotate_left(53)
+            ^ relight.rotate_left(59);
         let cache = thumb_bucket.map(|b| {
             let mut k = Hasher128::new();
             k.str(&content_key).u64(settings_hash).u64(b as u64).u64(RENDER_CACHE_VERSION);
@@ -149,6 +152,9 @@ impl crate::Session {
             if retouch != 0 {
                 k.str("retouch").u64(retouch);
             }
+            if relight != 0 {
+                k.str("relight").u64(relight);
+            }
             (self.media.rendered.clone(), k.finish())
         });
         Some(RenderJob {
@@ -159,7 +165,7 @@ impl crate::Session {
             level,
             source,
             origin: p.source.clone(),
-            info: SourceInfo { retouch: faces, ..source_info(&p) },
+            info: SourceInfo { retouch: faces, relight: relight_in, ..source_info(&p) },
             settings,
             request,
             key,
@@ -260,6 +266,8 @@ impl crate::Session {
         let ck = Self::variant_key(&p, settings, edge, self.media.camera_profile_salt(&settings.profile.id));
         let (retouch, faces) = self.retouch_for(&p, settings);
         let ck = crate::retouch_input::salted(ck, retouch);
+        let (relight, relight_in) = self.relight_for(&p, settings);
+        let ck = crate::retouch_input::salted(ck, relight);
         Some(RenderJob {
             request_id: 0,
             cache_generation: self.media.rendered.generation(),
@@ -268,7 +276,7 @@ impl crate::Session {
             level,
             source,
             origin: p.source.clone(),
-            info: SourceInfo { retouch: faces, ..source_info(&p) },
+            info: SourceInfo { retouch: faces, relight: relight_in, ..source_info(&p) },
             settings: Arc::new(settings.clone()),
             request: RenderRequest { apply_crop: true, ..RenderRequest::fit(edge, edge) },
             key: (ck.0 as u64) ^ ((ck.0 >> 64) as u64),
@@ -368,7 +376,9 @@ impl crate::Session {
     #[cfg(test)]
     pub(crate) fn view_key(&self, p: &Photo, apply_crop: bool) -> Hash128 {
         let hash = self.media.settings_hashes.peek(p.id, &p.develop).unwrap_or_else(|| p.develop.hash64() ^ crate::files::render_key(&p.develop));
-        let salt = self.media.denoise_salt(p.id, &p.develop) ^ self.retouch_salt(p, &p.develop).rotate_left(53);
+        let salt = self.media.denoise_salt(p.id, &p.develop)
+            ^ self.retouch_salt(p, &p.develop).rotate_left(53)
+            ^ self.relight_salt(p, &p.develop).rotate_left(59);
         Self::view_key_with(p, hash, apply_crop, self.media.camera_profile_salt(&p.develop.profile.id), salt)
     }
 
@@ -408,7 +418,9 @@ impl crate::Session {
         let p = self.catalog.photo(id)?;
         let profile_salt = self.media.camera_profile_salt(&p.develop.profile.id);
         let hash = self.media.settings_hashes.get(id, &p.develop);
-        let salt = self.media.denoise_salt(id, &p.develop) ^ self.retouch_salt(p, &p.develop).rotate_left(53);
+        let salt = self.media.denoise_salt(id, &p.develop)
+            ^ self.retouch_salt(p, &p.develop).rotate_left(53)
+            ^ self.relight_salt(p, &p.develop).rotate_left(59);
         job.view_cache = Some((self.media.rendered.clone(), Self::view_key_with(p, hash, apply_crop, profile_salt, salt)));
         Some(job)
     }
@@ -420,7 +432,9 @@ impl crate::Session {
         let p = self.catalog.photo(id)?;
         let profile_salt = self.media.camera_profile_salt(&p.develop.profile.id);
         let hash = self.media.settings_hashes.get(id, &p.develop);
-        let salt = self.media.denoise_salt(id, &p.develop) ^ self.retouch_salt(p, &p.develop).rotate_left(53);
+        let salt = self.media.denoise_salt(id, &p.develop)
+            ^ self.retouch_salt(p, &p.develop).rotate_left(53)
+            ^ self.relight_salt(p, &p.develop).rotate_left(59);
         Some(Self::view_key_with(p, hash, apply_crop, profile_salt, salt))
     }
 
@@ -542,7 +556,8 @@ impl crate::Session {
         let hash = self.media.settings_hashes.peek(id, &p.develop).unwrap_or_else(|| p.develop.hash64() ^ crate::files::render_key(&p.develop));
         Some(
             Self::quick_key(p, hash, apply_crop, camera_jpeg, self.media.camera_profile_salt(&p.develop.profile.id))
-                ^ self.retouch_salt(p, &p.develop).rotate_left(53),
+                ^ self.retouch_salt(p, &p.develop).rotate_left(53)
+                ^ self.relight_salt(p, &p.develop).rotate_left(59),
         )
     }
 
@@ -571,7 +586,7 @@ impl crate::Session {
         // (the thumbnail job itself starts with the cached thumbnail, after the sharper embedded preview)
         let profile_salt = self.media.camera_profile_salt(&p.develop.profile.id);
         let hash = self.media.settings_hashes.get(id, &p.develop);
-        let retouch = self.retouch_salt(&p, &p.develop).rotate_left(53);
+        let retouch = self.retouch_salt(&p, &p.develop).rotate_left(53) ^ self.relight_salt(&p, &p.develop).rotate_left(59);
         let salt = self.media.denoise_salt(id, &p.develop) ^ retouch;
         let cached = vec![(self.media.rendered.clone(), Self::view_key_with(&p, hash, apply_crop, profile_salt, salt))];
         let key = Self::quick_key(&p, hash, apply_crop, camera_jpeg, profile_salt) ^ retouch;
@@ -689,6 +704,10 @@ impl crate::Session {
         {
             log::warn!("portrait: photo {} renders without its background picture: {e}", id.0);
         }
+        // (fork, issue #288: Relight's field, made here on this thread)
+        if let Err(e) = self.relight_now(id) {
+            log::warn!("relight: photo {} renders without its light: {e}", id.0);
+        }
         let job = self.render_job(id, max_w, max_h, false, true).ok_or("no such photo")?;
         let r = job.run();
         self.accept(&r);
@@ -711,6 +730,8 @@ impl crate::Session {
         {
             self.backdrop_now(&p, &p.develop).map_err(|e| format!("{}: {e}", p.file_name))?;
         }
+        // (fork, issue #288: Relight's field, made here; one that can't be made fails the export)
+        self.relight_now(id)?;
         let r = self.export_job(id, max_w, max_h, space, depth)?.run();
         self.accept(&r);
         r.rendered

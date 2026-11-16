@@ -36,18 +36,21 @@ pub enum EditSection {
     Detail,
     Optics,
     LensBlur,
+    /// Fork (issue #288, `fork/relight.md`).
+    Relight,
     Calibration,
 }
 
 impl EditSection {
     /// Every section, in the order the panel starts with.
-    pub const ALL: [EditSection; 7] = [
+    pub const ALL: [EditSection; 8] = [
         EditSection::Light,
         EditSection::Color,
         EditSection::Effects,
         EditSection::Detail,
         EditSection::Optics,
         EditSection::LensBlur,
+        EditSection::Relight,
         EditSection::Calibration,
     ];
 
@@ -60,6 +63,7 @@ impl EditSection {
             EditSection::Detail => "detail",
             EditSection::Optics => "optics",
             EditSection::LensBlur => "lensBlur",
+            EditSection::Relight => "relight",
             EditSection::Calibration => "calibration",
         }
     }
@@ -73,6 +77,7 @@ impl EditSection {
             EditSection::Detail => "Detail",
             EditSection::Optics => "Optics",
             EditSection::LensBlur => "Lens Blur",
+            EditSection::Relight => "Relight",
             EditSection::Calibration => "Calibration",
         }
     }

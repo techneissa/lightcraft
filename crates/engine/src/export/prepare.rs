@@ -63,6 +63,8 @@ struct RenderWork {
     /// Background Swap's picture and the depth map, waited for when the export runs (fork,
     /// `fork/retouch-background.md`).
     backdrop: Option<crate::retouch_background::ExportBackdrop>,
+    /// Relight's field, made or waited for when the export runs (fork, issue #288).
+    relight: Option<crate::relight::ExportRelight>,
 }
 
 enum Work {
@@ -141,7 +143,9 @@ fn prepare_guarded(
         let gain_map = o.hdr_output() && o.format == ExportFormat::Jpeg;
         let faces = session.retouch_export_faces(id);
         let backdrop = session.retouch_export_backdrop(id);
-        let mut job = session.export_job(id, w, h, o.effective_space(), o.effective_depth())?;
+        let relight = session.relight_export(id);
+        // (fork, issue #288: no Relight field is started here; the export's worker makes it)
+        let mut job = session.relight_held(|s| s.export_job(id, w, h, o.effective_space(), o.effective_depth()))?;
         job.request.exact_size = true;
         job.key ^= 0x86e2_fadc_0917_b435;
         let weight = render_weight(full_px, long, job.level, w.saturating_mul(h));
@@ -149,14 +153,14 @@ fn prepare_guarded(
             return Err(format!("{label}: {why}"));
         }
         let hdr_job = if gain_map {
-            let mut hdr = session.export_job(id, w, h, o.effective_space(), OutputDepth::F32Hdr)?;
+            let mut hdr = session.relight_held(|s| s.export_job(id, w, h, o.effective_space(), OutputDepth::F32Hdr))?;
             hdr.request.exact_size = true;
             hdr.key ^= 0x86e2_fadc_0917_b435;
             Some(hdr)
         } else {
             None
         };
-        (Work::Render(Box::new(RenderWork { job, hdr_job, meta, opts: o.clone(), faces, backdrop })), weight)
+        (Work::Render(Box::new(RenderWork { job, hdr_job, meta, opts: o.clone(), faces, backdrop, relight })), weight)
     } else {
         let lightcraft_catalog::Source::File { path } = &p.source else {
             return Err(format!("{} is a generated demo photo: it has no original file to export", p.file_name));
@@ -249,12 +253,15 @@ impl PreparedExport {
         let file_name = self.file_name;
         match self.work {
             Work::Render(w) => {
-                let RenderWork { mut job, mut hdr_job, meta, opts, faces, backdrop } = *w;
+                let RenderWork { mut job, mut hdr_job, meta, opts, faces, backdrop, relight } = *w;
                 if let Some(faces) = faces {
                     faces.fill(&mut [&mut job].into_iter().chain(hdr_job.as_mut()).collect::<Vec<_>>());
                 }
                 if let Some(b) = backdrop {
                     b.fill(&mut [&mut job].into_iter().chain(hdr_job.as_mut()).collect::<Vec<_>>())?;
+                }
+                if let Some(r) = relight {
+                    r.fill(&mut [&mut job].into_iter().chain(hdr_job.as_mut()).collect::<Vec<_>>())?;
                 }
                 let result = job.run();
                 let r = result.rendered?;

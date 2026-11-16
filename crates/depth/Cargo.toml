@@ -1,0 +1,28 @@
+[package]
+name = "lightcraft-depth"
+version.workspace = true
+edition.workspace = true
+license = "Apache-2.0"
+description = "LightCraft depth: a photo's depth from Depth Anything 3 Mono Large (DINOv2 ViT-L and a DPT head) in pure Rust on candle (L3)"
+
+[lints]
+workspace = true
+
+[dependencies]
+thiserror = { workspace = true }
+log = { workspace = true }
+serde_json = { workspace = true }
+
+# the model runs natively only (the web build has no AI models)
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+candle-core = { workspace = true }
+candle-nn = { workspace = true }
+lightcraft-fetch = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+candle-core = { workspace = true, features = ["metal"] }
+candle-nn = { workspace = true, features = ["metal"] }
+
+[dev-dependencies]
+lightcraft-testkit = { workspace = true }
+image = { workspace = true }

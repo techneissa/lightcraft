@@ -54,6 +54,8 @@ pub mod output;
 pub mod profiles;
 pub mod recolor;
 pub mod redeye;
+/// Fork (issue #288, `fork/relight.md`): Relight's light in the render.
+pub mod relight;
 pub mod reshape_step;
 pub mod residual_look;
 pub mod retouch_effect;
@@ -142,6 +144,9 @@ pub struct SourceInfo {
     /// The photo chose macOS Colour but this source was decoded as Camera Matching: why. The choice is kept; the Edit
     /// panel says so for as long as it is so.
     pub macos_note: Option<MacosUnavailable>,
+    /// Fork (issue #288, `fork/relight.md`): the photo's Relight field (its depth, made once); `None`: not made yet, or
+    /// Relight is off.
+    pub relight: Option<relight::Input>,
 }
 
 /// Why a photo set to macOS Colour renders as Camera Matching.
@@ -199,6 +204,7 @@ impl Default for SourceInfo {
             colour_note: None,
             macos_offered: false,
             macos_note: None,
+            relight: None,
         }
     }
 }
@@ -636,6 +642,8 @@ pub struct Plan<'a> {
     /// The Classic spots are drawn after the white balance, defringe and the local tone mapping, as before issue #184
     /// ([`spots_keep::spots_after_wb`] when the plan was made); otherwise on the resampled source, with the LaMa spots.
     pub spots_after_wb: bool,
+    /// Fork (issue #288, `fork/relight.md`): Relight's light over the photo ([`relight::lit`]); `None` while it is off.
+    pub relight: Option<relight::Lit>,
 }
 
 /// The original's long edge in pixels (an original reported smaller than the source is the source).
@@ -871,6 +879,7 @@ pub fn plan_kept<'a>(
         (w, h) == (full.1, full.2),
     ));
     let lens_subject = lens_blur::subject_estimate(src, s, info.mattes.as_deref()).map(Arc::new);
+    let relight = relight::lit(info, s);
     let mut plan = Plan {
         settings,
         frame,
@@ -897,6 +906,7 @@ pub fn plan_kept<'a>(
         retouch_analysis: None,
         spots_at,
         spots_after_wb,
+        relight,
     };
     plan.retouch_analysis = retouch_step::analysis(src, info, &plan);
     plan
@@ -975,6 +985,7 @@ pub fn colour_noise(src: &Rgb32f, info: &SourceInfo, p: &Plan<'_>) -> Option<nrc
                 full: p.full.clone(),
                 retouch_analysis: None,
                 spots_at: spots_scale::At::default(),
+                relight: None,
                 ..*p
             };
             local_tone::apply(&mut img, info, &tile);
@@ -1249,6 +1260,8 @@ fn render_impl(
     alphas.guide_from(geo, &sampled);
     let mut prep =
         local::prepare(lin.clone(), s, frame, px_per_long, plan.detail_scale, req.quality, &mut planes, plan.mattes.as_ref(), (&mut alphas, keys));
+    // (fork, issue #288: Relight's light, as local adjustments after the masks)
+    prep.masks.extend(relight::masks(&plan));
     if let Some(a) = plan.fixed_air {
         prep.air = a;
     }
@@ -1521,6 +1534,8 @@ mod tests_mask_geometry;
 mod tests_nr_scale;
 #[cfg(test)]
 mod tests_recolor_render;
+#[cfg(test)]
+mod tests_relight;
 #[cfg(test)]
 mod tests_retouch_blemish;
 #[cfg(test)]

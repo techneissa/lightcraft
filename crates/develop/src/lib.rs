@@ -10,6 +10,7 @@ pub mod adaptive;
 pub mod controls;
 pub mod presets;
 pub mod reflection_area;
+pub mod relight;
 pub mod residual_look;
 pub mod retouch;
 pub mod segmask;

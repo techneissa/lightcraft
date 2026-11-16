@@ -4146,6 +4146,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "lightcraft-depth"
+version = "0.21.1"
+dependencies = [
+ "candle-core",
+ "candle-nn",
+ "image",
+ "lightcraft-fetch",
+ "lightcraft-testkit",
+ "log",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "lightcraft-develop"
 version = "0.21.1"
 dependencies = [
@@ -4192,6 +4206,7 @@ dependencies = [
  "lightcraft-coreml",
  "lightcraft-denoise",
  "lightcraft-denoise-core",
+ "lightcraft-depth",
  "lightcraft-develop",
  "lightcraft-edgerefine",
  "lightcraft-faces",
@@ -4215,6 +4230,7 @@ dependencies = [
  "lightcraft-raster",
  "lightcraft-raw",
  "lightcraft-reflections",
+ "lightcraft-relight",
  "lightcraft-scenes",
  "lightcraft-segment",
  "lightcraft-slideshow",
@@ -4321,6 +4337,7 @@ dependencies = [
  "lightcraft-pipeline",
  "lightcraft-raster",
  "lightcraft-raw",
+ "lightcraft-relight",
  "lightcraft-scenes",
  "lightcraft-testkit",
  "log",
@@ -4503,6 +4520,7 @@ dependencies = [
  "lightcraft-inpaint",
  "lightcraft-raster",
  "lightcraft-raw",
+ "lightcraft-relight",
  "lightcraft-scenes",
  "proptest",
  "rayon",
@@ -4569,6 +4587,16 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+]
+
+[[package]]
+name = "lightcraft-relight"
+version = "0.21.1"
+dependencies = [
+ "image",
+ "lightcraft-color",
+ "lightcraft-raster",
+ "rayon",
 ]
 
 [[package]]
