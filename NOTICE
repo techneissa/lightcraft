@@ -56,6 +56,15 @@ translated from Python/PyTorch to Rust on candle. The BiRefNet weights are not p
 and are never distributed with it: a user downloads the MIT-licensed ZhengPeng7/BiRefNet files
 only when they choose to.
 
+crates/depth (lightcraft-depth) ports Depth Anything 3 (https://github.com/ByteDance-Seed/Depth-Anything-3),
+Copyright 2025 ByteDance Ltd. and/or its affiliates, licensed under the Apache License 2.0, and the
+DINOv2 backbone it uses (https://github.com/facebookresearch/dinov2), Copyright Meta Platforms, Inc.,
+licensed under the Apache License 2.0. The port was modified by the LightCraft contributors (2026):
+translated from Python/PyTorch to Rust on candle, the monocular network only. Because of this,
+crates/depth is licensed under the Apache License 2.0 only. The weights are not part of LightCraft
+and are never distributed with it: a user downloads the Apache-2.0 depth-anything/DA3MONO-LARGE file
+only when they choose to.
+
 crates/flux (lightcraft-flux) ports the FLUX model code of candle-transformers 0.9.2
 (https://github.com/huggingface/candle, src/models/flux), Copyright The HuggingFace Team and the
 candle contributors, licensed under the MIT License or the Apache License 2.0, which follows Black
