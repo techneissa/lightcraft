@@ -18,8 +18,16 @@ pub const LENS: f32 = 1.154_700_5;
 pub const MAX_SIDE: usize = 8192;
 /// The smallest depth map read (pixels on a side).
 pub const MIN_DEPTH_SIDE: usize = 2;
-/// How far apart the depth map's and the guide's shapes may be (relative difference of their aspect ratios).
+/// How far apart the depth map's and the guide's shapes may be (relative difference of their aspect ratios), besides
+/// [`SHAPE_ROUNDING`].
 pub const SHAPE_TOLERANCE: f64 = 0.02;
+/// Pixels each side of a depth map may be off the photo's shape by: a depth model rounds each side of its input to
+/// whole patches (Depth Anything's are 14 pixels, so up to 7 off), which bends a 16:10 or 2.35:1 photo's shape by a
+/// few percent. The upsampler scales x and y separately, so that costs nothing.
+pub const SHAPE_ROUNDING: f64 = 8.0;
+/// The most the shapes may differ however small the map: a map of another shape (a portrait's depth on a landscape
+/// photo, 4:5 against 5:4 at the closest) stays refused.
+pub const SHAPE_MAX: f64 = 0.15;
 
 /// What a depth map's values mean.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -150,7 +158,8 @@ impl Field {
             return Err(Error::BadDepth(format!("{} values for a depth map of {lw} × {lh}", depth.values.len())));
         }
         let (a, b) = (lw as f64 / lh as f64, w as f64 / h as f64);
-        if (a / b - 1.0).abs() > SHAPE_TOLERANCE {
+        let tolerance = (SHAPE_TOLERANCE + SHAPE_ROUNDING / lw.min(lh) as f64).min(SHAPE_MAX);
+        if (a / b - 1.0).abs() > tolerance {
             return Err(Error::BadDepth(format!("a depth map of {lw} × {lh} for a photo of {w} × {h}")));
         }
         let lz_lo = log_depth(&depth)?;
@@ -345,6 +354,21 @@ mod tests {
         // an empty or mismatched guide
         let empty = Rgb32f { width: 4, height: 4, data: Vec::new() };
         assert!(Field::prepare(DepthMap { width: 8, height: 6, values: &ok, kind: Kind::Depth }, &empty).is_err());
+    }
+
+    #[test]
+    fn a_depth_models_map_rounded_to_its_patches_fits_wide_photos() {
+        // the model reads a 16:10 photo at 504 × 322 (sides rounded to 14-pixel patches), a 2.35:1 one at 504 × 210
+        for ((gw, gh), (lw, lh)) in [((160, 100), (504, 322)), ((235, 100), (504, 210)), ((185, 100), (504, 266))] {
+            let values = vec![1.0f32; lw * lh];
+            let r = Field::prepare(DepthMap { width: lw, height: lh, values: &values, kind: Kind::Depth }, &flat_guide(gw, gh));
+            assert!(r.is_ok(), "{lw} × {lh} for {gw} × {gh}: {:?}", r.err());
+        }
+        // a portrait's map on a landscape photo is still refused
+        let values = vec![1.0f32; 322 * 504];
+        assert!(Field::prepare(DepthMap { width: 322, height: 504, values: &values, kind: Kind::Depth }, &flat_guide(160, 100)).is_err());
+        let values = vec![1.0f32; 400 * 500];
+        assert!(Field::prepare(DepthMap { width: 400, height: 500, values: &values, kind: Kind::Depth }, &flat_guide(125, 100)).is_err());
     }
 
     #[test]
