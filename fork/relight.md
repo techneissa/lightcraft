@@ -21,7 +21,7 @@ List: Relight, a Develop section with a light you drag on the photo that brighte
 
 ## Own files
 
-`crates/depth/` (new crate: the depth model), `crates/relight/` (new crate: field and light), `crates/develop/src/relight.rs`, `crates/pipeline/src/relight.rs`, `crates/pipeline/src/tests_relight.rs`, `crates/engine/src/relight.rs`, `crates/engine/src/cmd/relight.rs`, `crates/ui-egui/src/panels/edit/relight.rs`, `crates/ui-egui/src/panels/detail/relight.rs`, `fork/relight.md`, `fork/tests.d/relight.txt`
+`crates/depth/` (new crate: the depth model), `crates/relight/` (new crate: field and light), `crates/develop/src/relight.rs`, `crates/pipeline/src/relight.rs`, `crates/pipeline/src/tests_relight.rs`, `crates/gpu/tests/it/relight.rs`, `crates/engine/src/relight.rs`, `crates/engine/src/cmd/relight.rs`, `crates/ui-egui/src/panels/edit/relight.rs`, `crates/ui-egui/src/panels/detail/relight.rs`, `fork/relight.md`, `fork/tests.d/relight.txt`
 
 ## Hooks in official files
 
@@ -29,13 +29,13 @@ List: Relight, a Develop section with a light you drag on the photo that brighte
 - `crates/develop/src/lib.rs`: `pub mod relight;`. `settings.rs`: the `relight` field and its default. `controls.rs`: `Section::Relight` and the relight specs in get, set, find and the section list. `presets.rs`: `SettingsGroup::Relight`.
 - `crates/catalog/src/fork_format.rs`: version 11. `journal.rs`: its row. `tests_format_version.rs`: 11. `fork/catalog-format.md`: one sentence.
 - `crates/pipeline/src/lib.rs`: `pub mod relight;`, the test `mod` line, `SourceInfo::relight`, `Plan::relight` (set in `plan_kept`, `None` in the colour-noise tile plan), the light's planes added to `prep.masks` after `local::prepare`. `retouch_step.rs`: `relight: None` in its plan. `Cargo.toml`: the relight crate.
-- `crates/gpu/src/masks.rs`: the light's planes uploaded after the photo's masks (`upload_relit`).
+- `crates/gpu/src/masks.rs`: the light's planes uploaded after the photo's masks (`upload_relit`). `tests/it/main.rs`: `mod relight;`. `Cargo.toml`: the relight crate as a dev-dependency.
 - `crates/engine/src/lib.rs`: `pub mod relight;`, `Session::relight`. `cmd.rs`: `mod relight;` and its specs. `cmd/query.rs`: `develop.controls` lists the relight specs. `people_parsing.rs`: the models folder for depth. `media/session.rs`: renders, variants and thumbnails take the field and its key; the export waits for it. `media/source.rs`: keeps it in the header. `export/prepare.rs`: `RenderWork::relight`. `files/load.rs`, `smart.rs`: `relight: None`. `Cargo.toml`: the relight crate, and the depth crate under `sam`.
 - `crates/ui-egui/src/panels/edit.rs`: the module, the section's closure and match arm. `edit_sections.rs`: `EditSection::Relight`. `edit_sections/tests.rs`: the order lists. `menus/ui_commands.rs`: `section.relight`. `panels/detail.rs`: the module and the on-photo handle's match arm. `headless.rs`: a headless snapshot waits while depth is found.
 
 ## Tests
 
-`fork/tests.d/relight.txt`: malformed depth (wrong size, NaN, empty, too small) returns an error; normals of a wall and a floor; a depth step is no surface; disparity maps; a near surface takes more light than a far one; facing; Amount at the peak, the roll-off near white and in the deepest shadow; Darken Surroundings; Warmth; hostile numbers; whole renders (off, no depth yet or the section's eye off change no byte; a near square brightens more than four times the wall; a draft equals a 4× export scaled down, also cropped; the light stays on the same place under a crop); the settings' lenient reading and presets; the engine's store, export wait and download refusal without `confirm`; the section order.
+`fork/tests.d/relight.txt`: malformed depth (wrong size, NaN, empty, too small) returns an error; normals of a wall and a floor; a depth step is no surface; disparity maps; a near surface takes more light than a far one; facing; Amount at the peak, the roll-off near white and in the deepest shadow; Darken Surroundings; Warmth; hostile numbers; whole renders (off, no depth yet or the section's eye off change no byte; a near square brightens more than four times the wall; a draft equals a 4× export scaled down, also cropped; the light stays on the same place under a crop); the GPU equals the CPU (white, warm and darkened, cool and cropped, after a mask); the settings' lenient reading and presets; the engine's store, export wait and download refusal without `confirm`; the section order.
 
 ## What's New entry
 

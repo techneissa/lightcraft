@@ -3,6 +3,7 @@ cargo test -p lightcraft-relight --lib
 cargo test -p lightcraft-depth --lib
 cargo test -p lightcraft-develop --lib -- relight
 cargo test -p lightcraft-pipeline --lib -- tests_relight
+cargo test -p lightcraft-gpu --test it -- relight
 cargo test -p lightcraft-engine --features sam --lib -- relight
 cargo test -p lightcraft-ui-egui --lib -- edit_sections
 cargo test -p lightcraft-catalog --lib -- fork_format tests_format_version

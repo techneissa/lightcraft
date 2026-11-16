@@ -17,6 +17,8 @@ mod mask_cache;
 mod portrait_drag;
 // fork: `fork/perf-portrait-gpu.md`
 mod portrait_gpu;
+// fork: `fork/relight.md`
+mod relight;
 mod shaped_spot;
 mod spot_cache;
 mod spot_reuse;
