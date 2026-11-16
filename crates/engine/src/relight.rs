@@ -382,6 +382,21 @@ impl Session {
         Some(ExportRelight { store: self.relight.clone(), key, maker, label: p.file_name.clone() })
     }
 
+    /// Start making photo `id`'s field when it is not made, being made or failed (the Relight section is open: its depth
+    /// box shows the depth before the light is turned up).
+    pub fn relight_prepare(&mut self, id: PhotoId) {
+        let Some(p) = self.catalog.photo(id).cloned() else { return };
+        let key = self.relight_key(&p);
+        if self.relight.get(&key).is_none() {
+            self.relight_start(&p, &key);
+        }
+    }
+
+    /// Whether a field is being made (headless runs settle after it).
+    pub fn relight_busy(&self) -> bool {
+        !self.relight.lock().busy.is_empty()
+    }
+
     /// Photo `id`'s field, when it is made (the section's depth box).
     pub fn relight_made(&self, id: PhotoId) -> Option<Arc<Made>> {
         let p = self.catalog.photo(id)?;

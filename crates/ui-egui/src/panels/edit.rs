@@ -25,6 +25,8 @@ mod histogram;
 mod lens_blur;
 mod mixer;
 mod profile_search;
+/// Fork (issue #288): the Relight section.
+mod relight;
 mod sliders;
 
 use curve::curve_editor;
@@ -36,6 +38,7 @@ pub(crate) use histogram::histogram;
 use histogram::soft_proofing;
 use lens_blur::lens_blur;
 use mixer::{mixer, point_color};
+pub(crate) use relight::paint_light;
 use sliders::{REL_TEMP, REL_TINT, hdr_row, header_buttons, k_to_rel, profile_menu, quick_develop, rel_to_k, reset_tip, section};
 pub use sliders::{apply_slider_out, sub_title};
 pub(crate) use sliders::{control, reload_preview_only};
@@ -441,6 +444,13 @@ fn show_sections(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             ui.add_space(8.0);
         })
     };
+    // fork (issue #288): Relight, after Lens Blur
+    let relight_section = |app: &mut LightcraftApp, ui: &mut egui::Ui| {
+        section(app, ui, &d, lightcraft_develop::relight::SECTION, "Relight", |app, ui, d| {
+            relight::relight(app, ui, d, id);
+            ui.add_space(8.0);
+        })
+    };
     // Lightroom Classic's Calibration panel (the cloud app hides it): last, like there.
     let calibration = |app: &mut LightcraftApp, ui: &mut egui::Ui| {
         section(app, ui, &d, "calibration", "Calibration", |app, ui, d| {
@@ -465,6 +475,7 @@ fn show_sections(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             EditSection::Detail => detail(app, ui),
             EditSection::Optics => optics(app, ui),
             EditSection::LensBlur => lens_blur_section(app, ui),
+            EditSection::Relight => relight_section(app, ui),
             EditSection::Calibration => calibration(app, ui),
         }
     }
