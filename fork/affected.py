@@ -60,6 +60,7 @@ EMBEDDED = [
     ("assets/fonts/", ["lightcraft-engine", "lightcraft-ui-egui"]),
     ("contributors/", ["lightcraft-ui-egui"]),
     ("docs/whats-new.md", ["lightcraft-ui-egui"]),
+    ("packaging/linux/flatpak/", ["lightcraft-ui-egui"]),
     ("docs/raw/coverage-sweep.tsv", ["lightcraft-raw"]),
     ("docs/raf-corpus.sha256", ["lightcraft-raw"]),
     ("xtask/src/raw_samples.rs", ["lightcraft-raw"]),
@@ -71,7 +72,7 @@ EMBEDDED = [
 # can break a path the tracker cites. Same rule as `ci --quick` (xtask/src/ci_quick.rs).
 PARITY_PACKAGES = {"lightcraft-engine", "lightcraft-develop", "lightcraft-ui-egui", "lightcraft-cli"}
 PARITY_DOCS = {"docs/parity-checklist.md", "docs/gaps.md"}
-HEIF_PACKAGES = {"lightcraft-codecs", "lightcraft-heif"}
+HEIF_PACKAGES = {"lightcraft-codecs", "lightcraft-heif-depth"}
 
 # Weights are seconds on a GitHub runner (measured on PR 66's runs). A crate's test time is guessed from its size
 # (a test counts 1, 200 lines of Rust count 1, times SECONDS_PER_UNIT: the engine's 1830 tests took 223 s); a crate

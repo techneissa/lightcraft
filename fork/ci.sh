@@ -87,7 +87,7 @@ if [ -n "$DOC_PACKAGES" ]; then
   step doctest cargo test $DOC_PACKAGES $DOC_FEATURES --doc
 fi
 if [ "$HEIF_TESTS" = 1 ]; then
-  step heif-test cargo test -p lightcraft-codecs -p lightcraft-heif --features lightcraft-codecs/heif --lib --bins --tests
+  step heif-test cargo test -p lightcraft-codecs -p lightcraft-heif-depth --features lightcraft-codecs/heif --lib --bins --tests
   step heif-engine-test cargo test -p lightcraft-engine --lib --features lightcraft-codecs/heif heic
 fi
 # The GPU tests (`gpu-backends` in cargo xtask ci) need a hardware adapter; the runners have none.

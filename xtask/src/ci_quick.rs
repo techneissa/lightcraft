@@ -29,7 +29,8 @@ const WORKSPACE_WIDE_DIRS: &[&str] = &[".cargo/"];
 /// Packages whose ids or paths the parity tracker cites (commands, develop controls, UI menus).
 const PARITY_PACKAGES: &[&str] = &["lightcraft-engine", "lightcraft-develop", "lightcraft-ui-egui", "lightcraft-cli"];
 const PARITY_DOCS: &[&str] = &["docs/parity-checklist.md", "docs/gaps.md"];
-const HEIF_PACKAGES: &[&str] = &["lightcraft-codecs"];
+// fork: lightcraft-heif-depth reads an iPhone depth map (fork/retouch-background.md)
+const HEIF_PACKAGES: &[&str] = &["lightcraft-codecs", "lightcraft-heif-depth"];
 /// Files outside a package's directory that it compiles in (`include_str!` / `include_bytes!`,
 /// a build script's `rerun-if-changed`): a change to one counts as a change to those packages.
 /// An entry ending in `/` covers the directory. `embedded_files_are_mapped` keeps this complete.
