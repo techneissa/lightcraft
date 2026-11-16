@@ -44,10 +44,12 @@ pub enum SettingsGroup {
     Calibration,
     /// Portrait retouching (fork, `fork/retouch-foundation.md`): the whole block with the per-face settings.
     Portrait,
+    /// Relight (fork, issue #288): the light and its sliders.
+    Relight,
 }
 
 impl SettingsGroup {
-    pub const ALL: [SettingsGroup; 21] = [
+    pub const ALL: [SettingsGroup; 22] = [
         SettingsGroup::Profile,
         SettingsGroup::Treatment,
         SettingsGroup::WhiteBalance,
@@ -69,6 +71,7 @@ impl SettingsGroup {
         SettingsGroup::LensBlur,
         SettingsGroup::Calibration,
         SettingsGroup::Portrait,
+        SettingsGroup::Relight,
     ];
 
     /// Groups included by default when copying (Lightroom excludes crop, masks and spots by default; Portrait holds
@@ -105,6 +108,7 @@ impl SettingsGroup {
             SettingsGroup::LensBlur => "Lens Blur",
             SettingsGroup::Calibration => "Calibration",
             SettingsGroup::Portrait => "Portrait",
+            SettingsGroup::Relight => "Relight",
         }
     }
 
@@ -132,6 +136,7 @@ impl SettingsGroup {
             SettingsGroup::LensBlur => &["lens_blur"],
             SettingsGroup::Calibration => &["calibration"],
             SettingsGroup::Portrait => &[crate::retouch::KEY],
+            SettingsGroup::Relight => &[crate::relight::KEY],
         }
     }
 }

@@ -31,6 +31,8 @@ pub enum Section {
     /// Portrait retouching (fork, `fork/retouch-foundation.md`; its controls are in [`crate::retouch`]).
     Portrait,
     LensBlur,
+    /// Relight (fork, issue #288; its controls are in [`crate::relight`]).
+    Relight,
 }
 
 impl Section {
@@ -54,6 +56,7 @@ impl Section {
             Section::RedEye => "Red Eye",
             Section::Portrait => "Portrait",
             Section::LensBlur => "Lens Blur",
+            Section::Relight => "Relight",
         }
     }
 }
@@ -158,7 +161,7 @@ macro_rules! controls {
         pub fn get(s: &DevelopSettings, id: &str) -> Option<f64> {
             match id {
                 $( $id => Some(s.$($field).+ as f64), )*
-                _ => indexed_get(s, id).or_else(|| crate::retouch::get(s, id)),
+                _ => indexed_get(s, id).or_else(|| crate::retouch::get(s, id)).or_else(|| crate::relight::get(s, id)),
             }
         }
 
@@ -175,7 +178,7 @@ macro_rules! controls {
             };
             match id {
                 $( $id => { s.$($field).+ = v as _; true } )*
-                _ => indexed_set(s, id, v) || crate::retouch::set(s, id, v),
+                _ => indexed_set(s, id, v) || crate::retouch::set(s, id, v) || crate::relight::set(s, id, v),
             }
         }
     };
@@ -493,7 +496,7 @@ pub fn find(id: &str) -> Option<&'static ControlSpec> {
     if let Some(c) = CONTROLS.iter().find(|c| c.id == id) {
         return Some(c);
     }
-    if let Some(c) = crate::retouch::find(id) {
+    if let Some(c) = crate::retouch::find(id).or_else(|| crate::relight::find(id)) {
         return Some(c);
     }
     let (fam, _, field) = split_indexed(id)?;
@@ -518,7 +521,7 @@ pub fn indexed_instances(s: &DevelopSettings) -> Vec<(String, &'static ControlSp
 }
 
 pub fn in_section(section: Section) -> impl Iterator<Item = &'static ControlSpec> {
-    CONTROLS.iter().chain(crate::retouch::specs()).filter(move |c| c.section == section)
+    CONTROLS.iter().chain(crate::retouch::specs()).chain(crate::relight::specs()).filter(move |c| c.section == section)
 }
 
 #[cfg(test)]

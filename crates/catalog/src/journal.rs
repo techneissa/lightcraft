@@ -77,6 +77,7 @@
 //! | fork 8 | the Portrait tab's Refine brush (#99) | develop settings `fork_retouch.refine` and `fork_retouch.faces[].refine` (`Refine`: per feature, strokes with `mode`, `points`, `size`, `feather`, `flow`, `strength`, `pressure`), left out while empty |
 //! | fork 9 | Assisted Culling's eyes (`fork/ai-culling.md`) | `Analysis.eyes` (`Eyes`: `faces`, `main`, `closed`, `focus`), in `SetAnalysis` bodies and `Photo.analysis`, left out when not measured |
 //! | fork 10 | the official format 13's Lens Blur (official update of 2026-11-12) | `DevelopSettings.lens_blur`, `Mask.adjust.lens_blur` |
+//! | fork 11 | Relight (#288, `fork/relight.md`) | `DevelopSettings.fork_relight` (`amount`, `softness`, `warmth`, `x`, `y`, `depth`, `darken`, `wrap`), left out while default |
 //!
 //! Versions 1–14 are `"format":"lightcraft-catalog"` (13 means the official Lens Blur or the fork's camera
 //! profiles; their fields differ, so either reads exactly); the fork writes `"format":"lightcraft-catalog-fork"` from
