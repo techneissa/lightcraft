@@ -80,7 +80,16 @@ impl SettingsGroup {
         SettingsGroup::ALL
             .into_iter()
             .filter(|g| {
-                !matches!(g, SettingsGroup::Crop | SettingsGroup::Masks | SettingsGroup::Spots | SettingsGroup::RedEye | SettingsGroup::Portrait)
+                // (Relight, fork issue #288: a light placed on one photo, offered but not ticked)
+                !matches!(
+                    g,
+                    SettingsGroup::Crop
+                        | SettingsGroup::Masks
+                        | SettingsGroup::Spots
+                        | SettingsGroup::RedEye
+                        | SettingsGroup::Portrait
+                        | SettingsGroup::Relight
+                )
             })
             .collect()
     }

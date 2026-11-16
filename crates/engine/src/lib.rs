@@ -1295,7 +1295,8 @@ impl Session {
         new_json["hdr"] = serde_json::json!(new.hdr);
         let Some(mut delta) = json_delta(&old_json, &new_json) else { return Vec::new() };
         if let Some(o) = delta.as_object_mut() {
-            for k in ["spots", "red_eye", lightcraft_develop::retouch::KEY, "version", "process"] {
+            // (fork, issue #288: Relight's light is the photo's own, like its spots)
+            for k in ["spots", "red_eye", lightcraft_develop::retouch::KEY, lightcraft_develop::relight::KEY, "version", "process"] {
                 o.remove(k);
             }
             if o.is_empty() {

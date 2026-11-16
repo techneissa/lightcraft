@@ -247,12 +247,14 @@ pub fn rename_person(presets: &mut crate::presets::PresetList, from: &str, to: &
 }
 
 /// The groups of other develop settings a portrait preset may carry: `groups` without Portrait (the face part
-/// replaces it), Spots, Red Eye and Masks (marks and masks made on one photo).
+/// replaces it), Spots, Red Eye, Masks and Relight (marks, masks and a light made on one photo).
 pub fn other_groups(groups: &[SettingsGroup]) -> Vec<SettingsGroup> {
     groups
         .iter()
         .copied()
-        .filter(|g| !matches!(g, SettingsGroup::Portrait | SettingsGroup::Spots | SettingsGroup::RedEye | SettingsGroup::Masks))
+        .filter(|g| {
+            !matches!(g, SettingsGroup::Portrait | SettingsGroup::Spots | SettingsGroup::RedEye | SettingsGroup::Masks | SettingsGroup::Relight)
+        })
         .collect()
 }
 
@@ -263,7 +265,7 @@ pub fn make(name: &str, group: &str, portrait: &Portrait, others: Value) -> Pres
         Value::Object(o) => o,
         _ => Map::new(),
     };
-    for k in ["masks", "spots", "red_eye", lightcraft_develop::retouch::KEY] {
+    for k in ["masks", "spots", "red_eye", lightcraft_develop::retouch::KEY, lightcraft_develop::relight::KEY] {
         settings.remove(k);
     }
     settings.insert(KEY.to_string(), portrait.to_value());
