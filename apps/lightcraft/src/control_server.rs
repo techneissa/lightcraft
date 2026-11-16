@@ -304,7 +304,9 @@ mod tests {
         fn new(open: &Arc<AtomicUsize>, idle: Duration, before: impl FnOnce(&mut TcpStream)) -> Self {
             let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
             let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
-            client.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+            // only a hang guard: no test expects the client read to time out, and a busy runner can take seconds
+            // to start the worker or close the connection (#291)
+            client.set_read_timeout(Some(Duration::from_secs(60))).unwrap();
             let (stream, _) = listener.accept().unwrap();
             // Small test messages must not wait for Nagle's algorithm or a delayed ACK.
             client.set_nodelay(true).unwrap();
