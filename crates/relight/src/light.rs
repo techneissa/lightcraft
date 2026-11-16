@@ -10,7 +10,6 @@
 use rayon::prelude::*;
 
 use crate::field::Field;
-use crate::filter::bilinear;
 
 /// The light's settings, as plain numbers (the develop settings convert to this).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -41,8 +40,10 @@ impl Light {
 
 /// The brightest the light makes the most lit point: `1 + PEAK_GAIN` times (two stops).
 pub const PEAK_GAIN: f32 = 3.0;
-/// Log2 luminance (relative to 18 % grey) where the roll-off towards white is centred: a little under white.
-const WHITE: f32 = 2.3;
+/// Log2 luminance (relative to 18 % grey) the light never takes a pixel past: a little under white (2.5).
+const CEILING: f32 = 2.0;
+/// How far under [`CEILING`] the roll-off begins (stops).
+const KNEE: f32 = 1.0;
 /// Where shadows begin to be held back (log2 luminance below 18 % grey): fully at `SHADOW.0`, not at `SHADOW.1`.
 const SHADOW: (f32, f32) = (-8.0, -5.0);
 
@@ -133,15 +134,22 @@ impl Field {
     #[inline]
     pub fn shade(&self, rig: &Rig, u: f32, v: f32) -> Shade {
         let (lz, n, lum) = self.at(u, v);
+        self.shade_with(rig, (u, v), lz, n, lum)
+    }
+
+    /// [`Field::shade`] at `(u, v)` with the field's values there already read.
+    #[inline]
+    fn shade_with(&self, rig: &Rig, (u, v): (f32, f32), lz: f32, n: [f32; 3], lum: f32) -> Shade {
         let added = rig.amount * (self.light_at(rig, u, v, lz, n) / rig.peak).min(1.0);
         let gain = rig.ambient + added;
         let raw = gain.max(1e-3).log2();
         let stops = if raw > 0.0 {
             let l = lum + rig.ev;
-            // towards white: at most about the headroom left (a soft minimum)
-            let head = (WHITE - l).max(0.0) + 0.3;
-            let q = raw / head;
-            let rolled = raw / (1.0 + q * q * q * q).sqrt().sqrt();
+            // towards white: the pixel's new brightness rolls off as it nears the ceiling (a pixel already past it
+            // gets nothing more)
+            let target = l + raw;
+            let start = CEILING - KNEE;
+            let rolled = if target <= start { raw } else { (start + KNEE * (1.0 - (-(target - start) / KNEE).exp()) - l).clamp(0.0, raw) };
             // and less in the deepest shadows
             rolled * (0.35 + 0.65 * smoothstep(SHADOW.0, SHADOW.1, l))
         } else {
@@ -181,8 +189,21 @@ pub fn warmth_tilt(w: f64) -> f32 {
 pub struct Shading {
     pub width: usize,
     pub height: usize,
-    stops: Vec<f32>,
-    share: Vec<f32>,
+    /// Each pixel's gain (stops) and the light's share.
+    px: Vec<[f32; 2]>,
+    /// The largest brightening and darkening (stops, both ≥ 0).
+    pub up_top: f32,
+    pub down_top: f32,
+}
+
+/// A render's planes of the light, finished for the finish stage ([`Shading::split`]): the brightening gain over
+/// [`Shading::up_top`], the darkening over [`Shading::down_top`] (each 0..1), and the light's share (0..1).
+pub struct Split {
+    pub width: usize,
+    pub height: usize,
+    pub up: Vec<f32>,
+    pub down: Vec<f32>,
+    pub share: Option<Vec<f32>>,
 }
 
 /// The guided filter's regularization along an edge (a variance of the cube-root luminance).
@@ -197,7 +218,9 @@ impl Field {
         stops.par_chunks_mut(w.max(1)).zip(share.par_chunks_mut(w.max(1))).enumerate().for_each(|(y, (st, sh))| {
             let v = (y as f32 + 0.5) / h as f32;
             for (x, (a, b)) in st.iter_mut().zip(sh.iter_mut()).enumerate() {
-                let s = self.shade(rig, (x as f32 + 0.5) / w as f32, v);
+                // (at the field's own pixels: its values as they are, nothing to interpolate)
+                let (lz, n, lum) = self.at_px(y * w + x);
+                let s = self.shade_with(rig, ((x as f32 + 0.5) / w as f32, v), lz, n, lum);
                 *a = s.stops;
                 *b = s.share;
             }
@@ -241,7 +264,10 @@ impl Field {
                 *v = q.clamp(0.0, 1.0);
             }
         }
-        Shading { width: w, height: h, stops, share }
+        let up_top = stops.iter().copied().fold(0f32, f32::max);
+        let down_top = stops.iter().copied().fold(0f32, |a, v| a.max(-v));
+        let px = stops.into_iter().zip(share).map(|(a, b)| [a, b]).collect();
+        Shading { width: w, height: h, px, up_top, down_top }
     }
 }
 
@@ -277,14 +303,34 @@ pub struct Planes {
 impl Shading {
     /// Memory held (bytes).
     pub fn bytes(&self) -> usize {
-        (self.stops.len() + self.share.len()) * 4
+        self.px.len() * 8
     }
 
-    /// The light at normalized photo coordinates `(u, v)` (bilinear).
+    /// The light at normalized photo coordinates `(u, v)` (bilinear, clamped at the borders).
     #[inline]
     pub fn at(&self, u: f32, v: f32) -> Shade {
-        let (x, y) = (u * self.width as f32, v * self.height as f32);
-        Shade { stops: bilinear(&self.stops, self.width, self.height, x, y), share: bilinear(&self.share, self.width, self.height, x, y) }
+        let [stops, share] = self.sample(u * self.width as f32, v * self.height as f32);
+        Shade { stops, share }
+    }
+
+    /// Both values at field position `(x, y)` (pixel centres at `i + 0.5`), bilinear, clamped.
+    #[inline]
+    fn sample(&self, x: f32, y: f32) -> [f32; 2] {
+        let (w, h) = (self.width, self.height);
+        let (Some(xm), Some(ym)) = (w.checked_sub(1), h.checked_sub(1)) else { return [0.0; 2] };
+        let fx = (x - 0.5).clamp(0.0, xm as f32);
+        let fy = (y - 0.5).clamp(0.0, ym as f32);
+        let (x0, y0) = (fx as usize, fy as usize);
+        let (x1, y1) = ((x0 + 1).min(xm), (y0 + 1).min(ym));
+        let (tx, ty) = (fx - x0 as f32, fy - y0 as f32);
+        let at = |x: usize, y: usize| self.px.get(y * w + x).copied().unwrap_or([0.0; 2]);
+        let (a, b, c, d) = (at(x0, y0), at(x1, y0), at(x0, y1), at(x1, y1));
+        let lerp = |k: usize| {
+            let top = a[k] + (b[k] - a[k]) * tx;
+            let bottom = c[k] + (d[k] - c[k]) * tx;
+            top + (bottom - top) * ty
+        };
+        [lerp(0), lerp(1)]
     }
 
     /// [`Planes`] over `w × h` pixels; `to_photo` maps a pixel centre to normalized photo coordinates (a pixel it
@@ -306,6 +352,43 @@ impl Shading {
         });
         Planes { width: w, height: h, stops, share }
     }
+
+    /// The render's planes, finished (see [`Split`]), in one pass over its `w × h` pixels; `to_photo` maps a pixel
+    /// centre to normalized photo coordinates. `share`: whether the light's colour plane is wanted.
+    pub fn split(&self, w: usize, h: usize, to_photo: &(dyn Fn(f64, f64) -> (f64, f64) + Sync), share: bool) -> Split {
+        let n = w.saturating_mul(h);
+        let (ku, kd) = (if self.up_top > 0.0 { 1.0 / self.up_top } else { 0.0 }, if self.down_top > 0.0 { 1.0 / self.down_top } else { 0.0 });
+        let (fw, fh) = (self.width as f32, self.height as f32);
+        let mut up = vec![0f32; n];
+        let mut down = vec![0f32; n];
+        let mut sh = if share { vec![0f32; n] } else { Vec::new() };
+        let row = w.max(1);
+        let fill = |y: usize, ur: &mut [f32], dr: &mut [f32], mut sr: Option<&mut [f32]>| {
+            for x in 0..ur.len() {
+                let (u, v) = to_photo(x as f64 + 0.5, y as f64 + 0.5);
+                if !(u.is_finite() && v.is_finite()) {
+                    continue;
+                }
+                let [stops, s] = self.sample(u as f32 * fw, v as f32 * fh);
+                if let (Some(a), Some(b)) = (ur.get_mut(x), dr.get_mut(x)) {
+                    (*a, *b) = ((stops * ku).clamp(0.0, 1.0), (-stops * kd).clamp(0.0, 1.0));
+                }
+                if let Some(c) = sr.as_deref_mut().and_then(|r| r.get_mut(x)) {
+                    *c = s.clamp(0.0, 1.0);
+                }
+            }
+        };
+        if share {
+            up.par_chunks_mut(row)
+                .zip(down.par_chunks_mut(row))
+                .zip(sh.par_chunks_mut(row))
+                .enumerate()
+                .for_each(|(y, ((ur, dr), sr))| fill(y, ur, dr, Some(sr)));
+        } else {
+            up.par_chunks_mut(row).zip(down.par_chunks_mut(row)).enumerate().for_each(|(y, (ur, dr))| fill(y, ur, dr, None));
+        }
+        Split { width: w, height: h, up, down, share: share.then_some(sh) }
+    }
 }
 
 #[cfg(test)]
@@ -320,7 +403,8 @@ mod tests {
     fn two_planes(near: f32) -> Field {
         let (w, h) = (96, 64);
         let lz: Vec<f32> = (0..w * h).map(|i| if i % w < w / 2 { -near } else { 0.0 }).collect();
-        Field::from_parts(w, h, lz, vec![0.0; w * h]).unwrap()
+        // (a mid-dark scene: two stops under grey, far from white and from the deepest shadows)
+        Field::from_parts(w, h, lz, vec![-2.0; w * h]).unwrap()
     }
 
     #[test]

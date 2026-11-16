@@ -18,7 +18,7 @@ pub mod filter;
 pub mod light;
 
 pub use field::{DepthMap, Field, Kind};
-pub use light::{Light, Planes, Rig, Shade, Shading, warmth_tilt};
+pub use light::{Light, Planes, Rig, Shade, Shading, Split, warmth_tilt};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {

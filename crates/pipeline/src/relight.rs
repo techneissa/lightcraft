@@ -99,15 +99,9 @@ pub fn lit(info: &SourceInfo, s: &DevelopSettings) -> Option<Lit> {
     Some(Lit { shading, tilt })
 }
 
-/// One of the light's planes as a mask the finish stage applies: `plane` (any scale) divided by its largest value,
-/// which goes into `adjust` through `put`. `None` when the plane is all zero.
-fn evaluated(id: u32, width: usize, height: usize, data: Vec<f32>, put: impl FnOnce(f32) -> LocalAdjustments) -> Option<Evaluated> {
-    let top = data.iter().copied().filter(|v| v.is_finite()).fold(0f32, f32::max);
-    if top <= 1e-5 {
-        return None;
-    }
-    let data = data.into_iter().map(|v| if v.is_finite() { (v / top).clamp(0.0, 1.0) } else { 0.0 }).collect();
-    Some(Evaluated { id, alpha: Arc::new(MaskAlpha::from_plane(Plane { width, height, data })), amount: 1.0, adjust: put(top) })
+/// One of the light's planes as a mask the finish stage applies, with `adjust` per unit of it.
+fn evaluated(id: u32, width: usize, height: usize, data: Vec<f32>, adjust: LocalAdjustments) -> Evaluated {
+    Evaluated { id, alpha: Arc::new(MaskAlpha::from_plane(Plane { width, height, data })), amount: 1.0, adjust }
 }
 
 /// The light's planes for the render `plan` makes, as masks for the finish stage (none while Relight is off or the
@@ -118,18 +112,25 @@ pub fn masks(plan: &Plan<'_>) -> Vec<Evaluated> {
     let t = crate::profiling().then(std::time::Instant::now);
     // (the light lives on the photo before the lens corrections and transform, like a mask made on it)
     let map = plan.frame.for_mask(true).out_to_mask(w, h);
-    let p = lit.shading.planes(w, h, &|x, y| {
-        let q = map.apply(Point::new(x, y));
-        (q.x, q.y)
-    });
+    let sh = &lit.shading;
+    let p = sh.split(
+        w,
+        h,
+        &|x, y| {
+            let q = map.apply(Point::new(x, y));
+            (q.x, q.y)
+        },
+        lit.tilt != 0.0,
+    );
     let mut out = Vec::with_capacity(3);
-    let up: Vec<f32> = p.stops.iter().map(|v| v.max(0.0)).collect();
-    out.extend(evaluated(IDS[0], w, h, up, |top| LocalAdjustments { exposure: f64::from(top), ..LocalAdjustments::default() }));
-    let down: Vec<f32> = p.stops.iter().map(|v| (-v).max(0.0)).collect();
-    out.extend(evaluated(IDS[1], w, h, down, |top| LocalAdjustments { exposure: -f64::from(top), ..LocalAdjustments::default() }));
-    if lit.tilt != 0.0 {
-        let tilt = f64::from(lit.tilt);
-        out.extend(evaluated(IDS[2], w, h, p.share, |top| LocalAdjustments { temp: 100.0 * tilt * f64::from(top), ..LocalAdjustments::default() }));
+    if sh.up_top > 1e-5 {
+        out.push(evaluated(IDS[0], w, h, p.up, LocalAdjustments { exposure: f64::from(sh.up_top), ..LocalAdjustments::default() }));
+    }
+    if sh.down_top > 1e-5 {
+        out.push(evaluated(IDS[1], w, h, p.down, LocalAdjustments { exposure: -f64::from(sh.down_top), ..LocalAdjustments::default() }));
+    }
+    if let Some(share) = p.share {
+        out.push(evaluated(IDS[2], w, h, share, LocalAdjustments { temp: 100.0 * f64::from(lit.tilt), ..LocalAdjustments::default() }));
     }
     if let Some(t) = t {
         eprintln!("    relight planes ({w} × {h}): {:.1} ms", t.elapsed().as_secs_f64() * 1e3);

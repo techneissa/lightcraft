@@ -186,6 +186,12 @@ impl Field {
         (lz, n, lum)
     }
 
+    /// Log depth, normal and guide luminance of field pixel `i`.
+    #[inline]
+    pub(crate) fn at_px(&self, i: usize) -> (f32, [f32; 3], f32) {
+        (self.ln_z.get(i).copied().unwrap_or(0.0), self.normal.get(i).copied().unwrap_or([0.0, 0.0, -1.0]), self.lum.get(i).copied().unwrap_or(0.0))
+    }
+
     /// The surface normal at normalized photo coordinates `(u, v)` (pictures of the field).
     pub fn normal_at(&self, u: f32, v: f32) -> [f32; 3] {
         self.at(u, v).1
