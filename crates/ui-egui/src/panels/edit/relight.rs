@@ -80,6 +80,14 @@ pub(crate) fn drag(app: &mut LightcraftApp, ui: &egui::Ui, resp: &egui::Response
 
 /// The section's body.
 pub(super) fn relight(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings, id: PhotoId) {
+    if cfg!(target_arch = "wasm32") {
+        // (the depth would be found on the page's thread: the web build has no Relight)
+        let t = Tokens::get(ui.ctx());
+        egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 6, bottom: 6 }).show(ui, |ui| {
+            ui.label(egui::RichText::new(crate::i18n::tr("Relight needs the desktop app.")).size(12.0).color(t.text_label));
+        });
+        return;
+    }
     let made = app.session.relight_made(id);
     if made.is_none() {
         // (opening the section finds the depth, so the box shows it before the light is turned up)
@@ -200,6 +208,19 @@ fn missing(app: &mut LightcraftApp, ui: &mut egui::Ui, rect: Rect, status: &Valu
     if finding {
         p.text(c, Align2::CENTER_CENTER, crate::i18n::tr("Finding Depth…"), t.font(12.5), t.text_label);
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
+        return;
+    }
+    if status["cancelled"].as_bool() == Some(true) {
+        let mut child = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(Rect::from_center_size(c, vec2(rect.width() - 16.0, 26.0)))
+                .layout(egui::Layout::top_down(egui::Align::Center)),
+        );
+        if crate::widgets::text_button(&mut child, "relightFindDepth", crate::i18n::tr("Find Depth"), false).clicked()
+            && let Err(e) = app.run("relight.findDepth", json!({}))
+        {
+            app.toast(ui.ctx(), e);
+        }
         return;
     }
     let needs_model = error.is_some_and(|e| e == lightcraft_engine::relight::MISSING) && model["available"].as_bool() == Some(true);

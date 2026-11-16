@@ -144,7 +144,8 @@ fn prepare_guarded(
         let faces = session.retouch_export_faces(id);
         let backdrop = session.retouch_export_backdrop(id);
         let relight = session.relight_export(id);
-        let mut job = session.export_job(id, w, h, o.effective_space(), o.effective_depth())?;
+        // (fork, issue #288: no Relight field is started here; the export's worker makes it)
+        let mut job = session.relight_held(|s| s.export_job(id, w, h, o.effective_space(), o.effective_depth()))?;
         job.request.exact_size = true;
         job.key ^= 0x86e2_fadc_0917_b435;
         let weight = render_weight(full_px, long, job.level, w.saturating_mul(h));
@@ -152,7 +153,7 @@ fn prepare_guarded(
             return Err(format!("{label}: {why}"));
         }
         let hdr_job = if gain_map {
-            let mut hdr = session.export_job(id, w, h, o.effective_space(), OutputDepth::F32Hdr)?;
+            let mut hdr = session.relight_held(|s| s.export_job(id, w, h, o.effective_space(), OutputDepth::F32Hdr))?;
             hdr.request.exact_size = true;
             hdr.key ^= 0x86e2_fadc_0917_b435;
             Some(hdr)

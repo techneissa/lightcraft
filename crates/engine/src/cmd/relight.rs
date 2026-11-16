@@ -1,5 +1,5 @@
-//! `relight.*` (fork, issue #288, `fork/relight.md`): where a photo's Relight field stands, and the depth model's
-//! download. The light itself is develop controls (`relight.amount`, `.softness`, `.warmth`, `.x`, `.y`, `.depth`,
+//! `relight.*` (fork, issue #288, `fork/relight.md`): where a photo's Relight field stands, finding it again, and the
+//! depth model's download. The light itself is develop controls (`relight.amount`, `.softness`, `.warmth`, `.x`, `.y`, `.depth`,
 //! `.darken`, `.wrap`), set like every slider (`develop.set`, `develop.merge`), so undo, presets, copy settings and
 //! sync reach it.
 
@@ -21,6 +21,14 @@ fn status(s: &mut Session, p: &Value) -> Result<Value> {
         o.extend(st);
     }
     Ok(v)
+}
+
+fn find(s: &mut Session, p: &Value) -> Result<Value> {
+    let c = "relight.findDepth";
+    let id = photo_id(p, c)?.or_else(|| s.active()).ok_or_else(|| bad(c, "no photo"))?;
+    s.catalog.photo(id).ok_or_else(|| bad(c, format!("no photo {}", id.0)))?;
+    s.relight_retry(id);
+    Ok(s.relight_status(id))
 }
 
 fn download(s: &mut Session, p: &Value) -> Result<Value> {
@@ -51,9 +59,18 @@ pub fn specs() -> Vec<CommandSpec> {
             "Relight Status",
             [],
             None,
-            "{id?} → {id, on, light: {amount, softness, warmth, x, y, depth, darken, wrap}, ready, finding, source?: file|model, error?, model: {installed, bytes, downloading, done, total, error?, available}} — whether the photo's depth is found (from its own depth map, an iPhone Portrait photo's, or the depth model's), being found, or why it can't be. The light is develop controls (relight.amount, .softness, .warmth, .x, .y, .depth, .darken, .wrap): set them with develop.set or develop.merge",
+            "{id?} → {id, on, light: {amount, softness, warmth, x, y, depth, darken, wrap}, ready, finding, cancelled, source?: file|model, error?, model: {installed, bytes, downloading, done, total, error?, available}} — whether the photo's depth is found (from its own depth map, an iPhone Portrait photo's, or the depth model's), being found, or why it can't be. The light is develop controls (relight.amount, .softness, .warmth, .x, .y, .depth, .darken, .wrap): set them with develop.set or develop.merge",
             always,
             status
+        ),
+        cmd!(
+            query "relight.findDepth",
+            "Find Depth",
+            [],
+            None,
+            "{id?} → relight.status's fields — find the photo's depth again after it was cancelled (renders don't start a cancelled one) or failed",
+            always,
+            find
         ),
         cmd!(
             query "relight.downloadModel",

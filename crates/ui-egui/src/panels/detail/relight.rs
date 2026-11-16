@@ -1,5 +1,5 @@
 //! Fork (issue #288, `fork/relight.md`): Relight's light on the photo. While the Relight section is open and the
-//! light is on, its handle is drawn where the light is (on the photo before the lens corrections, as a mask's
+//! light changes the photo, its handle is drawn where the light is (on the photo before the lens corrections, as a mask's
 //! coordinates are) and a drag that starts on it moves the light; every other press goes on to the loupe as
 //! before. One drag is one undo step.
 
@@ -8,10 +8,10 @@ use serde_json::json;
 use super::geometry::CanvasMap;
 use super::{DevelopSettings, LightcraftApp, Point, Rect, register, vec2};
 
-/// Whether the light's handle is on the photo now: the Edit panel's Relight section is open, the light is on and
-/// no tool has the photo.
+/// Whether the light's handle is on the photo now: the Edit panel's Relight section is open, the light changes the
+/// photo (Amount or Darken Surroundings above 0, the section's eye on) and no tool has the photo.
 pub(super) fn shown(app: &LightcraftApp, d: &DevelopSettings) -> bool {
-    app.ui.section_open(lightcraft_develop::relight::SECTION) && d.relight.is_on() && app.ui.tool.is_empty()
+    app.ui.section_open(lightcraft_develop::relight::SECTION) && lightcraft_pipeline::relight::light_of(d).is_some() && app.ui.tool.is_empty()
 }
 
 /// Draw the light's handle and move it when a drag starts on it. True while the pointer belongs to it (a drag of

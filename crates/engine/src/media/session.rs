@@ -376,7 +376,9 @@ impl crate::Session {
     #[cfg(test)]
     pub(crate) fn view_key(&self, p: &Photo, apply_crop: bool) -> Hash128 {
         let hash = self.media.settings_hashes.peek(p.id, &p.develop).unwrap_or_else(|| p.develop.hash64() ^ crate::files::render_key(&p.develop));
-        let salt = self.media.denoise_salt(p.id, &p.develop) ^ self.retouch_salt(p, &p.develop).rotate_left(53);
+        let salt = self.media.denoise_salt(p.id, &p.develop)
+            ^ self.retouch_salt(p, &p.develop).rotate_left(53)
+            ^ self.relight_salt(p, &p.develop).rotate_left(59);
         Self::view_key_with(p, hash, apply_crop, self.media.camera_profile_salt(&p.develop.profile.id), salt)
     }
 
@@ -416,7 +418,9 @@ impl crate::Session {
         let p = self.catalog.photo(id)?;
         let profile_salt = self.media.camera_profile_salt(&p.develop.profile.id);
         let hash = self.media.settings_hashes.get(id, &p.develop);
-        let salt = self.media.denoise_salt(id, &p.develop) ^ self.retouch_salt(p, &p.develop).rotate_left(53);
+        let salt = self.media.denoise_salt(id, &p.develop)
+            ^ self.retouch_salt(p, &p.develop).rotate_left(53)
+            ^ self.relight_salt(p, &p.develop).rotate_left(59);
         job.view_cache = Some((self.media.rendered.clone(), Self::view_key_with(p, hash, apply_crop, profile_salt, salt)));
         Some(job)
     }
@@ -428,7 +432,9 @@ impl crate::Session {
         let p = self.catalog.photo(id)?;
         let profile_salt = self.media.camera_profile_salt(&p.develop.profile.id);
         let hash = self.media.settings_hashes.get(id, &p.develop);
-        let salt = self.media.denoise_salt(id, &p.develop) ^ self.retouch_salt(p, &p.develop).rotate_left(53);
+        let salt = self.media.denoise_salt(id, &p.develop)
+            ^ self.retouch_salt(p, &p.develop).rotate_left(53)
+            ^ self.relight_salt(p, &p.develop).rotate_left(59);
         Some(Self::view_key_with(p, hash, apply_crop, profile_salt, salt))
     }
 
@@ -550,7 +556,8 @@ impl crate::Session {
         let hash = self.media.settings_hashes.peek(id, &p.develop).unwrap_or_else(|| p.develop.hash64() ^ crate::files::render_key(&p.develop));
         Some(
             Self::quick_key(p, hash, apply_crop, camera_jpeg, self.media.camera_profile_salt(&p.develop.profile.id))
-                ^ self.retouch_salt(p, &p.develop).rotate_left(53),
+                ^ self.retouch_salt(p, &p.develop).rotate_left(53)
+                ^ self.relight_salt(p, &p.develop).rotate_left(59),
         )
     }
 
@@ -579,7 +586,7 @@ impl crate::Session {
         // (the thumbnail job itself starts with the cached thumbnail, after the sharper embedded preview)
         let profile_salt = self.media.camera_profile_salt(&p.develop.profile.id);
         let hash = self.media.settings_hashes.get(id, &p.develop);
-        let retouch = self.retouch_salt(&p, &p.develop).rotate_left(53);
+        let retouch = self.retouch_salt(&p, &p.develop).rotate_left(53) ^ self.relight_salt(&p, &p.develop).rotate_left(59);
         let salt = self.media.denoise_salt(id, &p.develop) ^ retouch;
         let cached = vec![(self.media.rendered.clone(), Self::view_key_with(&p, hash, apply_crop, profile_salt, salt))];
         let key = Self::quick_key(&p, hash, apply_crop, camera_jpeg, profile_salt) ^ retouch;
