@@ -244,6 +244,17 @@ fn gradient(p: &mut Vec<u32>, aux: &mut Vec<f32>, grid: Option<&PosGrid>, ramp: 
 /// terms. Shapes without a kernel (Sky, Subject, …) run on the CPU.
 ///
 /// `store`: the view's alphas of the last render (see [`AlphaStore`]); without one every mask is evaluated.
+/// Fork (issue #288): Relight's planes (`relit`, each `n` texels) into the stack `alpha` after its first `from`.
+fn upload_relit(cx: &mut Cx<'_>, relit: &[lightcraft_pipeline::masks::Evaluated], alpha: &Buf, from: usize, n: usize) {
+    for (k, e) in relit.iter().enumerate() {
+        let plane = e.alpha.to_plane();
+        if plane.data.len() == n {
+            let buf = cx.gpu.upload(&plane.data);
+            cx.copy_into(&buf, alpha, (from + k) * n);
+        }
+    }
+}
+
 pub(crate) fn masks(
     cx: &mut Cx<'_>,
     (lin, sampled): (&Buf, &Buf),
@@ -255,21 +266,25 @@ pub(crate) fn masks(
     use lightcraft_develop::{MaskOp, MaskShape};
     let s = &*plan.settings;
     let list: Vec<_> = s.masks.iter().filter(|m| m.renders()).collect();
-    if list.is_empty() {
+    // (fork, issue #288: Relight's light, as local adjustments after the masks, `lightcraft_pipeline::relight`)
+    let relit = lightcraft_pipeline::relight::masks(plan);
+    if list.is_empty() && relit.is_empty() {
         return (None, Vec::new());
     }
     let (w, h) = (plan.w, plan.h);
     let n = w * h;
+    let stack = list.len() + relit.len();
     let frame = &plan.frame;
     let ev = s.light.exposure as f32;
     let long = frame.ow.max(frame.oh);
     let [a, b, c, d, e, f] = frame.out_to_norm(w, h).0;
     let (kx, ky) = (frame.ow / long, frame.oh / long);
     let aff = [a * kx, b * ky, c * kx, d * ky, e * kx, f * ky].map(|v| (v as f32).to_bits());
-    let alpha = cx.zeroed(n * list.len() + if prep.chroma.is_some() { 3 * n } else { 0 });
+    let alpha = cx.zeroed(n * stack + if prep.chroma.is_some() { 3 * n } else { 0 });
     if let Some(ch) = &prep.chroma {
-        cx.copy_into(ch, &alpha, n * list.len());
+        cx.copy_into(ch, &alpha, n * stack);
     }
+    upload_relit(cx, &relit, &alpha, list.len(), n);
     let comp_plane = cx.gpu.buffer(n);
     let mut guard = store.map(|(s, _)| s.lock());
     let mut unkept = Inner::default();
@@ -463,6 +478,7 @@ pub(crate) fn masks(
             let r = plan.recolor.iter().find(|(id, _)| *id == m.id).map(|(_, r)| r);
             effect_terms_with(&m.adjust, (m.adjust.amount / 100.0) as f32, r)
         })
+        .chain(relit.iter().map(|e| effect_terms_with(&e.adjust, e.amount, None)))
         .collect();
     (Some(alpha), terms)
 }

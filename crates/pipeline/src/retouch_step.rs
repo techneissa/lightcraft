@@ -153,6 +153,7 @@ pub fn analysis(src: &Rgb32f, info: &SourceInfo, p: &Plan<'_>) -> Option<Arc<Ana
         full: (full.clone(), aw, ah),
         retouch_analysis: None,
         spots_at: crate::spots_scale::At::default(),
+        relight: None,
         ..*p
     };
     let img = if sub.spots_after_wb || sub.settings.spots.is_empty() {

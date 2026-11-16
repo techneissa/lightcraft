@@ -4212,6 +4212,7 @@ dependencies = [
  "lightcraft-inpaint",
  "lightcraft-raster",
  "lightcraft-raw",
+ "lightcraft-relight",
  "lightcraft-scenes",
  "proptest",
  "rayon",
