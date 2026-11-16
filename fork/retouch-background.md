@@ -76,7 +76,7 @@ Unsplash photos from Wikimedia Commons):
 
 `crates/retouch/src/background/` (`mod.rs`, `draw.rs`, `falloff.rs`, `grid.rs`, `holes.rs`, `matte.rs`, `prepare.rs`),
 `crates/retouch/examples/background.rs`, `crates/retouch/tests/background.rs`, `crates/engine/src/retouch_background.rs`,
-`crates/engine/src/cmd/retouch_background.rs`, `crates/engine/src/tests/retouch_background.rs`, `crates/heif/src/depth.rs`,
+`crates/engine/src/cmd/retouch_background.rs`, `crates/engine/src/tests/retouch_background.rs`, `crates/heif-depth/` (the whole crate),
 `crates/ui-egui/src/panels/portrait/background.rs`, `crates/ui-egui/src/tests/portrait_background.rs`,
 `fork/retouch-background.md`, `fork/tests.d/retouch-background.txt`
 
@@ -90,8 +90,12 @@ Unsplash photos from Wikimedia Commons):
   picture on their own thread (`backdrop_now`; a missing one fails `render_export`). `crates/engine/Cargo.toml`: `sha2`
   is a dependency (it was a dev-dependency).
 - `crates/ui-egui/locales/*.json`: the section's strings and the two activity labels.
-- `crates/heif/src/lib.rs`: `mod depth`, `pub use depth::{DepthMap, decode_depth}`. `crates/codecs/src/heif.rs`:
-  `decode_depth` (none without the `heif` feature); `crates/codecs/src/lib.rs`: its `pub use`.
+- `crates/heif-depth/`: the official `crates/heif` as it was before the official code moved HEIF decoding to the
+  shared `craft-heif` (official update of 2026-11-16), kept as the fork crate `lightcraft-heif-depth` only for
+  `decode_depth`, because `craft-heif` skips auxiliary images. Remove it, and read the depth through `craft-heif`,
+  once that reads depth images. Root `Cargo.toml`: its workspace line; `crates/codecs/Cargo.toml`: the optional
+  dependency, in the `heif` feature. `crates/codecs/src/heif.rs`: `decode_depth` (none without the `heif`
+  feature); `crates/codecs/src/lib.rs`: its `pub use`.
 - `crates/engine/src/lib.rs`, `crates/engine/src/cmd.rs`, `crates/engine/src/tests.rs`, `crates/ui-egui/src/tests.rs`:
   `mod` lines and the command specs. `crates/ui-egui/src/menus/ui_commands.rs`: `portrait.backgroundPicture`.
 - `crates/catalog`: `fork_format.rs` (`VERSION` 7), `journal.rs` (the fork 7 row), `tests_format_version.rs`,

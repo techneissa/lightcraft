@@ -1,6 +1,6 @@
 [package]
-name = "lightcraft-heif"
-description = "Optional HEIF/HEIC still-image decoder for LightCraft (heic-rs for the container and HEVC, libheif-matching colour conversion, panic-guarded)"
+name = "lightcraft-heif-depth"
+description = "Fork: reads the depth map of an iPhone Portrait HEIC (Portrait ▸ Background ▸ Blur). The pictures themselves decode through craft-heif; this is LightCraft's earlier HEIF decoder, kept for its auxiliary-image reading until craft-heif reads depth maps."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

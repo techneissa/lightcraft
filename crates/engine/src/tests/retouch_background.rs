@@ -173,7 +173,7 @@ fn a_missing_picture_fails_the_export_with_its_name() {
 /// it itself). A build without HEIF reads none and renders as before.
 #[test]
 fn a_heic_photos_depth_map_reaches_the_render_when_blur_is_on() {
-    use lightcraft_heif::testdata::{Spec, build};
+    use craft_heif::testdata::{Spec, build};
     let dir = std::env::temp_dir().join(format!("lightcraft-depth-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let photo = |x: u32, y: u32| [((x * 7 + y * 13) % 200 + 30) as u16, 110, 150];

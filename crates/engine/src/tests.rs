@@ -74,6 +74,8 @@ mod mask_geometry;
 mod match_look;
 mod merge;
 mod move_to_share;
+#[cfg(unix)]
+mod opened_folder;
 mod organize;
 mod parse_ahead;
 mod parse_ahead_peek;

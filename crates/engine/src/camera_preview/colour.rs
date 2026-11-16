@@ -3,6 +3,7 @@ use super::mono::{fit_dark_tone, monochrome_look};
 use super::proxy::LensGeometry;
 use super::{CameraLook, CameraTone, CameraTransform, ColorData, D50, D65, Mat3, ProfileLook, REC2020, RawFormat, RawImage, ToneCurve, Xy, bradford};
 use lightcraft_develop::CameraColour;
+use lightcraft_raw::profile::ToneCurveEval;
 
 /// Long edge of the sensor/JPEG proxy a single photo's look is fitted on (the acceptance gates
 /// below were set at this size).

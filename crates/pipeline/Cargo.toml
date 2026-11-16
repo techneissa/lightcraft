@@ -23,5 +23,7 @@ serde = { workspace = true }
 dhat = { workspace = true }
 lightcraft-scenes = { workspace = true }
 proptest = { workspace = true }
+craft-image-codecs = { workspace = true }
+# fork: the recolor example reads and writes pictures
 image = { workspace = true }
 serde_json = { workspace = true }

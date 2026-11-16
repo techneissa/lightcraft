@@ -30,7 +30,6 @@ mod heif;
 pub use heif::decode_depth;
 pub mod icc;
 mod jpeg;
-pub mod jpeg_par;
 #[cfg(feature = "jxl")]
 mod jxl;
 mod jxl_encode;
