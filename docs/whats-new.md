@@ -96,6 +96,12 @@
   process 5: new photos (and Reset) get it, photos you already edited keep their look until you choose Photo ▸ Update
   to Current Process. See [process versions](process-versions.md).
 
+## 2026-11-17
+
+### Relight
+- A new Develop section, Relight, adds a light you place on the photo. Drag its handle and the light reaches what is near it in depth and faces it, live while you drag. Amount, Softness and Warmth shape it; Darken Surroundings and Wrap are under Advanced.
+- Depth comes from the photo's own depth map (iPhone Portrait photos) or from an on-device depth model, downloaded once (about 1.3 GB). Saved with the edit; like masks and spots it stays on its photo unless you tick Relight in Copy Settings or a preset. The export matches the preview. The web version has no Relight.
+
 ## 2026-11-12
 
 ### Adaptive AI Masks

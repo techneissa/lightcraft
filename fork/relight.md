@@ -55,4 +55,4 @@ List: Relight, a Develop section with a light you drag on the photo that brighte
 
 ## Parity rows
 
-| LR-DEV-RELIGHT | Relight: a depth-aware light dragged on the photo | P2 | 🟡 | `cmd:relight.status`, `cmd:relight.findDepth`, `cmd:relight.downloadModel`, `crates/relight/src/light.rs`, `crates/ui-egui/src/panels/edit/relight.rs` | beyond Lightroom (no equivalent): a point light placed in the photo's depth (its own map or Depth Anything 3), by 3D distance and facing, in scene-linear light; 🟡 until tried by hand |
+| LR-EDIT-RELIGHT | Relight: a depth-aware light dragged on the photo | P2 | 🟡 | `cmd:relight.status`, `cmd:relight.findDepth`, `cmd:relight.downloadModel`, `crates/relight/src/light.rs`, `crates/ui-egui/src/panels/edit/relight.rs` | beyond Lightroom (no equivalent): a point light placed in the photo's depth (its own map or Depth Anything 3), by 3D distance and facing, in scene-linear light; 🟡 until tried by hand |

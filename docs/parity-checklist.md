@@ -31,7 +31,7 @@ cited here still exists. Formerly docs/parity.md.
 | C. Views & navigation (VIEW) | 16 | 1 | 1 | 0 | 9/9 (100%) | 4/4 (100%) |
 | D. Search & filter (FILT) | 11 | 1 | 1 | 0 | 4/4 (100%) | 4/4 (100%) |
 | E. Metadata (META) | 5 | 1 | 0 | 0 | 2/2 (100%) | 2/2 (100%) |
-| F. Edit panel — global adjustments (EDIT) | 43 | 14 | 2 | 1 | 25/28 (89%) | 14/15 (93%) |
+| F. Edit panel — global adjustments (EDIT) | 43 | 15 | 2 | 1 | 25/28 (89%) | 14/15 (93%) |
 | G. Profiles (PROF) | 7 | 1 | 3 | 0 | 3/4 (75%) | 3/3 (100%) |
 | H. Crop & rotate (CROP) | 10 | 1 | 0 | 1 | 8/8 (100%) | 2/3 (67%) |
 | I. Remove / healing (REM) | 9 | 2 | 1 | 2 | 4/4 (100%) | 3/4 (75%) |
@@ -53,9 +53,9 @@ cited here still exists. Formerly docs/parity.md.
 | Y. Menus | 85 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 77 | 5 | 2 | 1 | 49/52 (94%) | 24/26 (92%) |
 | Lightroom Classic extras | 41 | 26 | 21 | 8 | — | 24/27 (89%) |
-| **Total** | 428 | 84 | 51 | 35 | 193/203 (95%) | 148/164 (90%) |
+| **Total** | 428 | 85 | 51 | 35 | 193/203 (95%) | 148/164 (90%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.5%** of 563 in-scope rows — P0 97.5% of 203 · P1 94.2% of 164 · P2 59.7% of 185.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.4%** of 564 in-scope rows — P0 97.5% of 203 · P1 94.2% of 164 · P2 59.7% of 186.
 <!-- /parity:summary -->
 
 ## Top gaps and shortcut notes
@@ -237,6 +237,7 @@ differences and missing bindings are in [ui-parity.md](ui-parity.md#shortcuts).
 | LR-EDIT-PORTRAIT-BACKGROUND | Portrait Background: Blur, Swap, Clean Backdrop | — | 🟡 | `cmd:retouch.background`, `cmd:portrait.backgroundPicture`, `ctl:retouch.background.blur`, `ctl:retouch.background.swap`, `ctl:retouch.background.clean`, `crates/retouch/src/background/mod.rs`, `crates/engine/src/retouch_background.rs`, `crates/ui-egui/src/panels/portrait/background.rs` | an extra (the reference app has no portrait background tools): on the people parse's Entire Person masks with the chosen hair edge; Blur by an iPhone HEIC's depth map (needs the `heif` feature) or the distance to the person; Swap with a colour, a picture copied into the library (kept by its SHA-256) or a library photo; a zoomed window matches the whole render with no margin (a whole-frame analysis image); CPU, slider drags on kept work; not compared against Evoto |
 | LR-EDIT-PORTRAIT-STRAY-HAIR | Portrait: Stray Hair (flyaways and strands across the face) | — | 🟡 | `ctl:retouch.hair.amount`, `crates/retouch/src/hair.rs`, `crates/ui-egui/src/panels/portrait/hair.rs` | an extra (the reference app has no portrait retouching). Needs the people-parts set for masks; strands are found once per photo with the parse; dense flyaway clouds leave faint blotches at 1:1; no Refine brush yet (#99). See `fork/retouch-hair.md` |
 | LR-EDIT-PORTRAIT-GLARE | Portrait: Glasses Glare (Repair Glare, Fill Glints, Amount) | — | 🟡 | `cmd:retouch.glareRepair`, `cmd:retouch.glareStatus`, `cmd:retouch.glareClear`, `ctl:retouch.glare.amount`, `crates/retouch/src/glare.rs`, `crates/flux/src/lib.rs`, `crates/engine/src/glare_repair.rs`, `crates/ui-egui/src/panels/portrait/glare.rs` | an extra (the reference app has no portrait retouching; its Remove tool is the closest). Repaint (FLUX.1 Fill, a GGUF with the Turbo LoRA, pure Rust on candle) redraws a lens where glare hides the eye in two to three minutes a face and needs the user's own FLUX.1 Fill files (FLUX.1 [dev] Non-Commercial License; nothing is bundled or downloaded) and a Mac with 32 GB or more; Fill Glints (LaMa) fills small glints in seconds. Needs the people-parts set for the glasses mask. Repairs are kept per face on disk; Amount blends them in and a slider drag runs no model. Not done: downloading the files, a face's own description as the prompt, Windows and Linux speed. See `fork/glare-repair.md` |
+| LR-EDIT-RELIGHT | Relight: a depth-aware light dragged on the photo | P2 | 🟡 | `cmd:relight.status`, `cmd:relight.findDepth`, `cmd:relight.downloadModel`, `crates/relight/src/light.rs`, `crates/ui-egui/src/panels/edit/relight.rs` | beyond Lightroom (no equivalent): a point light placed in the photo's depth (its own map or Depth Anything 3), by 3D distance and facing, in scene-linear light; 🟡 until tried by hand |
 
 ## G. Profiles (PROF)
 

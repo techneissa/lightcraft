@@ -88,6 +88,7 @@
 - **Before/After split:** a line you can drag, and a Split button.
 - **Sliders on one row:** label, groove and value on one line.
 - **Arrange the Edit panel:** drag, hide or reset the Develop sections.
+- **Relight:** a light you drag on the photo that falls on it by depth, with Amount, Softness and Warmth.
 
 **Masks and AI**
 - **Masking workflow:** Add, Subtract and Intersect, a button per kind of mask part.
