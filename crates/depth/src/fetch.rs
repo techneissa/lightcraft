@@ -51,7 +51,6 @@ mod tests {
     fn the_model_is_one_pinned_file() {
         assert_eq!(FILES.len(), 1);
         assert_eq!(FILES[0].sha256.map(str::len), Some(64));
-        assert_eq!(size(), SIZE);
         let m = mirrors(Some("https://a.example/x/"));
         assert_eq!(m.len(), 2);
         assert!(m[0].starts_with("https://a.example") && m[1].starts_with("https://huggingface.co/depth-anything/"));

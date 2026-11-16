@@ -239,11 +239,6 @@ fn gradient(p: &mut Vec<u32>, aux: &mut Vec<f32>, grid: Option<&PosGrid>, ramp: 
     true
 }
 
-/// Evaluate the masks (`lightcraft_pipeline::masks::evaluate`): their alpha planes (concatenated,
-/// followed by the blurred chromaticity when local Moiré / Noise need it) and their adjustment
-/// terms. Shapes without a kernel (Sky, Subject, …) run on the CPU.
-///
-/// `store`: the view's alphas of the last render (see [`AlphaStore`]); without one every mask is evaluated.
 /// Fork (issue #288): Relight's planes (`relit`, each `n` texels) into the stack `alpha` after its first `from`.
 fn upload_relit(cx: &mut Cx<'_>, relit: &[lightcraft_pipeline::masks::Evaluated], alpha: &Buf, from: usize, n: usize) {
     for (k, e) in relit.iter().enumerate() {
@@ -255,6 +250,11 @@ fn upload_relit(cx: &mut Cx<'_>, relit: &[lightcraft_pipeline::masks::Evaluated]
     }
 }
 
+/// Evaluate the masks (`lightcraft_pipeline::masks::evaluate`): their alpha planes (concatenated,
+/// followed by the blurred chromaticity when local Moiré / Noise need it) and their adjustment
+/// terms. Shapes without a kernel (Sky, Subject, …) run on the CPU.
+///
+/// `store`: the view's alphas of the last render (see [`AlphaStore`]); without one every mask is evaluated.
 pub(crate) fn masks(
     cx: &mut Cx<'_>,
     (lin, sampled): (&Buf, &Buf),

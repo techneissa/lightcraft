@@ -40,7 +40,8 @@ impl Light {
 
 /// The brightest the light makes the most lit point: `1 + PEAK_GAIN` times (two stops).
 pub const PEAK_GAIN: f32 = 3.0;
-/// Log2 luminance (relative to 18 % grey) the light never takes a pixel past: a little under white (2.5).
+/// Log2 luminance (relative to 18 % grey) the light never takes a pixel past: two stops over grey (0.72 in
+/// scene-linear light), under white so a lit face keeps its highlights.
 const CEILING: f32 = 2.0;
 /// How far under [`CEILING`] the roll-off begins (stops).
 const KNEE: f32 = 1.0;

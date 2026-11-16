@@ -11,7 +11,8 @@ const STD: [f32; 3] = [0.229, 0.224, 0.225];
 pub const PATCH: usize = 14;
 /// The long side the reference processes photos at.
 pub const PROCESS_LONG: usize = 504;
-/// The largest input side accepted (patches the backbone's attention can hold).
+/// The largest input side accepted (a cap on memory and time: the backbone's attention grows with the square of
+/// the patches).
 pub const MAX_SIDE: usize = 1512;
 
 /// The input size for a `w × h` photo at long side `long`: aspect kept, each side the nearest multiple of
