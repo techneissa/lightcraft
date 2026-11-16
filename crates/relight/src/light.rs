@@ -143,22 +143,25 @@ impl Field {
         let added = rig.amount * (self.light_at(rig, u, v, lz, n) / rig.peak).min(1.0);
         let gain = rig.ambient + added;
         let raw = gain.max(1e-3).log2();
+        let l = lum + rig.ev;
+        // how much the deepest shadows are held back
+        let held = 0.35 + 0.65 * smoothstep(SHADOW.0, SHADOW.1, l);
         let stops = if raw > 0.0 {
-            let l = lum + rig.ev;
             // towards white: the pixel's new brightness rolls off as it nears the ceiling (a pixel already past it
             // gets nothing more)
             let target = l + raw;
             let start = CEILING - KNEE;
             let rolled = if target <= start { raw } else { (start + KNEE * (1.0 - (-(target - start) / KNEE).exp()) - l).clamp(0.0, raw) };
             // and less in the deepest shadows
-            rolled * (0.35 + 0.65 * smoothstep(SHADOW.0, SHADOW.1, l))
+            rolled * held
         } else {
             raw
         };
-        let mut share = if gain > 0.0 { added / gain } else { 0.0 };
-        if raw > 0.0 {
-            share *= stops / raw;
-        }
+        // the light's colour fades by the pixel's own brightness alone (out towards white, held back in the deepest
+        // shadows), the same where the gain brightens and where Darken Surroundings darkens, so it never jumps where
+        // the gain crosses 1
+        let lit = if gain > 0.0 { added / gain } else { 0.0 };
+        let share = lit * held * (1.0 - smoothstep(CEILING - KNEE, CEILING, l));
         Shade { stops, share: if share.is_finite() { share.clamp(0.0, 1.0) } else { 0.0 } }
     }
 }
@@ -462,6 +465,18 @@ mod tests {
         let dark = f.rig(&Light { softness: 0.0, darken: 1.0, ..light() }, 0.0);
         assert!(f.shade(&dark, 0.98, 0.05).stops < -0.5, "{:?}", f.shade(&dark, 0.98, 0.05));
         assert!(f.shade(&dark, 0.5, 0.5).stops > 0.0);
+    }
+
+    #[test]
+    fn the_lights_colour_fades_smoothly_where_darken_meets_the_light() {
+        // a bright wall (between the roll-off's start and white): with Darken Surroundings, the gain crosses 1 on
+        // the way out from the light, and the light's share (its colour) must not jump there
+        let f = Field::from_parts(96, 64, vec![0.0; 96 * 64], vec![1.5; 96 * 64]).unwrap();
+        let rig = f.rig(&Light { depth: 0.8, softness: 0.1, darken: 0.5, ..light() }, 0.0);
+        let row: Vec<Shade> = (0..=400).map(|i| f.shade(&rig, 0.5 + 0.5 * i as f32 / 400.0, 0.5)).collect();
+        assert!(row.first().is_some_and(|s| s.stops > 0.0) && row.last().is_some_and(|s| s.stops < 0.0), "{row:?}");
+        let jump = row.windows(2).map(|p| (p[1].share - p[0].share).abs()).fold(0f32, f32::max);
+        assert!(jump < 0.02, "the share jumps by {jump}");
     }
 
     #[test]
