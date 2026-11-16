@@ -8,7 +8,7 @@ use lightcraft_develop::BrushStroke;
 use lightcraft_raster::{Plane, Rgb32f};
 
 use super::auto_edge::{AutoColor, AutoRef, AutoRefs, MedianBox, dab_sample, median_radius, search_margin, search_reach};
-use super::{BrushDabs, accumulate, brush_dabs, dab_alpha, dab_pixel};
+use super::{BrushDabs, accumulate, dab_alpha, dab_pixel};
 use crate::for_rows;
 use crate::geometry::Frame;
 
@@ -93,10 +93,16 @@ pub fn rasterize(strokes: &[BrushStroke], frame: &Frame, w: usize, h: usize, img
     if w == 0 || h == 0 {
         return Plane::new(w, h);
     }
+    // one dab budget for the whole mask, as the GPU path keeps: a stroke's own cap alone let a
+    // thousand far-flung two-point strokes build and stamp a billion dabs
+    let mut room = super::MAX_STROKE_DABS;
     let Some(ctx) = ctx else {
         let mut out = Plane::new(w, h);
         for s in strokes {
-            stamp(s, frame, img, log_l, &mut out);
+            if room == 0 {
+                break;
+            }
+            stamp(s, frame, img, log_l, &mut out, &mut room);
         }
         return out;
     };
@@ -125,8 +131,15 @@ pub fn rasterize(strokes: &[BrushStroke], frame: &Frame, w: usize, h: usize, img
         }
         None => (Plane::new(w, h), 0),
     };
+    // the held part spent its share of the budget
+    for s in strokes.iter().take(from) {
+        room = room.saturating_sub(super::brush_dabs_within(s, frame, w, h, room).dabs.len());
+    }
     for s in strokes.iter().skip(from) {
-        stamp(s, frame, img, log_l, &mut out);
+        if room == 0 {
+            break;
+        }
+        stamp(s, frame, img, log_l, &mut out, &mut room);
     }
     if !strokes.is_empty() {
         ctx.cache.entries.push(Entry { base, chain, plane: Arc::new(out.clone()) });
@@ -192,10 +205,12 @@ pub(crate) fn auto_refs(
 
 /// Stamp stroke `s` into `out`: its dabs inside their bounding box (flow accumulating up to density
 /// within the stroke), then the stroke combined with `out` there, adding paint or erasing it.
-fn stamp(s: &BrushStroke, frame: &Frame, img: &Rgb32f, log_l: &Plane, out: &mut Plane) {
+/// At most `room` dabs are stamped, and `room` loses the ones that were.
+fn stamp(s: &BrushStroke, frame: &Frame, img: &Rgb32f, log_l: &Plane, out: &mut Plane, room: &mut usize) {
     note_stroke();
     let (w, h) = (out.width, out.height);
-    let bd = brush_dabs(s, frame, w, h);
+    let bd = super::brush_dabs_within(s, frame, w, h, *room);
+    *room = room.saturating_sub(bd.dabs.len());
     if bd.dabs.is_empty() {
         return;
     }

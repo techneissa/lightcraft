@@ -237,7 +237,7 @@ pub(super) fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     divider(ui);
     header(ui, "Geometry");
     padded(ui, |ui| {
-        ui.label(crate::i18n::tr("Upright"));
+        ui.label(crate::i18n::tr("Perspective Correction"));
         {
             use lightcraft_develop::Upright;
             let modes = [
@@ -255,12 +255,12 @@ pub(super) fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 "upright",
                 &items,
                 &[
-                    "Upright Off",
-                    "Auto Upright Correction",
-                    "Guided Upright With Lines",
+                    "Perspective Correction Off",
+                    "Auto Perspective Correction",
+                    "Guided Perspective With Lines",
                     "Level Horizon Only",
                     "Level and Vertical",
-                    "Full Upright Correction",
+                    "Full Perspective Correction",
                 ],
                 active,
                 3,
@@ -275,7 +275,7 @@ pub(super) fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             if !guided
                 && d.geometry.upright != lightcraft_develop::Upright::Off
                 && text_button(ui, "uprightUpdate", crate::i18n::tr("Update"), false)
-                    .on_hover_text(crate::i18n::tr("Recalculate Upright Correction"))
+                    .on_hover_text(crate::i18n::tr("Recalculate Perspective Correction"))
                     .clicked()
             {
                 let mode = serde_json::to_value(d.geometry.upright).unwrap_or_default();

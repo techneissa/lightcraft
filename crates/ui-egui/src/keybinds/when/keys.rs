@@ -105,7 +105,7 @@ pub const KEYS: &[KeyDef] = &[
         kind: Kind::Enum(values![
             ("none", "No Tool", "Nothing open on the right"),
             ("edit", "Edit Tool", "The Edit panel (sliders, profiles)"),
-            ("crop", "Crop Tool", "Crop, straighten and Upright"),
+            ("crop", "Crop Tool", "Crop, straighten and perspective"),
             ("remove", "Remove Tool", "Healing and clone spots"),
             ("masking", "Masking Tool", "Masks: brush, gradients, subject and more"),
             ("redEye", "Red Eye Tool", "Red eye and pet eye"),

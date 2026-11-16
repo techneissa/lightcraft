@@ -28,7 +28,7 @@ fn view(h: &mut Headless, zoom: serde_json::Value, pan: [f32; 2]) {
 fn at_fit(fixture: &RenderFixture, disk: Option<&std::path::Path>) -> Headless {
     let mut session = fixture.session();
     if let Some(dir) = disk {
-        session.media.attach_disk_cache(dir, 4 << 30);
+        session.media.attach_disk_cache(dir, 4 << 30, None);
     }
     let app = LightcraftApp::new(session, Services { png: None, ..Default::default() });
     let mut h = Headless::new(app, [1400.0, 900.0], 1.0);

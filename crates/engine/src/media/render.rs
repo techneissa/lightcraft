@@ -568,6 +568,23 @@ impl RenderJob {
                 // converted for the display below
                 let clip_view = self.request.overlay.is_clipping();
                 let request = if clip_view { RenderRequest { display: None, ..self.request } } else { self.request };
+                if let Err(e) = lightcraft_pipeline::check_brush_budget(src, &info, &self.settings, &request) {
+                    return RenderResult {
+                        request_id: self.request_id,
+                        source_key: self.source_key,
+                        photo: self.photo,
+                        level: self.level,
+                        key: self.key,
+                        rendered: Err(e),
+                        gpu_fallback: None,
+                        loaded: (!was_loaded).then_some(source),
+                        quick: None,
+                        display: None,
+                        frame: None,
+                        mask_planes: None,
+                        changed: None,
+                    };
+                }
                 // a job for the masks' planes: the photo is not rendered (the stage caches hold the alphas of the render that went before)
                 if let Some(ask) = &self.mask_ask {
                     let planes = masks_of(src, &info, &self.settings, &request, self.stages.as_deref(), gpu, ask);
