@@ -131,7 +131,7 @@ fn the_panel_draws_the_sections_in_the_chosen_order_and_skips_hidden_ones() {
     let mut h = edit_open();
     assert_eq!(headers(&mut h), ["light", "color", "effects", "detail", "optics", "lensBlur", "relight", "calibration"]);
     exec(&mut h, "view.editSections", json!({"order": ["optics", "light"], "hidden": ["effects", "calibration"]}));
-    assert_eq!(headers(&mut h), ["optics", "light", "color", "detail", "lensBlur"]);
+    assert_eq!(headers(&mut h), ["optics", "light", "color", "detail", "lensBlur", "relight"]);
     exec(&mut h, "view.editSectionsReset", json!({}));
     assert_eq!(headers(&mut h), ["light", "color", "effects", "detail", "optics", "lensBlur", "relight", "calibration"]);
 }
