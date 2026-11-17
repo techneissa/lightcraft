@@ -1,7 +1,7 @@
 //! Fork (issue #302, `fork/relight.md`): the Effects group of the Relight section, for the selected light: a gel (the
 //! named gels as swatches, then any hue and a strength), a pattern (blinds, window panes, leaves, dapple, with
-//! Scale, Rotation and Softness) and Haze. Each is a control by id, `relight.<n>.gelHue`, `.gelStrength`,
-//! `.pattern`, `.patternScale`, `.patternRotation`, `.patternSoftness` and `.haze`.
+//! Scale, Rotation, Softness and Openness) and Haze. Each is a control by id, `relight.<n>.gelHue`, `.gelStrength`,
+//! `.pattern`, `.patternScale`, `.patternRotation`, `.patternSoftness`, `.patternOpen` (issue #316) and `.haze`.
 
 use egui::{Align2, Color32, Sense, Stroke, vec2};
 use lightcraft_develop::DevelopSettings;
@@ -114,7 +114,7 @@ pub(super) fn effects(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSet
     heading(ui, "Pattern");
     egui::Frame::NONE.inner_margin(margin).show(ui, |ui| patterns(app, ui, &e, sel));
     if e.pattern.round() >= 1.0 {
-        for field in ["patternScale", "patternRotation", "patternSoftness"] {
+        for field in ["patternScale", "patternRotation", "patternSoftness", "patternOpen"] {
             control(app, ui, d, &format!("relight.{sel}.{field}"), true);
         }
     }
