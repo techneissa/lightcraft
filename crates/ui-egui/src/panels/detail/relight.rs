@@ -14,6 +14,18 @@ pub(super) fn shown(app: &LightcraftApp, d: &DevelopSettings) -> bool {
     app.ui.section_open(lightcraft_develop::relight::SECTION) && lightcraft_pipeline::relight::light_of(d).is_some() && app.ui.tool.is_empty()
 }
 
+/// A drag of the handle that is going when the handle stops showing (the section closed, the light turned off, another
+/// panel opened) ends there: its undo step closes and the dragged control is let go (⌥'s preview would stay).
+pub(super) fn release_if_hidden(app: &mut LightcraftApp, ui: &egui::Ui, d: &DevelopSettings) {
+    let dragging_id = egui::Id::unique("relightOnPhotoDrag");
+    let dragging = ui.ctx().data(|m| m.get_temp::<bool>(dragging_id)).unwrap_or(false);
+    if dragging && !(app.ui.right == crate::state::RightPanel::Edit && shown(app, d)) {
+        ui.ctx().data_mut(|m| m.remove::<bool>(dragging_id));
+        app.ui.dragging_control = None;
+        let _ = app.run("develop.endInteraction", json!({}));
+    }
+}
+
 /// Draw the light's handle and move it when a drag starts on it. True while the pointer belongs to it (a drag of
 /// it): the loupe's own interactions then wait.
 pub(super) fn overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, map: &CanvasMap, d: &DevelopSettings) -> bool {

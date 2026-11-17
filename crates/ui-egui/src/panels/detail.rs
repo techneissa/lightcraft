@@ -939,6 +939,8 @@ struct ToolView<'a> {
 /// Route the pointer to the right panel's tool on the photo, or to the general interactions.
 fn tool_interaction(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, tv: &ToolView, v: &Views) {
     let (map, d) = (tv.map, tv.d);
+    // fork (issue #294): a drag of Relight's handle ends when the handle stops showing
+    relight::release_if_hidden(app, ui, d);
     if let Some(target) = super::mask_recolor::pick_target(&app.ui.tool) {
         // Recolor's eyedroppers (Masking): a click sets the selected mask's colour, or its Colour to Replace, from
         // that point (kept on the photo)
@@ -1399,7 +1401,7 @@ fn photo_overlays(app: &mut LightcraftApp, ui: &mut egui::Ui, p: &egui::Painter,
         relight_alt::draw(app, ui, p, o.map, o.d, o.photo.id, img_rect.intersect(canvas));
     }
     // (an Alt-drag preview already is a clipping or greyscale picture: the overlay would mark its own pixels)
-    if o.clipping && !o.fullscreen && crate::panels::clipping::alt_overlay(app).is_none() {
+    if o.clipping && !o.fullscreen && crate::panels::clipping::alt_overlay(app).is_none() && !relight_alt::active(app) {
         clipping_overlay(app, ui.ctx(), p, img_rect);
     }
     // View ▸ Loupe Overlay ▸ Layout Image, over the photo (the After view in a before/after)

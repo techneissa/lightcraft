@@ -347,6 +347,7 @@ pub struct UiState {
     /// Light panel "Visualize HDR": grey below SDR white, colour bands above (HDR edits).
     pub hdr_visualize: bool,
     /// Relight's ⌥-drag preview: crosses or contour lines (`fork/relight.md`).
+    #[serde(deserialize_with = "settings::lenient")]
     pub relight_look: RelightLook,
     /// Red Eye panel: selected correction, and whether new ones are pet eyes.
     pub eye: usize,

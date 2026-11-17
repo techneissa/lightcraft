@@ -16,8 +16,14 @@ use std::collections::HashMap;
 use crate::field::Field;
 use crate::light::Shading;
 
-/// The stop levels contour lines are drawn at where the light brightens.
-pub const UP: &[f32] = &[0.1, 0.2, 0.35, 0.5, 0.7, 0.9, 1.2, 1.5, 1.8];
+/// The stop levels contour lines are drawn at where the light brightens, up to just under [`peak_stops`] (3).
+pub const UP: &[f32] = &[0.1, 0.2, 0.35, 0.5, 0.7, 0.9, 1.2, 1.5, 1.8, 2.2, 2.6, 2.9];
+
+/// The most the light brightens a point (stops): full Amount at the most lit point, from the light's own peak gain.
+pub fn peak_stops() -> f32 {
+    (1.0 + crate::light::PEAK_GAIN).log2()
+}
+
 /// The stop levels where it darkens (the line at 0 where darkening starts is added when something darkens).
 pub const DOWN: &[f32] = &[-0.25, -0.5, -0.75, -1.0, -1.5];
 /// The longest side of the plane contours are traced on (pixels).
@@ -169,6 +175,7 @@ fn trace(g: &[f32], w: usize, h: usize, level: f32) -> Vec<Trace> {
         let (x, y) = (p % w, p / w);
         let (a, b) = if down == 0 { (at(x, y), at((x + 1).min(w - 1), y)) } else { (at(x, y), at(x, (y + 1).min(h - 1))) };
         let t = if (b - a).abs() > 1e-9 { ((level - a) / (b - a)).clamp(0.0, 1.0) } else { 0.5 };
+        let t = if t.is_finite() { t } else { 0.5 };
         if down == 0 { [x as f32 + t, y as f32] } else { [x as f32, y as f32 + t] }
     };
     let mut at_edge: HashMap<usize, Vec<usize>> = HashMap::with_capacity(segs.len() * 2);
@@ -361,7 +368,7 @@ mod tests {
         for l in &lines {
             for p in &l.points {
                 let v = sample(&g, w, h, *p);
-                assert!((v - l.level).abs() < 0.12, "{p:?} is at {v}, not {}", l.level);
+                assert!((v - l.level).abs() < 0.04, "{p:?} is at {v}, not {}", l.level);
             }
         }
     }

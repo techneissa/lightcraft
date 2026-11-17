@@ -474,7 +474,7 @@ pub enum KeywordChips {
 
 /// A setting read leniently: a value that isn't one of its own (a hand-edited file, a newer
 /// build's choice) is the default, and the rest of the settings file is still read.
-fn lenient<'de, D: serde::Deserializer<'de>, T: Default + serde::de::DeserializeOwned>(d: D) -> Result<T, D::Error> {
+pub(super) fn lenient<'de, D: serde::Deserializer<'de>, T: Default + serde::de::DeserializeOwned>(d: D) -> Result<T, D::Error> {
     let value = serde_json::Value::deserialize(d)?;
     Ok(serde_json::from_value(value).unwrap_or_default())
 }

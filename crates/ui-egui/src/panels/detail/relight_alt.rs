@@ -92,6 +92,8 @@ struct Slot {
     /// The key being built.
     busy: Option<Key>,
     ready: Option<Ready>,
+    /// The key of the last build that panicked: it is not asked for again (every frame would panic again).
+    failed: Option<Key>,
 }
 
 #[derive(Default)]
@@ -147,8 +149,9 @@ fn work() {
         {
             let mut g = lock(s);
             g.busy = None;
-            if let Some((m, _)) = made {
-                g.ready = Some(Ready { key: req.key.clone(), geometry: std::sync::Arc::new(m) });
+            match made {
+                Some((m, _)) => g.ready = Some(Ready { key: req.key.clone(), geometry: std::sync::Arc::new(m) }),
+                None => g.failed = Some(req.key.clone()),
             }
         }
         req.ctx.request_repaint();
@@ -156,7 +159,7 @@ fn work() {
 }
 
 /// The geometry to draw for `key`, asking for it when it isn't ready: its own when ready, else the last ready one of
-/// the same photo (`None` when there is none).
+/// the same photo and the same look (`None` when there is none).
 fn geometry_for(key: &Key, ask: impl FnOnce() -> Request) -> Option<std::sync::Arc<Geometry>> {
     static WORKER: Once = Once::new();
     let s = store();
@@ -164,12 +167,13 @@ fn geometry_for(key: &Key, ask: impl FnOnce() -> Request) -> Option<std::sync::A
     if let Some(r) = g.ready.as_ref().filter(|r| r.key == *key) {
         return Some(r.geometry.clone());
     }
-    let waiting = g.pending.as_ref().is_some_and(|p| p.key == *key) || g.busy.as_ref() == Some(key);
+    let waiting = g.pending.as_ref().is_some_and(|p| p.key == *key) || g.busy.as_ref() == Some(key) || g.failed.as_ref() == Some(key);
     if !waiting {
         g.pending = Some(ask());
         s.wake.notify_one();
     }
-    let stale = g.ready.as_ref().filter(|r| r.key.field == key.field).map(|r| r.geometry.clone());
+    let same_look = |r: &&Ready| r.key.field == key.field && std::mem::discriminant(&r.key.shape) == std::mem::discriminant(&key.shape);
+    let stale = g.ready.as_ref().filter(same_look).map(|r| r.geometry.clone());
     drop(g);
     WORKER.call_once(|| {
         // (a thread that can't start leaves the overlay out)
@@ -234,10 +238,15 @@ pub(super) fn draw(app: &LightcraftApp, ui: &egui::Ui, p: &Painter, map: &Canvas
     }
 }
 
-/// One mark's arm length as a fraction of half the spacing: the gain `stops` (absolute: 2 stops is the most the
-/// Amount gives) from a small spot to the whole cell.
+/// One mark's arm length as a fraction of half the spacing: the gain `stops` (absolute: [`overlay::peak_stops`] is the
+/// most the Amount gives) from a small spot to the whole cell.
 fn reach(stops: f32) -> f32 {
-    0.08 + 0.92 * (stops.abs() / 2.0).clamp(0.0, 1.0)
+    0.08 + 0.92 * share_of_peak(stops)
+}
+
+/// `stops` (either way) as a share of the light's peak, 0..1.
+fn share_of_peak(stops: f32) -> f32 {
+    (stops.abs() / overlay::peak_stops()).clamp(0.0, 1.0)
 }
 
 fn draw_marks(p: &Painter, map: &CanvasMap, m: &Marks, warmth: f64, clip: Rect) {
@@ -256,7 +265,7 @@ fn draw_marks(p: &Painter, map: &CanvasMap, m: &Marks, warmth: f64, clip: Rect) 
         }
         let r = half * reach(k.stops);
         let dirs = k.axes.map(|a| ex * a[0] + ey * a[1]);
-        let s = (k.stops.abs() / 2.0).clamp(0.0, 1.0);
+        let s = share_of_peak(k.stops);
         let colour = tint(warmth, 0.2 + 0.8 * s.powf(0.7));
         if k.stops > 0.0 {
             let stroke = Stroke::new(if s > 0.4 { 1.6 } else { 1.2 }, colour);
@@ -294,18 +303,27 @@ fn draw_contours(ctx: &egui::Context, p: &Painter, map: &CanvasMap, c: &Contours
     }
     let mut drawn: Vec<Drawn> = Vec::new();
     for l in &c.lines {
-        let pts: Vec<Pos2> = l.points.iter().map(|q| map.screen(Point::new(f64::from(q[0]), f64::from(q[1])))).collect();
-        let (mut seen, mut bounds) = (0.0f32, Rect::NOTHING);
-        for w in pts.windows(2) {
-            bounds.extend_with(w[0]);
-            if clip.contains(w[0]) && clip.contains(w[1]) {
-                seen += (w[1] - w[0]).length();
+        // (a line breaks where the warp can't be undone, as the marks skip such a spot)
+        let mut pieces: Vec<Vec<Pos2>> = vec![Vec::new()];
+        for q in &l.points {
+            match map.try_screen(Point::new(f64::from(q[0]), f64::from(q[1]))) {
+                Some(at) => pieces.last_mut().map(|v| v.push(at)).unwrap_or_default(),
+                None if pieces.last().is_some_and(|v| !v.is_empty()) => pieces.push(Vec::new()),
+                None => {}
             }
         }
-        if pts.len() < 2 || !bounds.intersects(clip) {
-            continue;
+        for pts in pieces {
+            let (mut seen, mut bounds) = (0.0f32, Rect::NOTHING);
+            for w in pts.windows(2) {
+                bounds.extend_with(w[0]);
+                if clip.contains(w[0]) && clip.contains(w[1]) {
+                    seen += (w[1] - w[0]).length();
+                }
+            }
+            if pts.len() >= 2 && bounds.intersects(clip) {
+                drawn.push(Drawn { level: l.level, pts, seen });
+            }
         }
-        drawn.push(Drawn { level: l.level, pts, seen });
     }
     for l in &drawn {
         let strength = (l.level.abs() / 1.0).clamp(0.0, 1.0);
