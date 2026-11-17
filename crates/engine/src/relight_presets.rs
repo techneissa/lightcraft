@@ -2,8 +2,9 @@
 //! place them round a subject, are `lightcraft_develop::relight_presets`; this finds the photo's subject, keeps the
 //! user's own presets (saved in the library's presets file) and applies one.
 //!
-//! The subject is the first of: what a person or subject mask of the photo selects, the photo's face regions (the
-//! face scan's, else those portrait retouching found), the photo's centre. Nothing is computed for the purpose: no
+//! The subject is a face: the first of the photo's face regions (the face scan's, else those portrait retouching found;
+//! the largest, with any about as large), a face worked out from what a person or subject mask of the photo selects, a
+//! face at the photo's centre. Nothing is computed for the purpose: no
 //! model runs and no pixel is read.
 
 use lightcraft_catalog::PhotoId;
@@ -90,9 +91,6 @@ impl Session {
     /// Where photo `id`'s subject is (see the module docs) and what it was taken from.
     pub fn relight_subject(&self, id: PhotoId) -> (Subject, SubjectSource) {
         let Some(p) = self.catalog.photo(id) else { return (Subject::CENTRE, SubjectSource::Centre) };
-        if let Some(s) = mask_box(&p.develop).and_then(Subject::from_box) {
-            return (s, SubjectSource::Mask);
-        }
         let mut faces: Vec<[f64; 4]> = p
             .meta
             .regions
@@ -108,8 +106,11 @@ impl Session {
         {
             faces = found.input.faces.iter().map(|f| [f.bounds.x0, f.bounds.y0, f.bounds.x1, f.bounds.y1]).collect();
         }
-        match face_box(&faces).and_then(Subject::from_face) {
-            Some(s) => (s, SubjectSource::Face),
+        if let Some(s) = face_box(&faces).and_then(Subject::from_face) {
+            return (s, SubjectSource::Face);
+        }
+        match mask_box(&p.develop).and_then(Subject::from_mask_box) {
+            Some(s) => (s, SubjectSource::Mask),
             None => (Subject::CENTRE, SubjectSource::Centre),
         }
     }

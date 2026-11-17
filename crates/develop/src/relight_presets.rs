@@ -1,15 +1,15 @@
 //! Fork (issue #301, `fork/relight.md`): light presets. A preset is a set of lights (and Darken Surroundings) written
-//! for a subject, not for a photo: where its lights are is measured in the subject's own size. Applying it places them
-//! round the subject the app found on the photo ([`Subject`]: a face, a person or subject mask, the photo's centre), so
-//! one preset fits a portrait, a group and a landscape alike.
+//! for a face, not for a photo: where its lights are is measured from the face the app found on the photo
+//! ([`Subject`]: a face's box; else a face worked out from a person or subject mask's box; else a face at the photo's
+//! centre), so one preset fits a portrait, a group and a landscape alike.
 //!
-//! **The preset frame.** A preset's lights are saved as ordinary Relight settings for a subject standing at the photo's
-//! centre, with one subject width (or height) equal to [`UNIT`] of the photo. A light `0.8` subject widths to the left
-//! and `1.0` subject heights above the subject is saved at `x = 0.5 − 0.8·UNIT`, `y = 0.5 − 1.0·UNIT`. The same holds for
-//! a Spot's aim and a Softbox's size. Light types that have no place (a Rim, a Fill, a Sun's direction) and every other
-//! number (depth, Amount, Softness, colour, gel, pattern, haze, Cast Shadows) are carried as they are. The frame keeps
-//! every number a light holds inside the ranges its controls have, so a saved preset reads with the lenient reader of
-//! [`Relight`] and is never clamped out of shape.
+//! **The preset frame.** A preset's lights are saved as ordinary Relight settings for a face of [`CANON`] size standing at
+//! the photo's centre: a key 0.4 of the photo's width to the left of the face and 0.45 of its height above it is saved at
+//! `x = 0.1`, `y = 0.05`. Applying it to a photo whose face is `k` times as wide moves the light `k` times as far from the
+//! face (the same along the height). A Spot's aim and a Softbox's size scale the same way. Light types that have no
+//! place (a Rim, a Fill, a Sun's direction) and every other number (depth, Amount, Softness, colour, gel, pattern, haze,
+//! Cast Shadows) are carried as they are. The frame keeps every number inside the ranges its control has, so a saved
+//! preset reads with the lenient reader of [`Relight`] and is never clamped out of shape.
 
 use std::sync::OnceLock;
 
@@ -19,15 +19,16 @@ use crate::relight::{KindSettings, LightSettings, Relight};
 use crate::relight_effects::LightEffects;
 use crate::{DevelopSettings, SegMask};
 
-/// One subject width (or height) in the preset frame, as a share of the photo.
-pub const UNIT: f64 = 0.25;
+/// The face a preset's lights are written for: its width and height as shares of the photo (a head and shoulders
+/// portrait of a 3:2 photo).
+pub const CANON: (f64, f64) = (0.15, 0.25);
 
 /// The most presets of one's own a library keeps, and the longest name (characters; a longer one is refused).
 pub const MAX_USER: usize = 100;
 pub const MAX_NAME: usize = 40;
 
-/// The subject's box on the photo: where its centre is and how wide and tall it is, in the same normalized photo
-/// coordinates as a light's place (before the crop and the lens corrections).
+/// The subject: a face's box, in the same normalized photo coordinates as a light's place (before the crop and the lens
+/// corrections): where its centre is and how wide and tall it is.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Subject {
     pub x: f64,
@@ -36,17 +37,17 @@ pub struct Subject {
     pub h: f64,
 }
 
-/// The smallest and largest a subject's box is taken to be (a speck, or the whole frame, would send the lights to a
-/// pin or off the photo).
-const MIN_SIZE: f64 = 0.12;
-const MAX_SIZE: f64 = 1.0;
+/// The smallest and largest a face is taken to be, as shares of the photo (a speck or the whole frame would send the
+/// lights to a pin or far off the photo).
+const MIN_SIZE: (f64, f64) = (0.08, 0.12);
+const MAX_SIZE: (f64, f64) = (0.40, 0.60);
 
 impl Subject {
-    /// A photo the app found no subject on: its centre, a little over a third of its width.
-    pub const CENTRE: Subject = Subject { x: 0.5, y: 0.5, w: 0.4, h: 0.5 };
+    /// A photo the app found no subject on: a face of the canonical size, a little above its centre.
+    pub const CENTRE: Subject = Subject { x: 0.5, y: 0.42, w: CANON.0, h: CANON.1 };
 
-    /// The subject inside box `[x0, y0, x1, y1]` (normalized); `None` for a box that is not one.
-    pub fn from_box(b: [f64; 4]) -> Option<Subject> {
+    /// The face inside box `[x0, y0, x1, y1]` (normalized); `None` for a box that is not one.
+    pub fn from_face(b: [f64; 4]) -> Option<Subject> {
         let [x0, y0, x1, y1] = b;
         if !b.iter().all(|v| v.is_finite()) || x1 <= x0 || y1 <= y0 {
             return None;
@@ -54,27 +55,21 @@ impl Subject {
         Some(Subject { x: (x0 + x1) / 2.0, y: (y0 + y1) / 2.0, w: x1 - x0, h: y1 - y0 }.kept())
     }
 
-    /// The head and shoulders of a person whose face is inside `face` (normalized): the face's centre is a little above
-    /// the box's, which is two and a half faces wide and three tall.
-    pub fn from_face(face: [f64; 4]) -> Option<Subject> {
-        let f = Subject::from_box(face)?;
-        Some(Subject { x: f.x, y: f.y + 0.6 * f.h, w: 2.5 * f.w, h: 3.0 * f.h }.kept())
+    /// The face of whoever a mask's box `[x0, y0, x1, y1]` holds: a face a little over a third as wide and a third as
+    /// tall as the box, in its upper part (a person's head sits at the top and their shoulders are about three heads wide).
+    pub fn from_mask_box(b: [f64; 4]) -> Option<Subject> {
+        let [x0, y0, x1, y1] = b;
+        if !b.iter().all(|v| v.is_finite()) || x1 <= x0 || y1 <= y0 {
+            return None;
+        }
+        let (w, h) = (x1 - x0, y1 - y0);
+        Some(Subject { x: (x0 + x1) / 2.0, y: y0 + 0.2 * h, w: 0.38 * w, h: 0.3 * h }.kept())
     }
 
     /// The numbers within the photo and the sizes the presets are written for.
     fn kept(self) -> Subject {
-        let f = |v: f64, lo: f64, hi: f64| if v.is_finite() { v.clamp(lo, hi) } else { lo };
-        Subject { x: f(self.x, 0.0, 1.0), y: f(self.y, 0.0, 1.0), w: f(self.w, MIN_SIZE, MAX_SIZE), h: f(self.h, MIN_SIZE, MAX_SIZE) }
-    }
-
-    /// The photo coordinate of `v` of the preset frame along an axis whose subject is at `centre` with extent `size`.
-    fn to_photo(v: f64, centre: f64, size: f64) -> f64 {
-        centre + (v - 0.5) / UNIT * size
-    }
-
-    /// The preset-frame coordinate of photo coordinate `v`, the inverse of [`Subject::to_photo`].
-    fn to_frame(v: f64, centre: f64, size: f64) -> f64 {
-        0.5 + (v - centre) / size * UNIT
+        let f = |v: f64, (lo, hi): (f64, f64)| if v.is_finite() { v.clamp(lo, hi) } else { lo };
+        Subject { x: f(self.x, (0.0, 1.0)), y: f(self.y, (0.0, 1.0)), w: f(self.w, (MIN_SIZE.0, MAX_SIZE.0)), h: f(self.h, (MIN_SIZE.1, MAX_SIZE.1)) }
     }
 
     /// Every number of `l` that is a place or a size on the photo, mapped with `f(value, axis_is_x, is_size)`: its place
@@ -96,27 +91,29 @@ impl Subject {
         }
     }
 
-    /// The lights of preset `r` (written in the preset frame) round this subject.
+    /// The lights of preset `r` (written in the preset frame) round this face.
     pub fn place(&self, r: &Relight) -> Relight {
         let mut out = r.clone();
+        let (kx, ky) = (self.w / CANON.0, self.h / CANON.1);
         for l in &mut out.lights {
             Subject::map_light(l, |v, x, size| {
-                let (c, e) = if x { (self.x, self.w) } else { (self.y, self.h) };
-                if size { v / UNIT * e } else { Subject::to_photo(v, c, e) }
+                let (c, k) = if x { (self.x, kx) } else { (self.y, ky) };
+                if size { v * k } else { c + (v - 0.5) * k }
             });
         }
         out.sanitize();
         out
     }
 
-    /// The lights `r` has on this subject, in the preset frame (the inverse of [`Subject::place`], to the range a light
-    /// can hold).
+    /// The lights `r` has on this face, in the preset frame (the inverse of [`Subject::place`], to the range a light can
+    /// hold).
     pub fn capture(&self, r: &Relight) -> Relight {
         let mut out = r.clone();
+        let (kx, ky) = (self.w / CANON.0, self.h / CANON.1);
         for l in &mut out.lights {
             Subject::map_light(l, |v, x, size| {
-                let (c, e) = if x { (self.x, self.w) } else { (self.y, self.h) };
-                if size { v / e * UNIT } else { Subject::to_frame(v, c, e) }
+                let (c, k) = if x { (self.x, kx) } else { (self.y, ky) };
+                if size { v / k } else { 0.5 + (v - c) / k }
             });
         }
         out.sanitize();
@@ -190,9 +187,9 @@ pub fn clean_name(name: &str) -> Option<String> {
     (!s.is_empty()).then_some(s)
 }
 
-/// A light at `(ox, oy)` subject widths and heights from the subject's centre (right and down are positive), at `depth`.
-fn light(amount: f64, (ox, oy): (f64, f64), depth: f64, softness: f64, warmth: f64) -> LightSettings {
-    LightSettings { amount, softness, warmth, x: 0.5 + ox * UNIT, y: 0.5 + oy * UNIT, depth, ..LightSettings::default() }
+/// A light `(dx, dy)` of the photo's width and height from the face's centre (right and down are positive), at `depth`.
+fn light(amount: f64, (dx, dy): (f64, f64), depth: f64, softness: f64, warmth: f64) -> LightSettings {
+    LightSettings { amount, softness, warmth, x: 0.5 + dx, y: 0.5 + dy, depth, ..LightSettings::default() }
 }
 
 fn with_kind(mut l: LightSettings, f: impl FnOnce(&mut KindSettings)) -> LightSettings {
@@ -203,16 +200,6 @@ fn with_kind(mut l: LightSettings, f: impl FnOnce(&mut KindSettings)) -> LightSe
 fn with_effects(mut l: LightSettings, f: impl FnOnce(&mut LightEffects)) -> LightSettings {
     f(&mut l.effects);
     l
-}
-
-/// A softbox of `w × h` subject widths and heights, at the light's place.
-fn softbox(l: LightSettings, (w, h): (f64, f64), rotation: f64) -> LightSettings {
-    with_kind(l, |k| {
-        k.which = 3.0;
-        k.box_width = w * UNIT;
-        k.box_height = h * UNIT;
-        k.box_rotation = rotation;
-    })
 }
 
 /// A rim light from `angle` (0 above, 90 the right, −90 the left), `side` how one-sided it is.
@@ -240,81 +227,79 @@ fn preset(id: &str, name: &str, darken: f64, lights: Vec<LightSettings>) -> Ligh
     LightPreset { id: id.into(), name: name.into(), lights: r, builtin: true }
 }
 
+/// A spot aimed at the face (a little below its centre), `angle` degrees wide with edge `edge`.
+fn spot(l: LightSettings, angle: f64, edge: f64) -> LightSettings {
+    with_kind(l, |k| {
+        k.which = 1.0;
+        k.spot_aim_x = 0.5;
+        k.spot_aim_y = 0.53;
+        k.spot_angle = angle;
+        k.spot_edge = edge;
+    })
+}
+
+fn shadows(mut l: LightSettings, amount: f64) -> LightSettings {
+    l.effects.shadows = amount;
+    l
+}
+
+fn wrap(mut l: LightSettings, wrap: f64) -> LightSettings {
+    l.wrap = wrap;
+    l
+}
+
+fn gel(mut l: LightSettings, hue: f64, strength: f64) -> LightSettings {
+    (l.effects.gel_hue, l.effects.gel_strength) = (hue, strength);
+    l
+}
+
 /// The presets that ship with the app, all original setups: the names say what a photographer calls them, the numbers
-/// are this app's own.
+/// are this app's own. Positions are in the preset frame (see the module docs): `(dx, dy)` from the face. Each light is
+/// a spot or a point rather than a Sun / Window: a Sun at a grazing angle lights the wall along the subject's outline
+/// (the depth model's soft depth steps tilt the wall's normals towards it) and leaves a pale halo there. The room is
+/// darkened (Darken Surroundings) so the lit side and the shadow side differ at a glance.
 pub fn built_in() -> &'static [LightPreset] {
     static LIST: OnceLock<Vec<LightPreset>> = OnceLock::new();
     LIST.get_or_init(|| {
         vec![
-            // A soft key high and to the side (about 45° up and across), a whisper of fill, a darker room: the lit side
-            // of the face carries a small triangle of light under the eye on the shadow side.
+            // A key about 45° to one side and 45° above the face, close to it: the near cheek bright, the far cheek in
+            // shadow with the nose's shadow reaching towards it; a weak fill, so the key is several times the shadow side.
             preset(
                 "rembrandt",
                 "Rembrandt",
-                40.0,
-                vec![
-                    with_effects(softbox(light(95.0, (-0.75, -0.75), 12.0, 35.0, 8.0), (0.9, 0.7), 0.0), |e| e.shadows = 40.0),
-                    fill(10.0, 0.0, 45.0),
-                ],
+                75.0,
+                vec![shadows(wrap(spot(light(100.0, (-0.34, -0.34), 40.0, 40.0, 6.0), 30.0, 60.0), 15.0), 100.0), fill(4.0, 0.0, 45.0)],
             ),
-            // The key straight in front and high, its shadow a small butterfly under the nose; a fill from below.
+            // The key straight in front and high: a small shadow under the nose and chin, a soft fill from below.
             preset(
                 "butterfly",
                 "Butterfly",
-                30.0,
-                vec![with_effects(softbox(light(95.0, (0.0, -0.95), 10.0, 35.0, 0.0), (1.0, 0.6), 0.0), |e| e.shadows = 35.0), fill(20.0, 0.0, 55.0)],
+                65.0,
+                vec![shadows(wrap(spot(light(100.0, (0.0, -0.42), 40.0, 40.0, 0.0), 30.0, 60.0), 15.0), 100.0), fill(15.0, 0.0, 55.0)],
             ),
-            // One tight light from the side, aimed at the face: half the face lit, half in shadow, the backdrop left alone.
-            preset(
-                "split",
-                "Split",
-                45.0,
-                vec![with_effects(
-                    with_kind(light(85.0, (-1.4, -0.2), 20.0, 25.0, 0.0), |k| {
-                        k.which = 1.0;
-                        k.spot_aim_x = 0.5;
-                        k.spot_aim_y = 0.5 - 0.2 * UNIT;
-                        k.spot_angle = 26.0;
-                        k.spot_edge = 55.0;
-                    }),
-                    |e| e.shadows = 35.0,
-                )],
-            ),
-            // The subject's outline lit from behind-right in a cool light, a warm fill keeping the face open.
-            preset("rim-fill", "Rim + Fill", 22.0, vec![rim(90.0, -20.0, (60.0, 70.0, 65.0)), fill(25.0, 8.0, 50.0)]),
-            // Low warm sun through a window: a warm broad light from the left, a cool fill from the sky.
+            // One light exactly from the side, level with the face: half of it lit, half in shadow.
+            preset("split", "Split", 70.0, vec![shadows(wrap(spot(light(100.0, (-0.5, 0.0), 45.0, 40.0, 0.0), 30.0, 50.0), 0.0), 100.0)]),
+            // The subject's whole outline lit from behind, the face softly lit from the front.
+            preset("rim-fill", "Rim + Fill", 75.0, vec![rim(85.0, 0.0, (45.0, 0.0, 0.0)), fill(45.0, 4.0, 70.0)]),
+            // A low warm light raking across the face and body from the left, the shadow side and the wall away from it
+            // cooler and darker.
             preset(
                 "golden-hour-window",
                 "Golden-Hour Window",
-                30.0,
+                60.0,
                 vec![
-                    with_effects(
-                        LightSettings {
-                            wrap: 5.0,
-                            ..with_kind(light(32.0, (-1.5, -0.4), 20.0, 65.0, 40.0), |k| {
-                                k.which = 2.0;
-                                k.sun_azimuth = -55.0;
-                                k.sun_elevation = 16.0;
-                            })
-                        },
-                        |e| {
-                            e.shadows = 30.0;
-                            e.haze = 8.0;
-                        },
-                    ),
-                    fill(12.0, -25.0, 40.0),
+                    gel(shadows(wrap(spot(light(100.0, (-0.6, 0.0), 60.0, 40.0, 100.0), 44.0, 80.0), 20.0), 100.0), 38.0, 45.0),
+                    wrap(light(10.0, (0.5, 0.1), 60.0, 80.0, -45.0), 40.0),
                 ],
             ),
             // A magenta light from the left and a teal one from the right, the room dark so the colours show.
             preset(
                 "neon-two-tone",
                 "Neon Two-Tone",
-                55.0,
+                75.0,
                 vec![
-                    with_effects(softbox(light(50.0, (-1.3, -0.1), 25.0, 40.0, 0.0), (0.8, 1.4), 0.0), |e| {
-                        (e.gel_hue, e.gel_strength) = (305.0, 60.0)
-                    }),
-                    with_effects(softbox(light(50.0, (1.3, 0.1), 25.0, 40.0, 0.0), (0.8, 1.4), 0.0), |e| (e.gel_hue, e.gel_strength) = (178.0, 60.0)),
+                    gel(shadows(spot(light(50.0, (-0.5, 0.05), 50.0, 40.0, 0.0), 32.0, 70.0), 60.0), 305.0, 85.0),
+                    gel(shadows(spot(light(50.0, (0.5, 0.05), 50.0, 40.0, 0.0), 32.0, 70.0), 60.0), 178.0, 85.0),
                 ],
             ),
             // One small, warm flame close and low in front: it falls off fast, the rest of the room is dark.
@@ -322,7 +307,7 @@ pub fn built_in() -> &'static [LightPreset] {
                 "candle",
                 "Candle",
                 65.0,
-                vec![with_effects(light(75.0, (0.25, 0.3), 4.0, 18.0, 100.0), |e| {
+                vec![with_effects(light(75.0, (0.08, 0.38), 4.0, 18.0, 100.0), |e| {
                     e.gel_hue = 38.0;
                     e.gel_strength = 30.0;
                     e.haze = 18.0;
@@ -338,17 +323,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_box_and_a_face_make_a_subject_and_nonsense_makes_none() {
-        let s = Subject::from_box([0.2, 0.1, 0.6, 0.9]).unwrap();
-        assert!((s.x - 0.4).abs() < 1e-9 && (s.y - 0.5).abs() < 1e-9 && (s.w - 0.4).abs() < 1e-9 && (s.h - 0.8).abs() < 1e-9);
+    fn a_face_makes_a_subject_and_nonsense_makes_none() {
+        let s = Subject::from_face([0.2, 0.1, 0.4, 0.5]).unwrap();
+        assert!((s.x - 0.3).abs() < 1e-9 && (s.y - 0.3).abs() < 1e-9 && (s.w - 0.2).abs() < 1e-9 && (s.h - 0.4).abs() < 1e-9);
         for bad in [[0.5, 0.5, 0.5, 0.9], [f64::NAN, 0.0, 1.0, 1.0], [0.6, 0.1, 0.2, 0.9]] {
-            assert_eq!(Subject::from_box(bad), None);
+            assert_eq!(Subject::from_face(bad), None);
+            assert_eq!(Subject::from_mask_box(bad), None);
         }
-        // a speck is taken as the smallest subject, the whole frame as the largest
-        let speck = Subject::from_box([0.5, 0.5, 0.51, 0.51]).unwrap();
-        assert_eq!((speck.w, speck.h), (MIN_SIZE, MIN_SIZE));
-        let face = Subject::from_face([0.4, 0.2, 0.5, 0.35]).unwrap();
-        assert!(face.y > 0.275 && face.w > 0.2, "head and shoulders reach below and beyond the face: {face:?}");
+        // a speck is taken as the smallest face, the whole frame as the largest
+        let speck = Subject::from_face([0.5, 0.5, 0.51, 0.51]).unwrap();
+        assert_eq!((speck.w, speck.h), MIN_SIZE);
+        let all = Subject::from_face([0.0, 0.0, 1.0, 1.0]).unwrap();
+        assert_eq!((all.w, all.h), MAX_SIZE);
+        // a person's mask gives a face in its upper part
+        let m = Subject::from_mask_box([0.3, 0.2, 0.7, 1.0]).unwrap();
+        assert!((m.x - 0.5).abs() < 1e-9 && m.y < 0.5 && m.w < 0.2, "{m:?}");
     }
 
     #[test]
@@ -368,7 +357,7 @@ mod tests {
         let back = s.capture(&rembrandt.placed(&s));
         for (p, q) in rembrandt.lights.lights.iter().zip(&back.lights) {
             assert!((p.x - q.x).abs() < 1e-9 && (p.y - q.y).abs() < 1e-9 && p.amount == q.amount, "{p:?} {q:?}");
-            assert!((p.kind.box_width - q.kind.box_width).abs() < 1e-9);
+            assert!((p.kind.box_width - q.kind.box_width).abs() < 1e-9 && (p.kind.spot_aim_y - q.kind.spot_aim_y).abs() < 1e-9);
         }
     }
 

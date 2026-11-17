@@ -51,7 +51,7 @@ fn the_same_preset_lands_round_each_photos_own_subject() {
 }
 
 #[test]
-fn a_subject_mask_beats_a_face_and_its_box_is_what_the_mask_selects() {
+fn a_face_beats_a_mask_and_a_mask_gives_a_face_in_its_upper_part() {
     let (mut s, ids) = session();
     face(&mut s, ids[0], (0.20, 0.20, 0.30, 0.35));
     let side = 32usize;
@@ -74,9 +74,17 @@ fn a_subject_mask_beats_a_face_and_its_box_is_what_the_mask_selects() {
     let mut d = (*s.develop_of(ids[0]).unwrap()).clone();
     d.masks.push(mask);
     s.set_develop(ids[0], d, "Mask").unwrap();
+    // the face's own box, whatever the mask selects
+    let (subject, source) = s.relight_subject(ids[0]);
+    assert_eq!(source, SubjectSource::Face);
+    assert!((subject.x - 0.25).abs() < 1e-6 && (subject.w - 0.10).abs() < 1e-6, "{subject:?}");
+    // without a face the mask's box (x 0.5 .. 0.875, y 0.25 .. 0.9375) gives a face at its top
+    let mut meta = s.catalog.photo(ids[0]).unwrap().meta.clone();
+    meta.regions.clear();
+    s.apply_system(Op::SetMeta { id: ids[0], meta: Box::new(meta) }).unwrap();
     let (subject, source) = s.relight_subject(ids[0]);
     assert_eq!(source, SubjectSource::Mask);
-    assert!((subject.x - 0.6875).abs() < 1e-6 && (subject.w - 0.375).abs() < 1e-6, "{subject:?}");
+    assert!((subject.x - 0.6875).abs() < 1e-6 && subject.y < 0.5 && subject.w < 0.2, "{subject:?}");
 }
 
 #[test]
