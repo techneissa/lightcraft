@@ -303,3 +303,58 @@ pub(crate) fn light_at(field: &Field, rig: &Rig, (u, v): (f32, f32), lz: f32, n:
     };
     if value.is_finite() { value.max(0.0) } else { 0.0 }
 }
+
+/// The light a point of the air gets rolls off towards this, as a share of the photo's most lit surface's: the air right at
+/// a small light would else take any number (a bulb's core is white, not infinite). Soft and high, so a spot's beam is still
+/// brightest at its source and fades along its axis (round 3: a hard cap of 3 made the near part of a beam flat).
+const AIR_CAP: f32 = 200.0;
+
+/// How much of `rig`'s light reaches camera-space point `q` of the air (issue #317, [`crate::beam`]): the light's
+/// fall-off (its cone for a spot, the box's points for a softbox, all of it for a sun) with no facing term (air faces
+/// every way), as a share of the photo's most lit surface's light ([`Rig`]'s peak), rolling off towards [`AIR_CAP`]. A rim and a fill
+/// light no air. Always finite.
+pub(crate) fn air_light(rig: &Rig, q: [f32; 3]) -> f32 {
+    // (the air takes the light's fall-off as an inverse square, the law of a light in the open; the surfaces' steeper `tail`
+    // is a look for tight pools, and in the air it made a spot's beam fade out right at its source. It is scaled so it meets
+    // the surfaces' fall-off at the photo's most lit point: `peak^(1/tail)` is that point's inverse square)
+    let falloff = |pos: [f32; 3]| {
+        let d = [pos[0] - q[0], pos[1] - q[1], pos[2] - q[2]];
+        rig.r2 / (rig.r2 + dot(d, d))
+    };
+    let point_peak = rig.peak().max(1e-12).powf(1.0 / rig.tail.max(1e-3));
+    let value = match &rig.shape {
+        Shape::Point => falloff(rig.pos) * rig.peak() / point_peak,
+        Shape::Spot { dir, cos_outer, cos_inner } => {
+            let from = norm([q[0] - rig.pos[0], q[1] - rig.pos[1], q[2] - rig.pos[2]], *dir);
+            falloff(rig.pos) * smooth(*cos_outer, *cos_inner, dot(from, *dir)) * rig.peak() / point_peak
+        }
+        Shape::Sun { .. } => 1.0,
+        Shape::Box { c, tx, ty, hw, hh, eps2 } => {
+            let mut sum = 0.0f32;
+            for j in 0..BOX_GRID {
+                let b = ((j as f32 + 0.5) / BOX_GRID as f32 * 2.0 - 1.0) * hh;
+                for i in 0..BOX_GRID {
+                    let a = ((i as f32 + 0.5) / BOX_GRID as f32 * 2.0 - 1.0) * hw;
+                    let d = [c[0] + tx[0] * a + ty[0] * b - q[0], c[1] + tx[1] * a + ty[1] * b - q[1], c[2] - q[2]];
+                    let r2 = dot(d, d);
+                    // (the box shines into the scene, as on the surfaces)
+                    let emit = (-d[2] / r2.sqrt().max(1e-9)).max(0.0);
+                    sum += emit * (eps2 / (eps2 + r2));
+                }
+            }
+            sum / (BOX_GRID * BOX_GRID) as f32
+        }
+        Shape::Rim { .. } | Shape::Fill { .. } => 0.0,
+    } / rig.peak();
+    let value = value.max(0.0);
+    let soft = value / (1.0 + value / AIR_CAP);
+    if soft.is_finite() { soft } else { 0.0 }
+}
+
+/// Where the light of `rig` travels at point `q`, a unit vector (from the light's place; a sun's is the same everywhere).
+pub(crate) fn travel(rig: &Rig, q: [f32; 3]) -> [f32; 3] {
+    match &rig.shape {
+        Shape::Sun { to, .. } => [-to[0], -to[1], -to[2]],
+        _ => norm([q[0] - rig.pos[0], q[1] - rig.pos[1], q[2] - rig.pos[2]], [0.0, 0.0, -1.0]),
+    }
+}

@@ -701,9 +701,15 @@ fn scene_pixel(raw: vec3<f32>, i: u32, n: u32, lt: Local) -> vec4<f32> {
         let y1 = max(lum2020(c), 1e-9);
         c = c * y0 / y1;
     }
+    // (fork, issue #317: Relight's beams, light added on top in the light's own colour)
+    let added = max(vec3<f32>(lt.v[17], lt.v[18], lt.v[19]), vec3<f32>(0.0));
+    let has_added = lt.v[17] != 0.0 || lt.v[18] != 0.0 || lt.v[19] != 0.0;
+    if (has_added) {
+        c = c + added;
+    }
 
     var l1 = l0;
-    if (dz != 0.0 || l_exp != 0.0) {
+    if (dz != 0.0 || l_exp != 0.0 || has_added) {
         l1 = log_lum(c);
     }
     return vec4<f32>(c, l1);
@@ -934,10 +940,16 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let y1 = max(lum2020(c), 1e-9);
         c = c * y0 / y1;
     }
+    // (fork, issue #317: Relight's beams, light added on top in the light's own colour)
+    let added = max(vec3<f32>(lt[17], lt[18], lt[19]), vec3<f32>(0.0));
+    let has_added = lt[17] != 0.0 || lt[18] != 0.0 || lt[19] != 0.0;
+    if (has_added) {
+        c = c + added;
+    }
 
     // --- local tone in log luminance
     var l1 = l0;
-    if (dz != 0.0 || l_exp != 0.0) {
+    if (dz != 0.0 || l_exp != 0.0 || has_added) {
         l1 = log_lum(c);
     }
     let shift = l1 - l0;

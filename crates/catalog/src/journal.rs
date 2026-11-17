@@ -84,6 +84,7 @@
 //! | fork 15 | Relight's Rim side (#319, `fork/relight.md`) | each light in `DevelopSettings.fork_relight.lights` may hold `rimAngle` and `rimSide`, each left out at its default (90 and 0); an older build drops them |
 //! | fork 16 | Relight's shadows (#315, `fork/relight.md`) | each light in `DevelopSettings.fork_relight.lights` may hold `shadows` (0..100), left out at its default 0; an older build refuses the library |
 //! | fork 17 | Relight's pattern openness (#316, `fork/relight.md`) | each light in `DevelopSettings.fork_relight.lights` may hold `patternOpen` (0..100), left out at its default 50; an older build refuses the library |
+//! | fork 18 | Relight's beams through haze (#317, `fork/relight.md`) | each light in `DevelopSettings.fork_relight.lights` may hold `scatter` (Forward Scatter, 0..100) and `dust` (0..100), left out at their defaults (50 and 0); an older build refuses the library |
 //!
 //! Versions 1–14 are `"format":"lightcraft-catalog"` (13 means the official Lens Blur or the fork's camera
 //! profiles; their fields differ, so either reads exactly); the fork writes `"format":"lightcraft-catalog-fork"` from

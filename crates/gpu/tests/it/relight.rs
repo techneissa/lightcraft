@@ -86,7 +86,18 @@ fn relight_matches_cpu() {
     for (field, v) in [("kind", 2.0), ("sunAzimuth", -60.0), ("sunElevation", 25.0), ("shadows", 50.0)] {
         assert!(lightcraft_develop::relight::set(&mut sun, &format!("relight.{field}"), v));
     }
+    // (issue #317) beams through haze, light added on top: a warm sun from behind with shadows, and a teal-gelled spot
+    let mut beams = lit(60.0, 0.0);
+    for (field, v) in [("kind", 2.0), ("sunAzimuth", 160.0), ("sunElevation", 30.0), ("shadows", 100.0), ("haze", 60.0), ("scatter", 70.0)] {
+        assert!(lightcraft_develop::relight::set(&mut beams, &format!("relight.{field}"), v));
+    }
+    let mut spot = LightSettings { amount: 90.0, x: 0.7, y: 0.05, depth: 30.0, ..LightSettings::default() };
+    (spot.kind.which, spot.effects.haze, spot.effects.dust, spot.effects.gel_hue, spot.effects.gel_strength) = (1.0, 100.0, 40.0, 178.0, 70.0);
+    beams.relight.lights.push(spot);
     let req = RenderRequest::fit(720, 720);
+    let mut clear = beams.clone();
+    clear.relight.lights.iter_mut().for_each(|l| l.effects.haze = 0.0);
+    assert_ne!(render(&src, &info, &beams, &req).image.data, render(&src, &info, &clear, &req).image.data, "the haze made no beam");
     for (name, s) in [
         ("white light", lit(0.0, 0.0)),
         ("shadows", shadowed),
@@ -96,6 +107,7 @@ fn relight_matches_cpu() {
         ("after a mask", masked),
         ("warm and cool", pair),
         ("gels, patterns, haze", effects),
+        ("beams through haze", beams),
     ] {
         let off = render(&src, &SourceInfo { relight: None, ..info.clone() }, &s, &req).image;
         assert_ne!(render(&src, &info, &s, &req).image.data, off.data, "{name}: the light changed nothing");
@@ -128,7 +140,18 @@ fn relight_types_match_cpu() {
         return;
     }
     let (src, info) = source();
+    // (issue #317) beams through haze, light added on top: a warm sun from behind with shadows, and a teal-gelled spot
+    let mut beams = lit(60.0, 0.0);
+    for (field, v) in [("kind", 2.0), ("sunAzimuth", 160.0), ("sunElevation", 30.0), ("shadows", 100.0), ("haze", 60.0), ("scatter", 70.0)] {
+        assert!(lightcraft_develop::relight::set(&mut beams, &format!("relight.{field}"), v));
+    }
+    let mut spot = LightSettings { amount: 90.0, x: 0.7, y: 0.05, depth: 30.0, ..LightSettings::default() };
+    (spot.kind.which, spot.effects.haze, spot.effects.dust, spot.effects.gel_hue, spot.effects.gel_strength) = (1.0, 100.0, 40.0, 178.0, 70.0);
+    beams.relight.lights.push(spot);
     let req = RenderRequest::fit(720, 720);
+    let mut clear = beams.clone();
+    clear.relight.lights.iter_mut().for_each(|l| l.effects.haze = 0.0);
+    assert_ne!(render(&src, &info, &beams, &req).image.data, render(&src, &info, &clear, &req).image.data, "the haze made no beam");
     let numbers: [(&str, &[(&str, f64)]); 5] = [
         ("spot", &[("kind", 1.0), ("spotAimX", 0.7), ("spotAimY", 0.6), ("spotAngle", 25.0)]),
         ("sun", &[("kind", 2.0), ("sunAzimuth", 60.0), ("sunElevation", 30.0)]),

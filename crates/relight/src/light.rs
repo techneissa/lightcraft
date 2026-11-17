@@ -295,6 +295,11 @@ impl Rig {
     pub(crate) fn position(&self) -> [f32; 3] {
         self.pos
     }
+
+    /// The largest `falloff · facing` of the photo, which the Amount is given to (1 for a shape with a fixed peak).
+    pub(crate) fn peak(&self) -> f32 {
+        self.peak
+    }
 }
 
 /// The light over the whole field: each field pixel's gain and the lights' colour. Made once per change of the lights

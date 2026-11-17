@@ -1,7 +1,8 @@
 //! Fork (issue #302, `fork/relight.md`): the Effects group of the Relight section, for the selected light: a gel (the
 //! named gels as swatches, then any hue and a strength), a pattern (blinds, window panes, leaves, dapple, with
 //! Scale, Rotation, Softness and Openness) and Haze. Each is a control by id, `relight.<n>.gelHue`, `.gelStrength`,
-//! `.pattern`, `.patternScale`, `.patternRotation`, `.patternSoftness`, `.patternOpen` (issue #316) and `.haze`.
+//! `.pattern`, `.patternScale`, `.patternRotation`, `.patternSoftness`, `.patternOpen` (issue #316) and `.haze`, and with
+//! some haze (issue #317) its `.scatter` and `.dust`.
 
 use egui::{Align2, Color32, Sense, Stroke, vec2};
 use lightcraft_develop::DevelopSettings;
@@ -120,4 +121,9 @@ pub(super) fn effects(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSet
     }
     heading(ui, "Haze");
     control(app, ui, d, &format!("relight.{sel}.haze"), true);
+    // (issue #317: how the haze shows the beams, once there is some)
+    if e.haze > 0.0 {
+        control(app, ui, d, &format!("relight.{sel}.scatter"), true);
+        control(app, ui, d, &format!("relight.{sel}.dust"), true);
+    }
 }

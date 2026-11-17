@@ -424,3 +424,40 @@ fn a_release_after_a_drag_draws_a_shadowless_lights_pattern_in_full() {
     let _drag = planes(&dragged, true);
     assert!(planes(&dragged, false) == planes(&fresh, false), "the release reused the drag's coarse pattern");
 }
+
+#[test]
+fn haze_0_changes_no_byte_whatever_its_scatter_and_dust() {
+    // (issue #317) an edit with no haze renders to the byte as before beams, with Forward Scatter and Dust moved too; and those
+    // two are not saved at their defaults, so an edit made before them reads as it was
+    let (src, info) = (scene(W, H), info());
+    let req = RenderRequest::fit(W, H);
+    let plain = render(&src, &info, &effect(|_| {}), &req).image;
+    let moved = render(&src, &info, &effect(|e| (e.scatter, e.dust) = (90.0, 70.0)), &req).image;
+    assert!(moved.data == plain.data, "Forward Scatter and Dust changed a picture with no haze");
+    let json = serde_json::to_value(&effect(|_| {}).relight).unwrap();
+    assert!(json["lights"][0].get("scatter").is_none() && json["lights"][0].get("dust").is_none(), "{json}");
+    // with haze they do change it
+    let hazy = |scatter: f64| render(&src, &info, &effect(|e| (e.haze, e.scatter) = (60.0, scatter)), &req).image.data;
+    assert!(hazy(10.0) != hazy(90.0) && hazy(50.0) != plain.data);
+}
+
+#[test]
+fn a_beam_adds_light_in_its_own_colour_over_black() {
+    // (issue #317) a black photo, a warm light in front of the wall in haze: the beam is light added on top, so the black
+    // round the light brightens and takes the light's warm colour (a gain on black would leave it black)
+    let black = Rgb32f::from_fn(W, H, |_, _| [0.0; 3]);
+    let info = info();
+    let req = RenderRequest::fit(W, H);
+    let sun = |haze: f64| {
+        let mut s = DevelopSettings::default();
+        s.relight.lights[0] = LightSettings { amount: 20.0, warmth: 100.0, x: 0.75, y: 0.35, depth: 70.0, ..LightSettings::default() };
+        assert!(lightcraft_develop::relight::set(&mut s, "relight.haze", haze));
+        render(&black, &info, &s, &req).image
+    };
+    let (none, hazy) = (sun(0.0), sun(60.0));
+    let wall = (0.55, 0.45, 0.65, 0.6);
+    assert!(mean(&none, wall) < 3.0, "{}", mean(&none, wall));
+    assert!(mean(&hazy, wall) > mean(&none, wall) + 20.0, "{} {}", mean(&hazy, wall), mean(&none, wall));
+    let [r, g, b] = mean_rgb(&hazy, wall);
+    assert!(r < 250.0 && r > g && g > b && r > 1.15 * b, "not the light's warm colour: {r} {g} {b}");
+}

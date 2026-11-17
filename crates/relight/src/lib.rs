@@ -14,6 +14,7 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod beam;
 pub mod effects;
 pub mod field;
 pub mod filter;
@@ -27,6 +28,8 @@ mod projector;
 mod rim;
 pub mod shadow;
 #[cfg(test)]
+mod tests_beam;
+#[cfg(test)]
 mod tests_edge;
 #[cfg(test)]
 mod tests_kinds;
@@ -37,7 +40,8 @@ mod tests_rim;
 #[cfg(test)]
 mod tests_shadow;
 
-pub use effects::{Effects, HAZE_GAIN, Pattern, PatternPlanes};
+pub use beam::{Beam, Shafts};
+pub use effects::{Effects, Pattern, PatternPlanes};
 pub use field::{DepthMap, Field, Kind};
 pub use kinds::{Fill, LightKind, Rim, Softbox, Spot, Sun};
 pub use light::{Light, Lobe, MAX_LIGHTS, Part, Planes, Rig, Shade, Shading, Split, ambient, warmth_tilt};

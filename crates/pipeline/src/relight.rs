@@ -16,7 +16,7 @@ use lightcraft_develop::{DevelopSettings, LocalAdjustments};
 use lightcraft_geom::Point;
 use lightcraft_raster::Plane;
 use lightcraft_relight::{
-    Effects, Field, Fill, HAZE_GAIN, Light, LightKind, Lobe, MAX_LIGHTS, Part, Pattern, Rig, Rim, Shading, Softbox, Spot, Sun, Visibility,
+    Beam, Effects, Field, Fill, Light, LightKind, Lobe, MAX_LIGHTS, Part, Pattern, Rig, Rim, Shading, Shafts, Softbox, Spot, Sun, Visibility,
 };
 
 use crate::masks::{Evaluated, MaskAlpha};
@@ -41,11 +41,26 @@ impl PartialEq for Input {
     }
 }
 
-/// The light of a render: the lights' shading over the photo (its colour planes carry the tilts).
+/// The light of a render: the lights' shading over the photo (its colour planes carry the tilts), and the lights' beams
+/// through haze (issue #317), light added on top.
 #[derive(Clone)]
 pub struct Lit {
     pub shading: Arc<Shading>,
+    pub beams: Vec<Beamed>,
+    /// The field the beams' planes are on.
+    pub field: Arc<Field>,
 }
+
+/// One light's beam: its plane over the field ([`Field::beam_plane`], in units of 18 % grey per unit of the light's strength)
+/// and the scene-linear Rec.2020 light it adds per unit of the plane (the light's colour, its strength and 18 % grey).
+#[derive(Clone)]
+pub struct Beamed {
+    pub plane: Arc<Lobe>,
+    pub colour: [f32; 3],
+}
+
+/// The ids the beams' planes take among the masks (after [`IDS`]), one per light.
+const BEAM_IDS: u32 = u32::MAX - 6;
 
 /// The ids the light's planes take among the masks: brightening, darkening, warm colour, cool colour, and for a gel
 /// magenta and green (those two after the others, so a light without a gel keeps the ids it had).
@@ -106,6 +121,13 @@ static LOBES: Memo<Lobes> = Memo::new(KEEP_LOBES);
 /// Shadow visibilities kept (issue #315): one per light (and one coarse one for a light being dragged), at a sixteenth of the field's size, so the Shadows slider and
 /// the light's other numbers don't march again; only a move of the light, its size or its type's numbers do.
 static SHADOWS: Memo<Visibility> = Memo::new(2 * KEEP_LOBES);
+/// Beams (issue #317): the rays from the air towards each light, kept until the light moves (about 3.4 MB each on a 1600-pixel
+/// field), and the beam they make with the light's Haze, Forward Scatter and Dust (0.4 MB), so those sliders only weigh the
+/// kept rays again.
+static SHAFTS: Memo<Shafts> = Memo::new(KEEP_LOBES);
+static BEAMS: Memo<Beam> = Memo::new(KEEP_LOBES);
+/// The beams at the field's size, as lobes (apart from the lights' own lobes, so the beams never push those out).
+static BEAM_LOBES: Memo<Lobe> = Memo::new(KEEP_LOBES);
 
 /// Let go of every kept lobe and shading (the engine drops a photo's field: what was made from it goes too; they are
 /// made again by the next render). They are keyed by the field, so one photo's go with another's.
@@ -113,6 +135,9 @@ pub fn forget() {
     MEMO.clear();
     LOBES.clear();
     SHADOWS.clear();
+    SHAFTS.clear();
+    BEAMS.clear();
+    BEAM_LOBES.clear();
 }
 
 // (the settings and the light's numbers keep to the same cap)
@@ -175,6 +200,8 @@ fn effects_of(e: &lightcraft_develop::relight_effects::LightEffects) -> Effects 
         rotation: e.pattern_rotation,
         softness: e.pattern_softness / 100.0,
         haze: e.haze / 100.0,
+        scatter: e.scatter / 100.0,
+        dust: e.dust / 100.0,
         shadows: e.shadows / 100.0,
         open: e.pattern_open / 100.0,
     }
@@ -199,7 +226,7 @@ pub fn lit(info: &SourceInfo, s: &DevelopSettings, draft: bool) -> Option<Lit> {
     let input = info.relight.as_ref()?;
     let scene = scene_of(s)?;
     let (_, shading) = shading_for(input, &scene, s.light.exposure, draft);
-    Some(Lit { shading })
+    Some(Lit { shading, beams: beams_of(input, &scene, draft), field: input.field.clone() })
 }
 
 fn hashed(parts: impl FnOnce(&mut std::collections::hash_map::DefaultHasher)) -> u64 {
@@ -263,7 +290,9 @@ pub fn shading_key(input: &Input, scene: &Scene, ev: f64, draft: bool) -> u64 {
         if draft && scene.drafts_differ() {
             std::hash::Hash::hash(&b'd', h);
         }
-        for (i, e) in scene.effects.iter().enumerate().filter(|(_, e)| **e != Effects::default()) {
+        // (not the haze's numbers: the beams are not in the shading, issue #317)
+        let shaded = |e: &Effects| Effects { haze: 0.0, scatter: 0.5, dust: 0.0, ..*e };
+        for (i, e) in scene.effects.iter().map(shaded).enumerate().filter(|(_, e)| *e != Effects::default()) {
             std::hash::Hash::hash(&(i, e.gel_hue.to_bits(), e.gel_strength.to_bits(), e.pattern, e.scale.to_bits()), h);
             std::hash::Hash::hash(&(e.rotation.to_bits(), e.softness.to_bits(), e.haze.to_bits(), e.shadows.to_bits(), e.open.to_bits()), h);
         }
@@ -327,6 +356,112 @@ fn shadows_for(input: &Input, light: &Light, rig: &Rig, draft: bool, far: bool) 
     Some(vis)
 }
 
+/// Whether `light` shows a beam with `effects` (issue #317): it has haze, and a place it shines from (not a rim or a fill).
+fn has_beam(light: &Light, effects: &Effects) -> bool {
+    light.kind.has_place() && effects.haze.is_finite() && effects.haze > 0.0
+}
+
+/// The key naming the rays from the air towards `light` on `input`'s field (issue #317): what they and the air's light read,
+/// the light's place, depth, Softness, Wrap (its peak) and type numbers. Not Amount, Warmth, a gel or the haze's numbers.
+fn shafts_key(input: &Input, light: &Light, effects: &Effects, coarse: bool) -> u64 {
+    hashed(|h| {
+        // (a patterned lamp's rays go to its far source, issue #316, which the light's pool sets: its place and numbers
+        // already here)
+        std::hash::Hash::hash(&(3u8, input.key, coarse, effects.pattern != Pattern::None), h);
+        for v in [light.x, light.y, light.depth, light.softness, light.wrap] {
+            std::hash::Hash::hash(&v.to_bits(), h);
+        }
+        std::hash::Hash::hash(&light.kind.key_bits(), h);
+    })
+}
+
+/// The key naming `light`'s beam: its rays' numbers, the haze's and the pattern's.
+fn beam_key(input: &Input, light: &Light, effects: &Effects, coarse: bool) -> u64 {
+    hashed(|h| {
+        std::hash::Hash::hash(&(4u8, shafts_key(input, light, effects, coarse)), h);
+        std::hash::Hash::hash(&(effects.haze.to_bits(), effects.scatter.to_bits(), effects.dust.to_bits()), h);
+        // (the light's pattern cuts its beam too)
+        std::hash::Hash::hash(
+            &(effects.pattern, effects.scale.to_bits(), effects.rotation.to_bits(), effects.softness.to_bits(), effects.open.to_bits()),
+            h,
+        );
+    })
+}
+
+/// `light`'s beam through its haze on `input`'s field ([`Field::beam_plane`]; `None`: no beam). The rays are made once per
+/// place of the light and kept, the beam once per set of the haze's numbers. A drag (`draft`) takes the full ones when they are
+/// kept, else makes coarse ones.
+fn beam_for(input: &Input, light: &Light, effects: &Effects, rig: &Rig, draft: bool) -> Option<Arc<Lobe>> {
+    if !has_beam(light, effects) {
+        return None;
+    }
+    let plane_key = |coarse: bool| hashed(|h| std::hash::Hash::hash(&(5u8, beam_key(input, light, effects, coarse)), h));
+    if let Some(l) = BEAM_LOBES.get(plane_key(false)) {
+        return Some(l);
+    }
+    let t = crate::profiling().then(std::time::Instant::now);
+    // (the full rays when kept, also for a drag: a drag of the Haze slider weighs them again and marches nothing)
+    let full = SHAFTS.get(shafts_key(input, light, effects, false));
+    let coarse = draft && full.is_none();
+    if coarse && let Some(l) = BEAM_LOBES.get(plane_key(true)) {
+        return Some(l);
+    }
+    let beam = match BEAMS.get(beam_key(input, light, effects, coarse)) {
+        Some(b) => b,
+        None => {
+            let shafts = match full {
+                Some(s) => s,
+                None => match SHAFTS.get(shafts_key(input, light, effects, coarse)) {
+                    Some(s) => s,
+                    None => {
+                        // (a patterned lamp shines from far along its direction, as its lobe and shadows do)
+                        let far = input.field.pattern_rig(rig, effects);
+                        let s = Arc::new(input.field.shafts(far.as_ref().unwrap_or(rig), light, coarse)?);
+                        SHAFTS.put(shafts_key(input, light, effects, coarse), s.clone());
+                        s
+                    }
+                },
+            };
+            let b = Arc::new(input.field.beam(&shafts, rig, effects));
+            BEAMS.put(beam_key(input, light, effects, coarse), b.clone());
+            b
+        }
+    };
+    let plane = Arc::new(input.field.beam_plane(&beam));
+    if let Some(t) = t {
+        eprintln!("    relight beam ({} × {}, draft {coarse}): {:.1} ms", input.field.width, input.field.height, t.elapsed().as_secs_f64() * 1e3);
+    }
+    BEAM_LOBES.put(plane_key(coarse), plane.clone());
+    Some(plane)
+}
+
+/// The scene's beams (issue #317): each light with haze, its plane and the light it adds per unit of it, in its own colour
+/// (Warmth and gel, as the finish stage's temperature and tint colour a grey of the same luminance) and strength.
+pub fn beams_of(input: &Input, scene: &Scene, draft: bool) -> Vec<Beamed> {
+    let none = Effects::default();
+    scene
+        .lights
+        .iter()
+        .take(MAX_LIGHTS)
+        .enumerate()
+        .filter_map(|(i, l)| {
+            let e = scene.effects.get(i).unwrap_or(&none);
+            if !has_beam(l, e) {
+                return None;
+            }
+            // (the rig's place and peak don't depend on Darken Surroundings or the exposure: a light with a place is no fill)
+            let rig = input.field.rig(l, 0.0, 0.0);
+            let plane = beam_for(input, l, e, &rig, draft)?;
+            let (t, s) = e.light_colour(l.warmth);
+            let c = [1.0 + 0.3 * t, 1.0 - 0.22 * s, (1.0 - 0.3 * t).max(0.0)];
+            let lum = (0.2627 * c[0] + 0.678 * c[1] + 0.0593 * c[2]).max(1e-6);
+            let k = rig.gain() * crate::tone::GREY / lum;
+            let colour = c.map(|v| if (v * k).is_finite() { (v * k).max(0.0) } else { 0.0 });
+            Some(Beamed { plane, colour })
+        })
+        .collect()
+}
+
 /// `light`'s lobes on `input`'s field (`rig`: the light set up on it), seen through its pattern and with the shadows it
 /// casts; made once and kept. A drag (`draft`) takes the full lobes when they are kept and else makes them with coarse
 /// shadows and a coarse pattern (a light with neither has one set for both).
@@ -376,10 +511,7 @@ pub fn shading_for(input: &Input, scene: &Scene, ev: f64, draft: bool) -> (u64, 
     let none = Effects::default();
     let effects = |i: usize| scene.effects.get(i).unwrap_or(&none);
     let lobes: Vec<Arc<Lobes>> = scene.lights.iter().zip(&rigs).enumerate().map(|(i, (l, r))| lobe_for(input, l, effects(i), r, ev, draft)).collect();
-    // (a light's haze is one more lobe of the same light, in the same colour; made here, not kept: it is one pass)
-    let hazes: Vec<Option<Lobe>> =
-        scene.lights.iter().enumerate().map(|(i, l)| (effects(i).haze > 0.0 && l.kind.has_place()).then(|| input.field.haze_lobe(l))).collect();
-    let mut parts: Vec<Part<'_>> = Vec::with_capacity(3 * rigs.len());
+    let mut parts: Vec<Part<'_>> = Vec::with_capacity(2 * rigs.len());
     for (i, ((l, r), lobe)) in scene.lights.iter().zip(&rigs).zip(&lobes).enumerate() {
         let (tilt, tint) = effects(i).light_colour(l.warmth);
         parts.push(Part { lobe: &lobe.light, gain: r.gain(), tilt, tint });
@@ -387,9 +519,6 @@ pub fn shading_for(input: &Input, scene: &Scene, ev: f64, draft: bool) -> (u64, 
         if let Some(through) = &lobe.through {
             let (tilt, tint) = effects(i).through_colour(l.warmth);
             parts.push(Part { lobe: through, gain: r.gain(), tilt, tint });
-        }
-        if let Some(Some(haze)) = hazes.get(i) {
-            parts.push(Part { lobe: haze, gain: r.gain() * HAZE_GAIN * effects(i).haze.clamp(0.0, 1.0) as f32, tilt, tint });
         }
     }
     let shading = Arc::new(input.field.shading_of(&parts, lightcraft_relight::ambient(scene.darken), ev as f32));
@@ -445,6 +574,20 @@ pub fn masks(plan: &Plan<'_>) -> Vec<Evaluated> {
     }
     if let Some(green) = p.green {
         out.push(evaluated(IDS[5], w, h, green, LocalAdjustments { tint: -100.0 * f64::from(sh.tint_down), ..LocalAdjustments::default() }));
+    }
+    // (issue #317: each light's beam, light added on top in its own colour)
+    for (k, b) in lit.beams.iter().enumerate() {
+        let plane = lit.field.plane_at(&b.plane, w, h, &|x, y| {
+            let q = map.apply(Point::new(x, y));
+            (q.x, q.y)
+        });
+        let top = plane.iter().copied().fold(0f32, f32::max);
+        if top <= 1e-6 || !top.is_finite() {
+            continue;
+        }
+        let alpha = plane.iter().map(|v| (v / top).clamp(0.0, 1.0)).collect();
+        let added = b.colour.map(|c| f64::from(c * top));
+        out.push(evaluated(BEAM_IDS - k as u32, w, h, alpha, LocalAdjustments { fork_added: added, ..LocalAdjustments::default() }));
     }
     if let Some(t) = t {
         eprintln!("    relight planes ({w} × {h}): {:.1} ms", t.elapsed().as_secs_f64() * 1e3);
