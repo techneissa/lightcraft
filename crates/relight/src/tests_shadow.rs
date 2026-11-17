@@ -340,12 +340,6 @@ fn point_at(f: &Field, x: f64, k: f32) -> Light {
     Light { x, y: 0.5, depth: d, ..light(0.05, LightKind::Point) }
 }
 
-/// The share of the light the wall right of the subject (`u` 0.57 .. 0.63, the rows 0.45 .. 0.55) sees from a light left of it at `k` times
-/// the subject's depth.
-fn wall_right_of_the_subject(f: &Field, k: f32) -> f32 {
-    wall_light(f, 0.05, k, (0.57, 0.63))
-}
-
 #[test]
 fn a_wall_a_little_behind_a_subject_is_in_its_shadow_from_a_light_at_or_in_front_of_the_subject() {
     // the wall 33 % and 30 % behind the subject, the light to the left at 0.7, 0.9 and 1 times the subject's depth: the way from the
@@ -366,29 +360,33 @@ fn a_wall_a_little_behind_a_subject_is_in_its_shadow_from_a_light_at_or_in_front
 }
 
 #[test]
-fn a_surface_just_behind_a_subject_changes_smoothly_with_its_depth_when_the_light_is_inside_the_subjects_thickness() {
-    // the light left of the subject at 1.2 times its depth (inside its band); the surface to its right at 1.06 .. 1.12 times: crossing the
-    // 1.08 where the band begins, it must not step by more than 0.1 per 0.01 of depth
-    let lit: Vec<f32> = (0..=6)
+fn a_surface_just_behind_a_subject_changes_smoothly_with_its_depth() {
+    // a subject 0.2 of the photo tall (so taken to be about 0.15 of its depth deep, fading out to 0.23) with a surface right of it,
+    // the light in front of it and to the left: as the surface goes from 1.13 to 1.33 times the subject's depth, past the subject's
+    // back, its light must not step by more than 0.1 per 0.01 of depth (round 3's surface stepped at 1.08 times). (From 1.13: the
+    // field itself smooths a step under 11.6 % of depth between neighbours away, and changes at once there.)
+    let lit: Vec<f32> = (0..=20)
         .map(|i| {
-            let f = subject_beside_a_surface(1.06 + 0.01 * i as f32);
-            wall_right_of_the_subject(&f, 1.2)
+            let f = subject_beside_a_surface(1.13 + 0.01 * i as f32);
+            wall_light(&f, 0.3, 0.8, (0.57, 0.63))
         })
         .collect();
     for pair in lit.windows(2) {
         assert!((pair[1] - pair[0]).abs() <= 0.1, "the surface's light steps: {lit:?}");
     }
+    // (and the subject does shade it: smooth because it is shaded and then less so, not because there is no shadow)
+    assert!(lit.iter().any(|v| *v < 0.9), "the subject casts no shadow on the surface: {lit:?}");
 }
 
-/// A subject (`u` 0.45 .. 0.55, `v` 0.3 .. 0.7, depth 1) with a far wall (4 times its depth) to its left, so that it stands out, and to its right a
-/// surface `near_side` times its depth.
+/// A subject (`u` 0.45 .. 0.55, `v` 0.4 .. 0.6, depth 1) with a far wall (4 times its depth) to its left, above and below it, so that it
+/// stands out, and to its right a surface `near_side` times its depth.
 fn subject_beside_a_surface(near_side: f32) -> Field {
     let lz: Vec<f32> = (0..W * H)
         .map(|i| {
             let (u, v) = ((i % W) as f32 / W as f32, (i / W) as f32 / H as f32);
-            if (0.45..0.55).contains(&u) && (0.3..0.7).contains(&v) {
+            if (0.45..0.55).contains(&u) && (0.4..0.6).contains(&v) {
                 0.0
-            } else if u < 0.45 {
+            } else if u < 0.55 {
                 4.0f32.ln()
             } else {
                 near_side.ln()
@@ -442,5 +440,31 @@ fn a_things_shadow_from_a_small_light_is_dark_in_full() {
                 assert!(kept <= 0.1, "{kind:?}, width {width}, draft {draft}: the shadow's middle at {mid} keeps {kept} of the light");
             }
         }
+    }
+}
+
+#[test]
+fn a_thin_poles_shadow_is_whole_along_its_length() {
+    // a pole two pixels wide on the 400-pixel grid the march runs on (one on the drag's 200), 1.4 times nearer than the wall,
+    // lit from its left by the smallest point light: every row of its shadow is about as dark as the darkest (a ray that steps
+    // over the pole sideways left rows of it lit: a dashed shadow)
+    let (w, h) = (400usize, 256usize);
+    let wall = 1.4f32.ln() - 0.6;
+    let lz: Vec<f32> = (0..w * h)
+        .map(|i| {
+            let (x, v) = (i % w, (i / w) as f32 / h as f32);
+            // (and a near patch in a corner, out of the way, so the light can come in front of the pole)
+            if ((200..202).contains(&x) && (0.2..0.8).contains(&v)) || (x < w / 4 && v >= 0.9) { -0.6 } else { wall }
+        })
+        .collect();
+    let f = Field::from_parts(w, h, lz, vec![-2.0; w * h]).unwrap();
+    let l = Light { x: 0.3, y: 0.5, depth: 0.0, ..light(0.0, LightKind::Point) };
+    let rig = f.rig(&l, 0.0, 0.0);
+    for draft in [false, true] {
+        let plane = f.visibility_plane(&f.visibility(&rig, &l, draft).unwrap());
+        // the darkest of each row's pixels right of the pole, over the rows the pole's shadow covers
+        let rows: Vec<f32> = (h * 30 / 100..h * 70 / 100).map(|y| plane[y * w + 202..y * w + 240].iter().copied().fold(1.0, f32::min)).collect();
+        let (lo, hi) = (rows.iter().copied().fold(1.0, f32::min), rows.iter().copied().fold(0.0, f32::max));
+        assert!(hi <= 0.5 && hi - lo <= 0.15, "draft {draft}: the shadow's darkest per row from {lo} to {hi}: {rows:?}");
     }
 }

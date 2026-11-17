@@ -3,10 +3,10 @@
 //! spot and a softbox, parallel rays along the direction for a sun), as in a screen-space shadow march. What blocks a
 //! ray is decided by [`crate::occluder`]: only a thing with farther stuff on both sides of it (a person, a box, a pole,
 //! not a floor, a wall or a staircase), taken to be about as deep as it is wide. A ray is blocked where it passes
-//! through such a thing: each step of the march covers a stretch of the ray, and the stretch's whole range of depth is
-//! held against the thing's at the step's pixel ([`held`]), so a thin thing between two samples' depths still blocks
-//! in full, and a light or a surface moving in depth changes the shadow smoothly (the thing fades in just behind its
-//! front and out behind its back). The darkest step decides the ray.
+//! through such a thing: the ray is followed on the picture through every pixel it crosses, and the range of depth it has
+//! over each pixel is held against the thing's there ([`held`]), so a thing one pixel wide, crossed sideways or in depth,
+//! still blocks in full, and a light or a surface moving in depth changes the shadow smoothly (the thing fades in just
+//! behind its front and out behind its back). The pixel that holds back most decides the ray.
 //!
 //! The light's size is spread over several rays aimed across it (a disc for a point, a spot and a sun, the rectangle for
 //! a softbox), so a small light gives a hard shadow and a big one a soft shadow whose penumbra grows with the distance
@@ -28,18 +28,13 @@ use rayon::prelude::*;
 use crate::field::{Field, LENS};
 use crate::kinds::{LightKind, Shape};
 use crate::light::{Light, Lobe, Rig};
-use crate::occluder::Blocker;
 pub(crate) use crate::occluder::Reduced;
+use crate::occluder::{Blocker, TILE};
 
 /// The long side of the reduced field the march runs on (the reduction is the whole number of field pixels that brings
 /// it closest to this from above: 4 for the usual 1600-pixel field, 1 for a small one), for a drag's draft and for the full march.
 const LOW_SIDE_DRAFT: usize = 200;
 const LOW_SIDE: usize = 400;
-/// Steps along each ray: one per this many reduced pixels of its length on the picture, at least [`MIN_STEPS`] and at
-/// most [`MAX_STEPS`] (the full march's and a drag's).
-const STEP_PX: f32 = 2.0;
-const MIN_STEPS: usize = 6;
-const MAX_STEPS: (usize, usize) = (40, 20);
 /// Rays of the first pass (one at the light's middle and three round its edge); a pixel whose rays disagree (it is in
 /// a penumbra) gets [`MORE`] more across the whole light.
 const FIRST: usize = 4;
@@ -141,17 +136,6 @@ fn frame(a: [f32; 3]) -> ([f32; 3], [f32; 3]) {
     (e1, cross(a, e1))
 }
 
-/// A number in 0..1 from a pixel's place and a salt (a fixed noise: the same pixel gets the same rays every time).
-fn noise(x: usize, y: usize, salt: u32) -> f32 {
-    let mut h = (x as u32).wrapping_mul(0x9E37_79B1) ^ (y as u32).wrapping_mul(0x85EB_CA77) ^ salt.wrapping_mul(0xC2B2_AE3D);
-    h ^= h >> 15;
-    h = h.wrapping_mul(0x2C1B_3C6D);
-    h ^= h >> 12;
-    h = h.wrapping_mul(0x297A_2D39);
-    h ^= h >> 15;
-    (h >> 8) as f32 / 16_777_216.0
-}
-
 /// A number in 0..1 from a pixel's place that differs as much as it can between neighbours (interleaved gradient noise): each
 /// pixel of a 3 × 3 block turns its rays a different way, so the smoothing ([`smoothed`]) averages the turns out and a wide
 /// penumbra is not grainy.
@@ -178,10 +162,58 @@ fn offset(k: usize, turn: f32) -> (f32, f32) {
     (r * a.cos(), r * a.sin())
 }
 
+/// The cells of side `size` that the segment from `a` to `b` (picture coordinates, reduced pixels, not negative) crosses between
+/// its shares `from` and `to`, in order, each with the shares where the segment enters and leaves it; `visit` returns false to
+/// stop, and so does this.
+fn cells(a: (f32, f32), b: (f32, f32), size: f32, from: f32, to: f32, visit: &mut dyn FnMut(usize, usize, f32, f32) -> bool) -> bool {
+    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+    let (x0, y0) = (a.0 + dx * from, a.1 + dy * from);
+    if !(x0.is_finite() && y0.is_finite() && dx.is_finite() && dy.is_finite() && size > 0.0) {
+        return true;
+    }
+    let (mut cx, mut cy) = ((x0 / size).floor().max(0.0) as usize, (y0 / size).floor().max(0.0) as usize);
+    // the share at which the segment next crosses a column's or a row's border, and the share between two of them
+    let first = |c: usize, start: f32, d: f32| {
+        if d > 0.0 {
+            ((c + 1) as f32 * size - start) / d
+        } else if d < 0.0 {
+            (c as f32 * size - start) / d
+        } else {
+            f32::INFINITY
+        }
+    };
+    let (mut nx, mut ny) = (first(cx, a.0, dx), first(cy, a.1, dy));
+    let (ex, ey) = (if dx != 0.0 { size / dx.abs() } else { f32::INFINITY }, if dy != 0.0 { size / dy.abs() } else { f32::INFINITY });
+    let most = (((dx.abs() + dy.abs()) * (to - from).max(0.0) / size).ceil() as usize).saturating_add(3);
+    let mut s = from;
+    for _ in 0..most {
+        let next = nx.min(ny).min(to).max(s);
+        if !visit(cx, cy, s, next) {
+            return false;
+        }
+        if next >= to {
+            break;
+        }
+        if nx <= ny {
+            nx += ex;
+            match if dx > 0.0 { cx.checked_add(1) } else { cx.checked_sub(1) } {
+                Some(c) => cx = c,
+                None => break,
+            }
+        } else {
+            ny += ey;
+            match if dy > 0.0 { cy.checked_add(1) } else { cy.checked_sub(1) } {
+                Some(c) => cy = c,
+                None => break,
+            }
+        }
+        s = next;
+    }
+    true
+}
+
 /// The march's numbers for one reduced field and one light.
 struct March<'a> {
-    /// The most steps a ray takes ([`MAX_STEPS`]).
-    max_steps: usize,
     r: &'a Reduced,
     src: Source,
     /// The camera's half-extent per unit depth, on each axis.
@@ -235,10 +267,11 @@ impl March<'_> {
     }
 
     /// How much of the light the ray from `p` along `d` (`d` spans the whole way to the light when `whole`, else it is a direction)
-    /// lets through: 1 when nothing blocks it, 0 when a thing does. The ray is cut into stretches, one per [`STEP_PX`] of its length
-    /// on the picture; each is looked up at one point (`jit`, 0..1, places it in the stretch) and held against the thing there over
-    /// the stretch's whole range of depth ([`held`]); the stretch that holds back most decides.
-    fn clear(&self, p: [f32; 3], d: [f32; 3], whole: bool, jit: f32) -> f32 {
+    /// lets through: 1 when nothing blocks it, 0 when a thing does. The ray is followed on the picture through every reduced pixel
+    /// it crosses ([`cells`]: a thing one pixel wide is never stepped over), skipping each [`TILE`] × [`TILE`] block where nothing can
+    /// hold it, and held against the thing at each pixel over the depths the ray has there ([`held`]: along a line on the picture,
+    /// 1 / depth changes evenly, so those depths are exact). The pixel that holds back most decides.
+    fn clear(&self, p: [f32; 3], d: [f32; 3], whole: bool) -> f32 {
         let r = self.r;
         let mut end = self.exit(p, d);
         if whole {
@@ -261,46 +294,56 @@ impl March<'_> {
             return 1.0;
         }
         let at = |t: f32| [p[0] + d[0] * t, p[1] + d[1] * t, p[2] + d[2] * t];
-        let len = match (self.pixel(at(t_in)), self.pixel(at(t_out))) {
-            (Some((_, a)), Some((_, b))) => (a.0 - b.0).hypot(a.1 - b.1),
-            _ => self.max_steps as f32 * STEP_PX,
+        let (qa, qb) = (at(t_in), at(t_out));
+        let (Some((_, a)), Some((_, b))) = (self.pixel(qa), self.pixel(qb)) else { return 1.0 };
+        let (ia, ib) = (1.0 / qa[2], 1.0 / qb[2]);
+        let depths = |s0: f32, s1: f32| {
+            let (z0, z1) = (1.0 / (ia + (ib - ia) * s0), 1.0 / (ia + (ib - ia) * s1));
+            (z0.min(z1), z0.max(z1))
         };
-        let n = ((len / STEP_PX).ceil() as usize).clamp(MIN_STEPS, self.max_steps.max(MIN_STEPS));
-        let span = t_out - t_in;
+        // (inside the picture: a ray end on its border sits on its last pixel)
+        let inside = |q: (f32, f32)| (q.0.clamp(0.0, r.w as f32 - 1e-3), q.1.clamp(0.0, r.h as f32 - 1e-3));
+        let (a, b) = (inside(a), inside(b));
         let mut through = 1.0f32;
-        for i in 0..n {
-            let (t0, t1) = (t_in + span * i as f32 / n as f32, t_in + span * (i + 1) as f32 / n as f32);
-            let Some(((ix, iy), _)) = self.pixel(at(t_in + span * (i as f32 + jit) / n as f32)) else { break };
-            let k = iy * r.w + ix;
-            let (Some(zs), Some(b)) = (r.z.get(k), r.blk.get(k)) else { continue };
-            let (za, zb) = (p[2] + d[2] * t0, p[2] + d[2] * t1);
-            through = through.min(1.0 - held(*zs, b, za.min(zb), za.max(zb)));
-            if through <= 0.0 {
-                break;
+        cells(a, b, TILE as f32, 0.0, 1.0, &mut |tx, ty, s0, s1| {
+            let (lo, hi) = depths(s0, s1);
+            let Some(&(near, far)) = r.tiles.get(ty * r.tw + tx).filter(|_| tx < r.tw) else { return true };
+            if hi < near || lo > far {
+                return true;
             }
-        }
+            cells(a, b, 1.0, s0, s1, &mut |x, y, s0, s1| {
+                if x >= r.w || y >= r.h {
+                    return true;
+                }
+                let k = y * r.w + x;
+                let (Some(zs), Some(blk)) = (r.z.get(k), r.blk.get(k)) else { return true };
+                let (lo, hi) = depths(s0, s1);
+                through = through.min(1.0 - held(*zs, blk, lo, hi));
+                through > 0.0
+            })
+        });
         through
     }
 
     /// The ray `k` from `p` (a surface point) towards the light, turned by `turn`; whether it reaches the light.
-    fn ray(&self, p: [f32; 3], k: usize, turn: f32, jit: f32) -> f32 {
+    fn ray(&self, p: [f32; 3], k: usize, turn: f32) -> f32 {
         let (a, b) = offset(k, turn);
         match &self.src {
             Source::Point { pos, radius } => {
                 let axis = unit(sub(*pos, p), [0.0, 0.0, -1.0]);
                 let (e1, e2) = frame(axis);
                 let s = [0, 1, 2].map(|j| pos[j] + (e1[j] * a + e2[j] * b) * radius);
-                self.clear(p, sub(s, p), true, jit)
+                self.clear(p, sub(s, p), true)
             }
             Source::Box { c, tx, ty, hw, hh } => {
                 let (a, b) = ((1.15 * a).clamp(-1.0, 1.0) * hw, (1.15 * b).clamp(-1.0, 1.0) * hh);
                 let s = [0, 1, 2].map(|j| c[j] + tx[j] * a + ty[j] * b);
-                self.clear(p, sub(s, p), true, jit)
+                self.clear(p, sub(s, p), true)
             }
             Source::Sun { to, spread } => {
                 let (e1, e2) = self.sun_axes;
                 let d = unit([0, 1, 2].map(|j| to[j] + (e1[j] * a + e2[j] * b) * spread), *to);
-                self.clear(p, d, false, jit)
+                self.clear(p, d, false)
             }
         }
     }
@@ -314,14 +357,13 @@ impl March<'_> {
         let (u, v) = (((x * f + f / 2) as f32 + 0.5) / fw as f32, ((y * f + f / 2) as f32 + 0.5) / fh as f32);
         let p = [(u - 0.5) * self.kx * z, (v - 0.5) * self.ky * z, z];
         let turn = spread_noise(x, y) * std::f32::consts::TAU;
-        let jit = noise(x, y, 2);
-        let rays: Vec<f32> = (0..FIRST).map(|k| self.ray(p, k, turn, jit)).collect();
+        let rays: Vec<f32> = (0..FIRST).map(|k| self.ray(p, k, turn)).collect();
         let (first, lo, hi) = (rays.iter().sum::<f32>(), rays.iter().copied().fold(1.0, f32::min), rays.iter().copied().fold(0.0, f32::max));
         if draft || hi - lo < SPREAD {
             return first / FIRST as f32;
         }
         // (a pixel in a penumbra: more rays across the whole light)
-        let more: f32 = (FIRST..FIRST + MORE).map(|k| self.ray(p, k, turn, jit)).sum();
+        let more: f32 = (FIRST..FIRST + MORE).map(|k| self.ray(p, k, turn)).sum();
         (first + more) / (FIRST + MORE) as f32
     }
 }
@@ -393,7 +435,6 @@ impl Field {
             z_cut: self.near.exp() * 0.5,
             z_cap: self.far.exp() * 3.0,
             sun_axes,
-            max_steps: if draft { MAX_STEPS.1 } else { MAX_STEPS.0 },
         };
         let mut v = vec![1f32; r.w * r.h];
         v.par_chunks_mut(r.w.max(1)).enumerate().for_each(|(y, row)| {

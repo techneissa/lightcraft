@@ -70,7 +70,13 @@ pub(crate) struct Reduced {
     /// The depths between which anything blocks: the nearest blocker's front and the farthest end of one (`f32::INFINITY` and
     /// 0 when nothing does).
     pub span: (f32, f32),
+    /// The same for each [`TILE`] × [`TILE`] block of pixels (`tw` across), so a ray skips a block where nothing can hold it.
+    pub tiles: Vec<(f32, f32)>,
+    pub tw: usize,
 }
+
+/// The side of a block of [`Reduced::tiles`] (reduced pixels).
+pub(crate) const TILE: usize = 4;
 
 impl Reduced {
     pub(crate) fn of(field: &Field, low_side: usize) -> Reduced {
@@ -91,12 +97,21 @@ impl Reduced {
         }
         let blk = blockers(&lz, w, h);
         let span = z.iter().zip(&blk).filter(|(_, b)| b.s > 0.0).fold((f32::INFINITY, 0.0f32), |(lo, hi), (z, b)| (lo.min(*z), hi.max(z * b.end)));
-        Reduced { f, w, h, z, lz, gi, blk, span }
+        let (tw, th) = (w.div_ceil(TILE), h.div_ceil(TILE));
+        let mut tiles = vec![(f32::INFINITY, 0.0f32); tw * th];
+        for (i, (zf, b)) in z.iter().zip(&blk).enumerate() {
+            if b.s > 0.0
+                && let Some(t) = tiles.get_mut((i / w / TILE) * tw + (i % w) / TILE)
+            {
+                *t = (t.0.min(*zf), t.1.max(zf * b.end));
+            }
+        }
+        Reduced { f, w, h, z, lz, gi, blk, span, tiles, tw }
     }
 
     /// Memory held (bytes).
     pub(crate) fn bytes(&self) -> usize {
-        (self.z.len() + self.lz.len() + self.gi.len()) * 4 + self.blk.len() * std::mem::size_of::<Blocker>()
+        (self.z.len() + self.lz.len() + self.gi.len() + 2 * self.tiles.len()) * 4 + self.blk.len() * std::mem::size_of::<Blocker>()
     }
 }
 
