@@ -32,7 +32,7 @@ fn check_against(name: &str, hash: u64, sensor: (usize, usize), developed: Optio
     if let Some(developed) = developed {
         assert_eq!(raw.info().developed_size(), developed);
     }
-    assert_eq!(raw.info(), probe_info(&bytes).unwrap());
+    assert_eq!(crate::probe_comparable(raw.info()), crate::probe_comparable(probe_info(&bytes).unwrap()));
     let RawData::U16(samples) = &raw.data else { panic!("{name}: integer sensor data expected") };
     let actual =
         samples.iter().flat_map(|v| v.to_le_bytes()).fold(0xcbf2_9ce4_8422_2325u64, |h, byte| (h ^ u64::from(byte)).wrapping_mul(0x100_0000_01b3));

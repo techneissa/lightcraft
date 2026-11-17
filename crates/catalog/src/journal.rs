@@ -79,6 +79,7 @@
 //! | fork 10 | the official format 13's Lens Blur (official update of 2026-11-12) | `DevelopSettings.lens_blur`, `Mask.adjust.lens_blur` |
 //! | fork 11 | Relight (#288, `fork/relight.md`) | `DevelopSettings.fork_relight` (`amount`, `softness`, `warmth`, `x`, `y`, `depth`, `darken`, `wrap`), left out while default |
 //! | fork 12 | Relight's several lights (#299, `fork/relight.md`) | `DevelopSettings.fork_relight` is `{lights: [{amount, softness, warmth, x, y, depth, wrap}], darken}` (up to 8 lights); a block of fork 11's shape reads as one light |
+//! | fork 13 | Relight's gels, patterns and haze (#302, `fork/relight.md`) | each light in `DevelopSettings.fork_relight.lights` may hold `gelHue`, `gelStrength`, `pattern`, `patternScale`, `patternRotation`, `patternSoftness`, `haze`, each left out at its default; an older build drops them |
 //!
 //! Versions 1–14 are `"format":"lightcraft-catalog"` (13 means the official Lens Blur or the fork's camera
 //! profiles; their fields differ, so either reads exactly); the fork writes `"format":"lightcraft-catalog-fork"` from
@@ -538,6 +539,7 @@ impl Journal {
         };
         let log = log.unwrap_or_default();
         let mut replay = Replay::default();
+        replay.first_form_relight = matches!(header, Some(crate::fork_format::Header::Older { .. }));
 
         // Scan records; `good_end` is the byte offset just past the last good record.
         let mut pos = 0usize;

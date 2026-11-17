@@ -56,8 +56,49 @@ const KEEP: usize = 4;
 /// stay). A field of 1600 × 1067 makes 6.8 MB of them each, so this holds 8 lights and a drag's last positions.
 const KEEP_LOBES: usize = 12;
 
-static MEMO: Mutex<Vec<(u64, Arc<Shading>)>> = Mutex::new(Vec::new());
-static LOBES: Mutex<Vec<(u64, Arc<Lobe>)>> = Mutex::new(Vec::new());
+/// A few values most recently used first, by key.
+struct Memo<T> {
+    kept: Mutex<Vec<(u64, Arc<T>)>>,
+    keep: usize,
+}
+
+impl<T> Memo<T> {
+    const fn new(keep: usize) -> Self {
+        Memo { kept: Mutex::new(Vec::new()), keep }
+    }
+
+    /// The value of `key`, which becomes the most recently used (so what is asked for every step of a drag stays).
+    fn get(&self, key: u64) -> Option<Arc<T>> {
+        let mut kept = self.kept.lock().unwrap_or_else(PoisonError::into_inner);
+        let at = kept.iter().position(|(k, _)| *k == key)?;
+        let entry = kept.remove(at);
+        let value = entry.1.clone();
+        kept.insert(0, entry);
+        Some(value)
+    }
+
+    /// Keep `value` for `key` as the most recently used, pushing out the least.
+    fn put(&self, key: u64, value: Arc<T>) {
+        let mut kept = self.kept.lock().unwrap_or_else(PoisonError::into_inner);
+        kept.retain(|(k, _)| *k != key);
+        kept.insert(0, (key, value));
+        kept.truncate(self.keep);
+    }
+
+    fn clear(&self) {
+        self.kept.lock().unwrap_or_else(PoisonError::into_inner).clear();
+    }
+}
+
+static MEMO: Memo<Shading> = Memo::new(KEEP);
+static LOBES: Memo<Lobe> = Memo::new(KEEP_LOBES);
+
+/// Let go of every kept lobe and shading (the engine drops a photo's field: what was made from it goes too; they are
+/// made again by the next render). They are keyed by the field, so one photo's go with another's.
+pub fn forget() {
+    MEMO.clear();
+    LOBES.clear();
+}
 
 // (the settings and the light's numbers keep to the same cap)
 const _: () = assert!(lightcraft_develop::relight::MAX_LIGHTS == lightcraft_relight::MAX_LIGHTS);
@@ -160,18 +201,15 @@ pub fn shading_key(input: &Input, scene: &Scene, ev: f64) -> u64 {
 /// `light`'s lobe on `input`'s field (`rig`: the light set up on it), seen through its pattern; made once and kept.
 fn lobe_for(input: &Input, light: &Light, effects: &Effects, rig: &Rig) -> Arc<Lobe> {
     let key = lobe_key(input, light, effects);
-    if let Some((_, l)) = LOBES.lock().unwrap_or_else(PoisonError::into_inner).iter().find(|(k, _)| *k == key) {
-        return l.clone();
+    if let Some(l) = LOBES.get(key) {
+        return l;
     }
     let t = crate::profiling().then(std::time::Instant::now);
     let lobe = Arc::new(input.field.patterned(rig, input.field.lobe(rig), effects));
     if let Some(t) = t {
         eprintln!("    relight lobe ({} × {}): {:.1} ms", input.field.width, input.field.height, t.elapsed().as_secs_f64() * 1e3);
     }
-    let mut memo = LOBES.lock().unwrap_or_else(PoisonError::into_inner);
-    memo.retain(|(k, _)| *k != key);
-    memo.insert(0, (key, lobe.clone()));
-    memo.truncate(KEEP_LOBES);
+    LOBES.put(key, lobe.clone());
     lobe
 }
 
@@ -180,8 +218,8 @@ fn lobe_for(input: &Input, light: &Light, effects: &Effects, rig: &Rig) -> Arc<L
 /// (`fork/relight.md`) take the same one, and dragging one light makes one lobe and one shading, not one per light.
 pub fn shading_for(input: &Input, scene: &Scene, ev: f64) -> (u64, Arc<Shading>) {
     let key = shading_key(input, scene, ev);
-    if let Some((_, sh)) = MEMO.lock().unwrap_or_else(PoisonError::into_inner).iter().find(|(k, _)| *k == key) {
-        return (key, sh.clone());
+    if let Some(sh) = MEMO.get(key) {
+        return (key, sh);
     }
     let t = crate::profiling().then(std::time::Instant::now);
     let rigs: Vec<Rig> = scene.lights.iter().take(MAX_LIGHTS).map(|l| input.field.rig(l, scene.darken, ev)).collect();
@@ -208,10 +246,7 @@ pub fn shading_for(input: &Input, scene: &Scene, ev: f64) -> (u64, Arc<Shading>)
             t.elapsed().as_secs_f64() * 1e3
         );
     }
-    let mut memo = MEMO.lock().unwrap_or_else(PoisonError::into_inner);
-    memo.retain(|(k, _)| *k != key);
-    memo.insert(0, (key, shading.clone()));
-    memo.truncate(KEEP);
+    MEMO.put(key, shading.clone());
     (key, shading)
 }
 
@@ -259,4 +294,22 @@ pub fn masks(plan: &Plan<'_>) -> Vec<Evaluated> {
         eprintln!("    relight planes ({w} × {h}): {:.1} ms", t.elapsed().as_secs_f64() * 1e3);
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_hit_is_the_most_recently_used_so_a_drag_keeps_the_other_lights() {
+        // eight lights, then one of them moved at each step: the seven others are asked for every step
+        let memo: Memo<u8> = Memo::new(12);
+        (0..8u64).for_each(|k| memo.put(k, Arc::new(0)));
+        for step in 0..9u64 {
+            (1..8u64).for_each(|k| assert!(memo.get(k).is_some(), "light {k} was made again at step {step}"));
+            memo.put(100 + step, Arc::new(0));
+        }
+        memo.clear();
+        assert!(memo.get(1).is_none());
+    }
 }

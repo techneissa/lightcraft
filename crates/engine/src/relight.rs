@@ -199,6 +199,7 @@ impl RelightStore {
 
     /// Keep field `key`, or why it could not be made.
     fn put(&self, key: &str, result: Result<Made, String>) {
+        let mut dropped = false;
         let mut st = self.lock();
         st.busy.retain(|k| k != key);
         st.failed.retain(|(k, _)| k != key);
@@ -217,11 +218,16 @@ impl RelightStore {
                     used <= budget
                 });
                 let keep = keep.count().max(1);
+                dropped = st.made.len() > keep;
                 st.made.truncate(keep);
             }
             Err(e) => st.failed.push((key.to_string(), e)),
         }
         drop(st);
+        if dropped {
+            // (what the pipeline kept of the fields it let go: their lobes and shadings, made again when needed)
+            lightcraft_pipeline::relight::forget();
+        }
         self.shared.done.notify_all();
     }
 

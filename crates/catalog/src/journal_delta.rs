@@ -265,6 +265,9 @@ impl Pass<'_> {
 #[derive(Default)]
 pub(crate) struct Replay {
     cache: Cached,
+    /// The log was written under a snapshot of an older format (fork 11 or before): its patches name Relight's block
+    /// in its first form, one light's numbers and `darken` in one object (issue #299).
+    pub(crate) first_form_relight: bool,
     /// Photos one of whose patches failed: their later patches are skipped, never applied to a
     /// state they weren't made from.
     broken: HashSet<PhotoId>,
@@ -306,9 +309,20 @@ impl Replay {
             return Ok(base.clone());
         }
         let mut v = value_of(base, &mut self.cache).ok_or("develop settings don't convert to JSON")?;
+        // (an older log's patch of Relight's block is made against its first form: put the base in it, and let
+        // reading the patched block read it as one light)
+        let names_relight = matches!(patch, Patch::Obj { s, .. } if s.contains_key(lightcraft_develop::relight::KEY));
+        let first_form = self.first_form_relight && names_relight;
+        if first_form
+            && let Some(flat) = v.get(lightcraft_develop::relight::KEY).and_then(lightcraft_develop::relight::first_form)
+            && let Some(o) = v.as_object_mut()
+        {
+            o.insert(lightcraft_develop::relight::KEY.into(), flat);
+        }
         delta::apply(&mut v, patch)?;
         let s = Arc::new(DevelopSettings::deserialize(&v).map_err(|e| e.to_string())?);
-        self.cache = Some((s.clone(), v));
+        // (a base in the first form isn't the settings' own JSON: not kept for the next patch)
+        self.cache = (!first_form).then(|| (s.clone(), v));
         Ok(s)
     }
 
