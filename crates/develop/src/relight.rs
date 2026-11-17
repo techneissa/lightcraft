@@ -322,6 +322,9 @@ pub static SPECS: &[ControlSpec] = &[
     spec("relight.fade", "Distance Fade", (0.0, 100.0, 0.0), (1.0, 0), Track::Plain),
     // (issue #334: the light's own source as a bright point when it is inside the photo)
     spec("relight.source", "Visible Source", (0.0, 100.0, 0.0), (1.0, 0), Track::Plain),
+    // (issue #332: light that spills round an edge the light sits just behind, and a few faint rays there)
+    spec("relight.edgeGlow", "Edge Glow", (0.0, 100.0, 0.0), (1.0, 0), Track::Plain),
+    spec("relight.sunburst", "Sunburst", (0.0, 100.0, 0.0), (1.0, 0), Track::Plain),
     // (issue #315: how much the photo's own things block the light)
     spec("relight.shadows", "Cast Shadows", (0.0, 100.0, 0.0), (1.0, 0), Track::Plain),
 ];
@@ -487,7 +490,7 @@ mod tests {
         assert_eq!((get(&s, "relight.0.warmth"), get(&s, "relight.1.warmth")), (Some(-50.0), Some(0.0)));
         assert_eq!(for_light("relight.amount", 2).as_deref(), Some("relight.2.amount"));
         assert_eq!((for_light("relight.darken", 2), for_light("relight.1.amount", 2)), (None, None));
-        assert_eq!(light_instances(&s).len(), 78);
+        assert_eq!(light_instances(&s).len(), 82);
         assert_eq!(crate::controls::find("relight.1.wrap").map(|c| c.id), Some("relight.wrap"));
         assert!(crate::controls::find("relight.x.wrap").is_none() && crate::controls::find("relight.0.darken").is_none());
         // a section reset puts all the lights back
@@ -517,7 +520,9 @@ mod tests {
                 "shadows",
                 "mist",
                 "mistHeight",
-                "fade"
+                "fade",
+                "edgeGlow",
+                "sunburst"
             ]
             .contains(&k.as_str())),
             "{keys:?}"
@@ -534,6 +539,8 @@ mod tests {
             ("relight.0.dust", 25.0),
             ("relight.mist", 40.0),
             ("relight.0.fade", 70.0),
+            ("relight.edgeGlow", 45.0),
+            ("relight.0.sunburst", 30.0),
         ] {
             assert!(set(&mut s, id, v), "{id}");
         }
@@ -544,6 +551,7 @@ mod tests {
         assert_eq!((&v[KEY]["lights"][0]["scatter"], &v[KEY]["lights"][0]["dust"]), (&json!(80.0), &json!(25.0)));
         assert_eq!((&v[KEY]["lights"][0]["mist"], &v[KEY]["lights"][0]["fade"]), (&json!(40.0), &json!(70.0)));
         assert!(v[KEY]["lights"][0].get("mistHeight").is_none());
+        assert_eq!((&v[KEY]["lights"][0]["edgeGlow"], &v[KEY]["lights"][0]["sunburst"]), (&json!(45.0), &json!(30.0)));
         let back = DevelopSettings::from_json(&v).unwrap();
         assert_eq!(back.relight, s.relight);
         assert_eq!((get(&back, "relight.0.pattern"), get(&back, "relight.patternSoftness")), (Some(3.0), Some(30.0)));

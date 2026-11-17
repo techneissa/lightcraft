@@ -25,6 +25,9 @@ History is in the PRs: #288 (the feature), #294 (⌥ overlay), #299 (several lig
 - **Underwater (#333):** `relight.water` (Water Depth), `.waterClarity`, `.waterTint`, `.waterShafts`, `.waterCaustics` belong to the photo (`fork_relight.water`, format 22). Colour is per-colour transmittance and a veil of the water's light, as the finish stage's exposure, temperature, tint and added-light planes (`water.rs`, `water_masks`; ids `WATER_IDS`), so no new final-stage term.
   Caustics and shafts come from a sun behind and above the scene through the internal `Pattern::Caustics` (`caustics.rs`: ridged noise read in plan on a surface above the camera, sharp near it and softer deeper); the shafts are a beam-only light (`Scene::beams`, `Beamed::shafts`).
   Limits: the camera is taken as level; the water's distance is the photo's relative depth range, not metres; a photo with no bright far water gets few shafts.
+- **Sun past an edge (#332):** Edge Glow and Sunburst (per light, `edgeGlow`, `sunburst`, format 23) draw a small core that peeks past the edge the light sits just behind, a soft round halo, a thin rim on the near side where the outline faces the light (fading within a few core radii along it) and a few faint rays (`edge.rs`). What hides the light is the thing in front of it, found by each pixel's own depth (pixels nearer than the edge by most of its step, joined without a depth jump to the ones round the light), not a line through the edge. The glow is added into the light's beam plane (`fork_added`), so no new final-stage term and no new mask id.
+  With either above 0, a handle drag snaps the light onto the nearest real outline (a step under a quarter of the biggest one round the point is skipped) just behind it, a sun turning to shine from there and Wrap dropping to at most 10; dragged off every edge it takes its depth, Wrap and turn from the start of the drag back. `relight.snapToEdge` does the same once (a Rim or a Fill has no place and is refused); the release keeps what the last drag step showed and does not snap again.
+  A sun's haze keeps only 10 % of itself over open sky (a line of sight to the farthest depth) away from the sun, growing to all of it in the forward-scatter lobe, so sky stays blue away from the sun. It changes every hazy sun, with or without an edge glow (beams are new in this batch, so no setting); a lamp's haze is unchanged.
 - **Presets (#301):** a Light Presets flyout lists ten built-ins (Rembrandt, Butterfly, Split, Rim + Fill, Golden-Hour Window, Neon Two-Tone, Candle and the three stage ones, #334) and your own.
   Presets are written for a face and placed round the photo's subject (`Subject::place`, depth from `Field::depth_in`). Applying is one undo step. Yours live in the library's `presets.json` (`relightPresets`), read entry by entry.
   `relight.applyPreset` returns `{applied: false, finding: true}` while depth is still found.
@@ -52,6 +55,7 @@ History is in the PRs: #288 (the feature), #294 (⌥ overlay), #299 (several lig
 - 20: `boxAimH`, `boxAimV` (#335). An aimed patterned softbox's far source sits along −n from its pool's middle, so shaft and shadows follow the aim.
 - 21: `spotSharp`, `source` (#334).
 - 22: `water` (#333).
+- 23: `edgeGlow`, `sunburst` (#332).
 - If the upgrade snapshot cannot be written, the journal appends nothing (`Journal::upgrade_pending`) and retries before the next append.
 
 ## Own files
@@ -100,6 +104,7 @@ History is in the PRs: #288 (the feature), #294 (⌥ overlay), #299 (several lig
 - `lightcraft-relight` (`effects`, `tests_pattern`): gel colours, pattern windows, blur with distance, blinds, the subject blocking.
 - `lightcraft-relight` (`tests_shadow`): blockers, penumbra, thin poles, smooth change with depth, a drag's coarse march.
 - `lightcraft-relight` (`tests_beam`): shafts, Forward Scatter, Dust, hidden behind a subject, a drag matches the release.
+- `lightcraft-relight` (`tests_edge_glow`): the snap goes to a real outline just behind it; the core hides behind the edge, the halo is round whatever depth lies behind it, the rim faces the light and fades along the outline, the glow goes on past a roof's slopes; open sky far from a sun gets little haze.
 - `lightcraft-relight` (`overlay`, `probe`): contour lines; subject depth.
 - `lightcraft-depth`: input sizes, broken output, f16 and f32, hostile headers.
 - `lightcraft-develop` (`relight`, `relight_effects`, `relight_kinds`, `relight_presets`): save only non-defaults, lenient reads, ranges, the first form, subject placing.

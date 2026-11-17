@@ -596,3 +596,60 @@ fn a_visible_source_is_a_bright_point_in_the_lights_colour_and_the_shading_does_
     let key = |s: &DevelopSettings| relight::shading_key(input, &relight::scene_of(s).unwrap(), 0.0, false);
     assert_eq!(key(&with(0.0, 0.75)), key(&with(70.0, 0.75)));
 }
+
+#[test]
+fn edge_glow_adds_light_round_the_edge_in_the_lights_colour_and_at_0_changes_no_byte() {
+    // (issue #332) a warm light behind the near square's right edge (the wall's depth), on a black photo, no haze: the glow is
+    // light added on top, so the black beside the edge brightens in the light's warm colour, more there than far from it, and a
+    // light with no Edge Glow renders as before
+    let black = Rgb32f::from_fn(W, H, |_, _| [0.0; 3]);
+    let info = info();
+    let req = RenderRequest::fit(W, H);
+    let render_with = |glow: f64| {
+        let mut s = DevelopSettings::default();
+        s.relight.lights[0] = LightSettings { amount: 20.0, warmth: 100.0, x: 0.46, y: 0.45, depth: 100.0, ..LightSettings::default() };
+        assert!(lightcraft_develop::relight::set(&mut s, "relight.edgeGlow", glow));
+        (render(&black, &info, &s, &req).image, s)
+    };
+    let ((none, plain), (lit, glowing)) = (render_with(0.0), render_with(80.0));
+    let (at_edge, far) = ((0.45, 0.4, 0.55, 0.5), (0.85, 0.8, 0.95, 0.9));
+    assert!(mean(&none, at_edge) < 3.0, "{}", mean(&none, at_edge));
+    assert!(
+        mean(&lit, at_edge) > mean(&none, at_edge) + 20.0 && mean(&lit, at_edge) > 3.0 * mean(&lit, far),
+        "{} {}",
+        mean(&lit, at_edge),
+        mean(&lit, far)
+    );
+    let [r, g, b] = mean_rgb(&lit, at_edge);
+    assert!(r > g && g > b && r > 1.15 * b, "not the light's warm colour: {r} {g} {b}");
+    // (not saved at 0, so an edit made before it reads as it was; set, it is saved and read back)
+    assert!(serde_json::to_value(&plain.relight).unwrap()["lights"][0].get("edgeGlow").is_none());
+    assert_eq!(serde_json::to_value(&glowing.relight).unwrap()["lights"][0]["edgeGlow"], serde_json::json!(80.0));
+    // and the glow is not in the shading: its slider makes the same shading (so the kept lobes and shading are reused)
+    let (scene_a, scene_b) = (relight::scene_of(&plain).unwrap(), relight::scene_of(&glowing).unwrap());
+    let input = info.relight.as_ref().unwrap();
+    assert_eq!(relight::shading_key(input, &scene_a, 0.0, false), relight::shading_key(input, &scene_b, 0.0, false));
+}
+
+#[test]
+fn a_drag_after_a_release_takes_the_full_beam_with_the_glow_not_the_coarse_sum_kept_from_before() {
+    // (issue #332) a hazy sun with a glow past an edge: the sum of beam and glow is kept under the beam's own key. A drag whose
+    // rays were not kept makes coarse ones; once the release has kept the full rays, the next drag takes the full beam, and its
+    // sum must be that one, not the coarse sum made first
+    relight::forget();
+    let field = info().relight.unwrap().field;
+    let input = relight::Input { field: field.clone(), key: 33_201 };
+    let mut s = DevelopSettings::default();
+    s.relight.lights[0] = LightSettings { amount: 50.0, x: 0.3, y: 0.45, depth: 90.0, ..LightSettings::default() };
+    s.relight.lights[0].kind.which = 2.0;
+    s.relight.lights[0].effects.haze = 60.0;
+    s.relight.lights[0].effects.edge_glow = 50.0;
+    let scene = relight::scene_of(&s).unwrap();
+    let planes = |draft: bool| {
+        let lit = relight::beams_of(&input, &scene, draft);
+        field.plane_at(&lit[0].plane, 120, 80, &|x, y| (x / 120.0, y / 80.0))
+    };
+    let (first_drag, release, next_drag) = (planes(true), planes(false), planes(true));
+    assert!(first_drag != release, "a coarse beam and a full one are alike here: the test shows nothing");
+    assert!(next_drag == release, "the drag after the release got the coarse sum");
+}

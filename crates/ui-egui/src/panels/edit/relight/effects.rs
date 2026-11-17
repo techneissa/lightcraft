@@ -3,7 +3,9 @@
 //! Scale, Rotation, Softness and Openness) and Haze. Each is a control by id, `relight.<n>.gelHue`, `.gelStrength`,
 //! `.pattern`, `.patternScale`, `.patternRotation`, `.patternSoftness`, `.patternOpen` (issue #316) and `.haze`, and with
 //! some haze (issue #317) its `.scatter` and `.dust`; then (issue #331) `.mist` with its `.mistHeight`, and with haze or mist
-//! `.fade` (Distance Fade). Also (issue #334) `.source`, the light's own source as a bright point.
+//! `.fade` (Distance Fade). Also (issue #334) `.source`, the light's own source as a bright point. A light with a place also has Edge Glow, `.edgeGlow` (issue #332: the
+//! light sits just behind an edge and glows round it; a drag of the light then snaps it to the nearest depth edge), and with
+//! some of it `.sunburst`.
 
 use egui::{Align2, Color32, Sense, Stroke, vec2};
 use lightcraft_develop::DevelopSettings;
@@ -138,5 +140,14 @@ pub(super) fn effects(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSet
     if d.relight.lights.get(sel).is_some_and(|l| l.kind.has_place() && l.kind.index() != 2) {
         heading(ui, "Source");
         control(app, ui, d, &format!("relight.{sel}.source"), true);
+    }
+    // (issue #332: a light that shines from behind an edge)
+    if d.relight.lights.get(sel).is_some_and(|l| l.kind.has_place()) {
+        heading(ui, "Edge");
+        control(app, ui, d, &format!("relight.{sel}.edgeGlow"), true);
+        // (Sunburst is shown with Edge Glow or on its own: a light with only Sunburst keeps its slider)
+        if e.edge_glow > 0.0 || e.sunburst > 0.0 {
+            control(app, ui, d, &format!("relight.{sel}.sunburst"), true);
+        }
     }
 }

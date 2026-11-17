@@ -3,7 +3,8 @@
 //! `lightcraft_relight::Effects`. Issue #315 adds Shadows (how much the photo's own things block the light), issue #316 the pattern's openness (`patternOpen`). A light with none
 //! writes nothing, so an edit made before them reads and saves as it was; a block with some reads leniently like the rest (a number that is not a number takes its default).
 //! Issue #317 makes Haze a medium the light's beams show in, and adds Forward Scatter and Dust to it; issue #331 adds Mist,
-//! Mist Height and Distance Fade.
+//! Mist Height and Distance Fade. Issue #332 adds Edge Glow and
+//! Sunburst: light that spills round an edge the light sits just behind.
 
 use serde::{Deserialize, Serialize};
 
@@ -76,6 +77,12 @@ pub struct LightEffects {
     /// How bright and big the light's own source shows as a point when it is inside the photo (issue #334), 0..100.
     #[serde(skip_serializing_if = "zero")]
     pub source: f64,
+    /// How much light spills round an edge the light sits just behind (issue #332), 0 (none) .. 100.
+    #[serde(skip_serializing_if = "zero")]
+    pub edge_glow: f64,
+    /// How strong the few faint rays at that edge are (issue #332), 0 (none) .. 100.
+    #[serde(skip_serializing_if = "zero")]
+    pub sunburst: f64,
 }
 
 impl Default for LightEffects {
@@ -96,13 +103,15 @@ impl Default for LightEffects {
             mist_height: 30.0,
             fade: 0.0,
             source: 0.0,
+            edge_glow: 0.0,
+            sunburst: 0.0,
         }
     }
 }
 
 impl LightEffects {
     /// The number the control `field` (`gelHue`, `gelStrength`, `pattern`, `patternScale`, `patternRotation`,
-    /// `patternSoftness`, `patternOpen`, `haze`, `scatter`, `dust`, `shadows`, `mist`, `mistHeight`, `fade`) names.
+    /// `patternSoftness`, `patternOpen`, `haze`, `scatter`, `dust`, `shadows`, `mist`, `mistHeight`, `fade`, `source`, `edgeGlow`, `sunburst`) names.
     pub(crate) fn field(&mut self, field: &str) -> Option<&mut f64> {
         Some(match field {
             "gelHue" => &mut self.gel_hue,
@@ -120,6 +129,8 @@ impl LightEffects {
             "mistHeight" => &mut self.mist_height,
             "fade" => &mut self.fade,
             "source" => &mut self.source,
+            "edgeGlow" => &mut self.edge_glow,
+            "sunburst" => &mut self.sunburst,
             _ => return None,
         })
     }
@@ -136,6 +147,7 @@ impl LightEffects {
             "gelHue": self.gel_hue, "gelStrength": self.gel_strength, "pattern": self.pattern, "patternScale": self.pattern_scale,
             "patternRotation": self.pattern_rotation, "patternSoftness": self.pattern_softness, "patternOpen": self.pattern_open, "haze": self.haze,
             "scatter": self.scatter, "dust": self.dust, "shadows": self.shadows, "mist": self.mist, "mistHeight": self.mist_height, "fade": self.fade, "source": self.source,
+            "edgeGlow": self.edge_glow, "sunburst": self.sunburst,
         })
     }
 }

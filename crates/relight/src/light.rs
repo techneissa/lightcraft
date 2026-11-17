@@ -272,6 +272,19 @@ impl Lobe {
     pub fn bytes(&self) -> usize {
         self.m.len() * 4
     }
+
+    /// This plane and `other` added up (planes of light added on top: a beam and a glow past an edge, issue #332); `other` of
+    /// another size adds nothing. Kept under the most a beam adds.
+    pub fn added(&self, other: &Lobe) -> Lobe {
+        let same = self.m.len() == other.m.len();
+        let m = self
+            .m
+            .iter()
+            .enumerate()
+            .map(|(i, a)| (a + if same { other.m.get(i).copied().unwrap_or(0.0) } else { 0.0 }).clamp(0.0, crate::beam::ADDED_MAX))
+            .collect();
+        Lobe { m }
+    }
 }
 
 /// One light's share in a [`Shading`]: its lobe, its strength (the Amount times [`PEAK_GAIN`], as in [`Rig`]) and its

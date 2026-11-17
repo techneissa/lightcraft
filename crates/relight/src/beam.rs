@@ -58,16 +58,34 @@ pub const G_MAX: f32 = 0.85;
 /// the isotropic phase's `1 / 4π` over a grey surface's `0.18 / π`).
 const BEAM_SCALE: f32 = 1.0 / (4.0 * 0.18);
 /// The most a beam adds to a pixel, in units of 18 % grey per unit of the light's strength (keeps every number finite).
-const ADDED_MAX: f32 = 16.0;
+pub(crate) const ADDED_MAX: f32 = 16.0;
 /// How far apart (log depth) two neighbouring pixels may be and still be on the same surface to the smoothing.
 const SAME: f32 = 0.08;
 /// How much a line counts towards a pixel at a depth it saw only behind near things.
 const BLIND: f32 = 0.02;
 /// The air begins at this share of the nearest thing's depth.
 const START: f32 = 0.3;
+/// A line of sight to a sun's haze whose surface lies this share of the way to the farthest depth or more looks at open sky (issue #332).
+const SKY_SHARE: f32 = 0.97;
+/// How much of its haze the open sky keeps away from the light: the sky has no depth, so the line to it holds the haze's whole
+/// depth, and at the same weight everywhere that was a flat veil over a blue sky. The air in front of the sky scatters the
+/// light mostly onward, so the sky glows round the light and stays its own colour away from it: it keeps this much of the haze
+/// where the phase function is at its average (0 of the way from average to its peak, straight at the light), growing to all of
+/// it by `SKY_REACH.1` of the way (a Forward Scatter of 0 makes every way alike: the floor everywhere).
+const SKY_FLOOR: f32 = 0.1;
+const SKY_REACH: (f32, f32) = (0.3, 0.85);
 /// The dust's cells over the photo's farthest depth, and how far the density varies at Dust 100 (± this).
 const DUST_CELLS: f32 = 14.0;
 const DUST_SWING: f32 = 0.85;
+
+/// How much of its haze the open sky has in the direction where the phase function for asymmetry `g` is `phase` (see
+/// [`SKY_FLOOR`]): by how far `phase` is on the way from 1 (the average) to the function's peak `(1 + g) / (1 − g)²`.
+fn sky_weight(phase: f32, g: f32) -> f32 {
+    let peak = (1.0 + g) / ((1.0 - g) * (1.0 - g)).max(1e-6);
+    let along = if peak > 1.0 + 1e-3 { ((phase - 1.0) / (peak - 1.0)).clamp(0.0, 1.0) } else { 0.0 };
+    let t = ((along - SKY_REACH.0) / (SKY_REACH.1 - SKY_REACH.0)).clamp(0.0, 1.0);
+    SKY_FLOOR + (1.0 - SKY_FLOOR) * t * t * (3.0 - 2.0 * t)
+}
 
 fn unit(v: f64, d: f32) -> f32 {
     if v.is_finite() { v.clamp(0.0, 1.0) as f32 } else { d }
@@ -225,7 +243,7 @@ fn dust_at(q: [f32; 3], cell: f32, dust: f32) -> f32 {
 
 impl Field {
     /// The camera's extent per unit depth on each axis.
-    fn lens(&self) -> (f32, f32) {
+    pub(crate) fn lens(&self) -> (f32, f32) {
         let long = self.width.max(self.height).max(1) as f32;
         (LENS * self.width as f32 / long, LENS * self.height as f32 / long)
     }
@@ -334,6 +352,8 @@ impl Field {
         let from = far.as_ref().unwrap_or(rig);
         // (the light's pattern cuts the air too: blinds and window panes make shafts of their shape)
         let pattern = self.air_pattern(rig, from, e);
+        // (only a sun lights the air everywhere alike, so only its haze fogs a far surface evenly; a lamp's own fall-off limits that)
+        let sun = matches!(from.shape, Shape::Sun { .. });
         let lines: Vec<Option<Path>> = (0..gw * gh).into_par_iter().map(|j| self.line(r, line_pixel(r, stride, j % gw, j / gw), from, n)).collect();
         // (each line's air step by step, and whether the step lies in front of the line's own surface)
         let mut air = vec![0f32; gw * gh * n];
@@ -343,6 +363,7 @@ impl Field {
             let (x, y) = line_pixel(r, stride, j % gw, j / gw);
             let own = r.z.get(y * w + x).copied().unwrap_or(0.0) * path.len;
             let to_camera = path.e.map(|c| -c);
+            let sky = sun && own >= SKY_SHARE * path.sb;
             for (k, (o, f)) in out.iter_mut().zip(ok.iter_mut()).enumerate() {
                 let (d, ds) = path.step(k);
                 *f = d <= own;
@@ -353,6 +374,7 @@ impl Field {
                 }
                 let seen = f32::from(shafts.vis.get(j * n + k).copied().unwrap_or(255)) / 255.0;
                 let scatter = phase(g, dot(travel(from, q), to_camera));
+                let scatter = if sky { scatter * sky_weight(scatter, g) } else { scatter };
                 let v = ds * medium.at(q) * dust_at(q, cell, dust) * (-medium.depth(path.e, d)).exp() * light * seen * scatter;
                 *o = if v.is_finite() { v.max(0.0) } else { 0.0 };
             }

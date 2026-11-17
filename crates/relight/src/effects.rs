@@ -93,6 +93,10 @@ pub struct Effects {
     /// How bright and big the light's own source shows as a point when it sits inside the photo (issue #334,
     /// [`Field::source`]), 0 (not at all) .. 1.
     pub source: f64,
+    /// How much light spills round an edge the light sits just behind (issue #332, [`crate::edge`]), 0 (none) .. 1.
+    pub edge_glow: f64,
+    /// How strong the few faint rays at that edge are (issue #332), 0 (none) .. 1.
+    pub sunburst: f64,
 }
 
 impl Default for Effects {
@@ -113,6 +117,8 @@ impl Default for Effects {
             mist_height: 0.3,
             fade: 0.0,
             source: 0.0,
+            edge_glow: 0.0,
+            sunburst: 0.0,
         }
     }
 }
@@ -423,6 +429,8 @@ mod tests {
             mist_height: f64::NAN,
             fade: -3.0,
             source: f64::NAN,
+            edge_glow: f64::NAN,
+            sunburst: f64::INFINITY,
         };
         for w in [f64::NAN, 9.0, -9.0] {
             let (t, s) = bad.light_colour(w);
