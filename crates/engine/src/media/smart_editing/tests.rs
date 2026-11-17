@@ -202,26 +202,29 @@ fn spots_masks_and_crops_line_up_on_both_sources() {
     let _ = std::fs::remove_dir_all(src);
 }
 
-/// A real raw from the corpus (`raw/*.arw`), when there is one: the same comparison.
+/// A real raw from the corpus, when it is there: the same comparison. One named file, not whichever ARW the folder
+/// lists first: the proxy's JPEG and the original's own pixels differ by the file's noise, so a noisy or compressed
+/// one (a33: median dE00 1.05, a7m3-compressed: 1.01, measured on this Mac) sits above the 1.0 the clean scene
+/// meets, and the folder's order changes whenever the corpus grows.
 #[test]
 fn a_render_from_the_smart_preview_matches_a_real_raw() {
     let root = std::env::var_os("LIGHTCRAFT_CORPUS")
         .map(PathBuf::from)
         .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus"));
-    let arw = std::fs::read_dir(root.join("raw"))
-        .ok()
-        .and_then(|d| d.flatten().map(|e| e.path()).find(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("arw"))));
-    let Some(arw) = arw else {
-        lightcraft_testkit::skip!(Corpus, "no ARW in {}", root.join("raw").display());
+    let arw = root.join("raw").join("arw-sony-a7m4-14bit.arw");
+    if !arw.is_file() {
+        lightcraft_testkit::skip!(Corpus, "{} absent", arw.display());
         return;
-    };
+    }
     let lib = temp("arw-lib");
     let mut s = Session::new().with_fs();
     s.open_library(&lib, false).unwrap();
     let r = s.execute("library.import", &json!({"paths": [arw.to_string_lossy()]})).unwrap();
     let id = PhotoId(r["imported"][0].as_u64().expect("the ARW imports"));
-    s.execute("library.smartPreviews", &json!({})).unwrap();
+    // the edit first: on a Mac a new raw starts on macOS Colour and `edited()` is on Camera Matching, and a smart
+    // preview built for one colour is not used for the other (`smart::is_local_stale`)
     s.set_develop(id, edited(), "edited").unwrap();
+    s.execute("library.smartPreviews", &json!({})).unwrap();
     let (original, _) = render(&mut s, id, 1200, false);
     let (proxy, from_proxy) = render(&mut s, id, 1200, true);
     assert!(from_proxy);
