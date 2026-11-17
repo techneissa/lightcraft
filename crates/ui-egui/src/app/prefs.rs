@@ -1,5 +1,8 @@
 use super::{LightcraftApp, SCREEN_PROFILE, theme};
 
+/// Seconds between two reads of the screen's colour profile (a profile changed in the system is followed within it).
+const SCREEN_PROFILE_EVERY: f64 = 10.0;
+
 impl LightcraftApp {
     /// The system's appearance: the host's answer first, then egui's (none: unknown).
     pub fn system_theme(&self, ctx: &egui::Context) -> Option<egui::Theme> {
@@ -95,16 +98,20 @@ impl LightcraftApp {
     }
 
     /// While no display profile is chosen, show previews through the profile of the screen the
-    /// window is on (`services.screen_profile`), read about once a second so moving the window to
-    /// another screen is followed. Without the service (or a profile) the display is sRGB.
+    /// window is on (`services.screen_profile`), read every [`SCREEN_PROFILE_EVERY`] seconds while the window is
+    /// showing (moving it to another screen makes frames anyway). Without the service (or a profile) the display is
+    /// sRGB.
     fn follow_screen_profile(&mut self, ctx: &egui::Context) {
         if self.services.screen_profile.is_none() {
             return;
         }
-        // an idle window draws no frames: wake up to read again, so a profile changed in Windows is followed
-        ctx.request_repaint_after(std::time::Duration::from_secs(1));
+        // an idle window draws no frames: wake up to read again, so a profile changed in Windows is followed (not while
+        // the window is hidden or minimized: nobody sees it, and the first frame after reads it again)
+        if ctx.input(|i| i.viewport().visible() != Some(false)) {
+            ctx.request_repaint_after(std::time::Duration::from_secs_f64(SCREEN_PROFILE_EVERY));
+        }
         let now = self.tick_now();
-        if self.screen_profile_read.is_some_and(|t| (0.0..1.0).contains(&(now - t))) {
+        if self.screen_profile_read.is_some_and(|t| (0.0..SCREEN_PROFILE_EVERY).contains(&(now - t))) {
             return;
         }
         self.screen_profile_read = Some(now);
