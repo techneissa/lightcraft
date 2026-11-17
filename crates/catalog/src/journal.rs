@@ -88,6 +88,7 @@
 //! | fork 19 | Relight's low mist and distance fade (issue #331) | each light in `DevelopSettings.fork_relight.lights` may hold `mist`, `mistHeight` and `fade` (0..100), left out at their defaults (0, 30 and 0); an older build refuses the library |
 //! | fork 20 | Relight's softbox aim (#335, `fork/relight.md`) | each light in `DevelopSettings.fork_relight.lights` may hold `boxAimH` and `boxAimV` (a softbox's tilt from straight in, degrees −80..80, towards the right and towards the bottom), left out at their default 0; an older build refuses the library |
 //! | fork 21 | Relight's stage beams (#334, `fork/relight.md`) | each light in `DevelopSettings.fork_relight.lights` may hold `spotSharp` (0 or 1, a sharp-edged cone) and `source` (Visible Source, 0..100), left out at their default 0, and `spotAngle` may be as low as 2 (5 before); an older build refuses the library |
+//! | fork 22 | Relight's underwater look (#333, `fork/relight.md`) | `DevelopSettings.fork_relight` may hold a `water` object (`amount`, `clarity`, `tint`, `shafts`, `caustics`, each left out at its default 0, 50, 0, 0, 0) beside `lights` and `darken`; an older build refuses the library |
 //!
 //! Versions 1–14 are `"format":"lightcraft-catalog"` (13 means the official Lens Blur or the fork's camera
 //! profiles; their fields differ, so either reads exactly); the fork writes `"format":"lightcraft-catalog-fork"` from

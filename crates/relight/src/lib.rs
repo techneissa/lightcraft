@@ -15,6 +15,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod beam;
+mod caustics;
 pub mod effects;
 pub mod field;
 pub mod filter;
@@ -48,6 +49,9 @@ mod tests_rim;
 mod tests_shadow;
 #[cfg(test)]
 mod tests_stage;
+#[cfg(test)]
+mod tests_water;
+pub mod water;
 
 pub use beam::{Beam, Shafts};
 pub use effects::{Effects, Pattern, PatternPlanes};
@@ -56,6 +60,7 @@ pub use kinds::{Fill, LightKind, MIN_ANGLE, Rim, Softbox, Spot, Sun};
 pub use light::{Light, Lobe, MAX_LIGHTS, Part, Planes, Rig, Shade, Shading, Split, ambient, warmth_tilt};
 pub use mist::{Ground, Medium};
 pub use shadow::Visibility;
+pub use water::{Water, WaterPlanes};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {

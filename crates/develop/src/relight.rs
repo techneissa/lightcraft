@@ -13,6 +13,7 @@ use serde_json::Value;
 use crate::controls::{ControlSpec, Section, Track};
 use crate::relight_effects::LightEffects;
 pub use crate::relight_kinds::KindSettings;
+pub use crate::relight_water::WaterSettings;
 
 /// The settings' JSON key (a namespace of this fork's own: a build without it ignores it).
 pub const KEY: &str = "fork_relight";
@@ -72,11 +73,14 @@ pub struct Relight {
     pub lights: Vec<LightSettings>,
     /// Advanced: how much the rest of the photo darkens, 0..100.
     pub darken: f64,
+    /// The underwater look (issue #333); written only while it is off its default.
+    #[serde(skip_serializing_if = "WaterSettings::is_default")]
+    pub water: WaterSettings,
 }
 
 impl Default for Relight {
     fn default() -> Self {
-        Self { lights: vec![LightSettings::default()], darken: 0.0 }
+        Self { lights: vec![LightSettings::default()], darken: 0.0, water: WaterSettings::default() }
     }
 }
 
@@ -144,7 +148,7 @@ impl<'de> Deserialize<'de> for Relight {
         let mut r = match object.get("lights") {
             None => {
                 let Ok(s) = serde_json::from_value::<Stored>(v.clone()) else { return Ok(Relight::default()) };
-                Relight { lights: vec![s.light(&v)], darken: s.darken }
+                Relight { lights: vec![s.light(&v)], darken: s.darken, water: WaterSettings::default() }
             }
             Some(Value::Array(list)) => {
                 let lights: Vec<LightSettings> = list
@@ -156,7 +160,9 @@ impl<'de> Deserialize<'de> for Relight {
                     None => 0.0,
                     Some(n) => n.as_f64().unwrap_or(0.0),
                 };
-                Relight { lights, darken }
+                // (a block that is not a water block reads as no water, the lights kept)
+                let water = object.get("water").and_then(|w| serde_json::from_value::<WaterSettings>(w.clone()).ok()).unwrap_or_default();
+                Relight { lights, darken, water }
             }
             Some(_) => return Ok(Relight::default()),
         };
@@ -168,7 +174,7 @@ impl<'de> Deserialize<'de> for Relight {
 impl LightSettings {
     /// Every number within its control's range.
     pub fn sanitize(&mut self) {
-        for spec in all().filter(|c| c.id != "relight.darken") {
+        for spec in all().filter(|c| !is_shared_spec(c)) {
             if let Some(v) = spec.id.strip_prefix("relight.").and_then(|f| self.field(f)) {
                 *v = spec.clamp(*v);
             }
@@ -209,9 +215,10 @@ impl Relight {
         *self == Relight::default()
     }
 
-    /// Whether it changes the photo (the section's eye aside): some light has an Amount, or Darken Surroundings is up.
+    /// Whether it changes the photo (the section's eye aside): some light has an Amount, Darken Surroundings is up, or the
+    /// underwater look is.
     pub fn is_on(&self) -> bool {
-        self.darken > 0.0 || self.lights.iter().any(|l| l.amount > 0.0)
+        self.darken > 0.0 || self.water.is_on() || self.lights.iter().any(|l| l.amount > 0.0)
     }
 
     /// Every number within its control's range, one to [`MAX_LIGHTS`] lights.
@@ -222,6 +229,7 @@ impl Relight {
         }
         self.lights.iter_mut().for_each(LightSettings::sanitize);
         self.darken = SPECS.iter().find(|c| c.id == "relight.darken").map_or(self.darken, |c| c.clamp(self.darken));
+        self.water.sanitize();
     }
 
     /// The number control `id` names (`relight.amount`: the first light's; `relight.<n>.amount`: light `n`'s;
@@ -230,6 +238,10 @@ impl Relight {
         let (n, field) = split(id)?;
         if field == "darken" {
             return if n.is_none() { Some(&mut self.darken) } else { None };
+        }
+        // (the underwater look is the photo's: `relight.water`, never `relight.<n>.water`)
+        if crate::relight_water::is_shared(field) {
+            return if n.is_none() { self.water.field(field) } else { None };
         }
         self.lights.get_mut(n.unwrap_or(0))?.field(field)
     }
@@ -322,7 +334,12 @@ pub fn specs() -> impl Iterator<Item = &'static ControlSpec> {
 
 /// The per-light specs and `relight.darken`, then the light type's (issue #300).
 fn all() -> impl Iterator<Item = &'static ControlSpec> {
-    SPECS.iter().chain(crate::relight_kinds::SPECS)
+    SPECS.iter().chain(crate::relight_kinds::SPECS).chain(crate::relight_water::SPECS)
+}
+
+/// Whether `c` is the photo's own control (Darken Surroundings, the underwater look), not a light's.
+fn is_shared_spec(c: &ControlSpec) -> bool {
+    c.id.strip_prefix("relight.").is_some_and(crate::relight_water::is_shared)
 }
 
 /// The spec of control `id`, when it is one of Relight's: `relight.amount` (the first light's; the engine's commands
@@ -330,7 +347,7 @@ fn all() -> impl Iterator<Item = &'static ControlSpec> {
 /// `relight.darken`.
 pub fn find(id: &str) -> Option<&'static ControlSpec> {
     let (n, field) = split(id)?;
-    if field == "darken" && n.is_some() {
+    if crate::relight_water::is_shared(field) && n.is_some() {
         return None;
     }
     all().find(|c| c.id.strip_prefix("relight.") == Some(field))
@@ -340,7 +357,7 @@ pub fn find(id: &str) -> Option<&'static ControlSpec> {
 /// other id (`relight.darken`, `relight.2.amount`, not Relight's).
 pub fn for_light(id: &str, selected: usize) -> Option<String> {
     match split(id)? {
-        (None, field) if field != "darken" => Some(format!("relight.{selected}.{field}")),
+        (None, field) if !crate::relight_water::is_shared(field) => Some(format!("relight.{selected}.{field}")),
         _ => None,
     }
 }
@@ -349,7 +366,7 @@ pub fn for_light(id: &str, selected: usize) -> Option<String> {
 pub fn light_instances(s: &crate::DevelopSettings) -> Vec<(String, &'static ControlSpec)> {
     let mut out = Vec::new();
     for n in 0..s.relight.lights.len() {
-        for spec in all().filter(|c| c.id != "relight.darken") {
+        for spec in all().filter(|c| !is_shared_spec(c)) {
             if let Some(field) = spec.id.strip_prefix("relight.") {
                 out.push((format!("relight.{n}.{field}"), spec));
             }
@@ -363,6 +380,9 @@ pub fn get(s: &crate::DevelopSettings, id: &str) -> Option<f64> {
     let (n, field) = split(id)?;
     if field == "darken" {
         return n.is_none().then_some(s.relight.darken);
+    }
+    if crate::relight_water::is_shared(field) {
+        return if n.is_none() { s.relight.water.clone().field(field).map(|v| *v) } else { None };
     }
     s.relight.lights.get(n.unwrap_or(0))?.value(field)
 }
@@ -418,7 +438,7 @@ mod tests {
         let v = json!({"fork_relight": {"amount": 70.0, "softness": 20.0, "warmth": 15.0, "x": 0.6, "y": 0.4, "depth": 55.0, "darken": 35.0, "wrap": 10.0}});
         let r = DevelopSettings::from_json(&v).unwrap().relight;
         let one = LightSettings { amount: 70.0, softness: 20.0, warmth: 15.0, x: 0.6, y: 0.4, depth: 55.0, wrap: 10.0, ..LightSettings::default() };
-        assert_eq!(r, Relight { lights: vec![one], darken: 35.0 });
+        assert_eq!(r, Relight { lights: vec![one], darken: 35.0, water: WaterSettings::default() });
         // a field that was left out keeps its default
         let r = DevelopSettings::from_json(&json!({"fork_relight": {"amount": 70.0}})).unwrap().relight;
         assert_eq!(r.lights, vec![LightSettings { amount: 70.0, ..LightSettings::default() }]);
@@ -453,7 +473,7 @@ mod tests {
         assert_eq!(r.lights.len(), MAX_LIGHTS);
         assert_eq!(r.lights[7].amount, 7.0);
         // a list longer than the cap built in code is cut where it is sanitized
-        let mut r = Relight { lights: vec![LightSettings::default(); 20], darken: f64::NAN };
+        let mut r = Relight { lights: vec![LightSettings::default(); 20], darken: f64::NAN, water: WaterSettings::default() };
         r.sanitize();
         assert_eq!(r.lights.len(), MAX_LIGHTS);
     }
@@ -557,5 +577,39 @@ mod tests {
         // and the first form is what an older log's patches name
         let flat = first_form(&serde_json::to_value(&photo.relight).unwrap()).unwrap();
         assert_eq!((flat["amount"].as_f64(), flat["x"].as_f64(), flat.get("lights")), (Some(40.0), Some(0.6), None));
+    }
+
+    #[test]
+    fn water_is_the_photos_own_left_out_while_default_and_read_back_leniently() {
+        // a block without water saves exactly as before: no `water` key; the photo's water takes `relight.water` …, never a light's index
+        let mut s = DevelopSettings::default();
+        assert!(set(&mut s, "relight.amount", 60.0));
+        assert!(s.to_json()[KEY].get("water").is_none());
+        assert!(!s.relight.water.is_on() && s.relight.is_on());
+        let mut w = DevelopSettings::default();
+        assert!(set(&mut w, "relight.water", 70.0) && set(&mut w, "relight.waterTint", -40.0) && set(&mut w, "relight.waterCaustics", 30.0));
+        assert!(!set(&mut w, "relight.0.water", 1.0) && !set(&mut w, "relight.1.waterClarity", 1.0));
+        assert!(w.relight.is_on() && w.relight.lights[0].amount == 0.0);
+        let v = w.to_json();
+        assert_eq!(v[KEY]["water"], json!({"amount": 70.0, "tint": -40.0, "caustics": 30.0}), "only what differs from its default");
+        assert_eq!(DevelopSettings::from_json(&v).unwrap().relight, w.relight);
+        assert_eq!((get(&w, "relight.waterClarity"), get(&w, "relight.0.water")), (Some(50.0), None));
+        assert_eq!(for_light("relight.water", 1), None);
+        assert!(light_instances(&w).iter().all(|(id, _)| !id.contains("water")));
+        // hostile numbers stay in range; a water block that is not one reads as none; a reset puts it back
+        let r = DevelopSettings::from_json(
+            &json!({"fork_relight": {"lights": [{"amount": 10.0}], "water": {"amount": 1e9, "tint": -1e9, "clarity": "x"}}}),
+        )
+        .unwrap()
+        .relight;
+        assert!(r.water.is_default() && r.lights[0].amount == 10.0, "{:?}", r.water);
+        let r = DevelopSettings::from_json(&json!({"fork_relight": {"lights": [{"amount": 10.0}], "water": {"amount": 1e9, "tint": -1e9}}}))
+            .unwrap()
+            .relight;
+        assert_eq!((r.water.amount, r.water.tint), (100.0, -100.0));
+        let r = DevelopSettings::from_json(&json!({"fork_relight": {"lights": [], "water": 5}})).unwrap().relight;
+        assert!(r.is_default());
+        w.reset_section(crate::Section::Relight);
+        assert!(w.relight.is_default());
     }
 }

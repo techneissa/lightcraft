@@ -16,6 +16,7 @@ use super::{Icon, LightcraftApp, Tokens, control, register};
 mod effects;
 mod kinds;
 mod presets;
+mod water;
 
 /// How near a press must be to a handle to take it (points).
 const HIT: f32 = 12.0;
@@ -158,6 +159,8 @@ pub(super) fn relight(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSet
     }
     // (issue #302: the light's gel, pattern and haze)
     effects::effects(app, ui, d, sel);
+    // (issue #333: the photo's own underwater look)
+    water::water(app, ui, d);
 }
 
 /// The photo's lights, one row each (a click selects it), and Add Light, Duplicate and Delete under them.

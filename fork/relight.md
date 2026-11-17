@@ -22,6 +22,9 @@ History is in the PRs: #288 (the feature), #294 (⌥ overlay), #299 (several lig
   Distance Fade (`c·T + air·(1−T)`) is one per photo: the strongest light's numbers, coloured by the far tenth plus 30 % of the lights with fade on; sent as an exposure plane plus a `fork_added` plane.
 - **Stage beams (#334):** Cone Angle goes down to 2°. Sharp Cone (`spotSharp`) makes the cone's edge a fixed ramp of a tenth of the angle (a hard pool on a wall; in haze a beam's flank is round whatever the edge). Visible Source (`source`, 0–100) draws a light inside the photo as a bright point (`source.rs`), hidden by nearer things, none for a Sun / Window, as a mask plane of its own (`Beamed::slot`) kept per place and strength, not in the shading key.
   Concert Backlight, Two-Colour Stage and Single Spotlight are built-in presets with soft cones and high Wrap: a hard edge on a face reads as a sticker, and the depth map's noise makes a near-hard pool jagged there.
+- **Underwater (#333):** `relight.water` (Water Depth), `.waterClarity`, `.waterTint`, `.waterShafts`, `.waterCaustics` belong to the photo (`fork_relight.water`, format 22). Colour is per-colour transmittance and a veil of the water's light, as the finish stage's exposure, temperature, tint and added-light planes (`water.rs`, `water_masks`; ids `WATER_IDS`), so no new final-stage term.
+  Caustics and shafts come from a sun behind and above the scene through the internal `Pattern::Caustics` (`caustics.rs`: ridged noise read in plan on a surface above the camera, sharp near it and softer deeper); the shafts are a beam-only light (`Scene::beams`, `Beamed::shafts`).
+  Limits: the camera is taken as level; the water's distance is the photo's relative depth range, not metres; a photo with no bright far water gets few shafts.
 - **Presets (#301):** a Light Presets flyout lists ten built-ins (Rembrandt, Butterfly, Split, Rim + Fill, Golden-Hour Window, Neon Two-Tone, Candle and the three stage ones, #334) and your own.
   Presets are written for a face and placed round the photo's subject (`Subject::place`, depth from `Field::depth_in`). Applying is one undo step. Yours live in the library's `presets.json` (`relightPresets`), read entry by entry.
   `relight.applyPreset` returns `{applied: false, finding: true}` while depth is still found.
@@ -48,17 +51,18 @@ History is in the PRs: #288 (the feature), #294 (⌥ overlay), #299 (several lig
 - 19: `mist`, `mistHeight`, `fade` (#331).
 - 20: `boxAimH`, `boxAimV` (#335). An aimed patterned softbox's far source sits along −n from its pool's middle, so shaft and shadows follow the aim.
 - 21: `spotSharp`, `source` (#334).
+- 22: `water` (#333).
 - If the upgrade snapshot cannot be written, the journal appends nothing (`Journal::upgrade_pending`) and retries before the next append.
 
 ## Own files
 
-- Crates: `crates/depth/`, `crates/relight/` (`light`, `field`, `overlay`, `effects`, `shadow`, `occluder`, `kinds`, `rim`, `projector`, `pattern`, `leaves`, `probe`, `beam`, `tests_*`, `examples/relight.rs`).
-- develop: `relight.rs`, `relight_effects.rs`, `relight_kinds.rs`, `relight_presets.rs`.
-- pipeline: `relight.rs`, `tests_relight.rs`, `tests_relight_presets.rs`.
+- Crates: `crates/depth/`, `crates/relight/` (`light`, `field`, `overlay`, `effects`, `shadow`, `occluder`, `kinds`, `rim`, `projector`, `pattern`, `leaves`, `probe`, `beam`, `water`, `caustics`, `tests_*`, `examples/relight.rs`).
+- develop: `relight.rs`, `relight_effects.rs`, `relight_kinds.rs`, `relight_presets.rs`, `relight_water.rs`.
+- pipeline: `relight.rs`, `tests_relight.rs`, `tests_relight_presets.rs`, `tests_relight_water.rs`.
 - gpu: `tests/it/relight.rs`.
 - engine: `relight.rs`, `relight_presets.rs`, `relight_presets/tests.rs`,
 - engine: (more) `cmd/relight.rs`, `cmd/relight_presets.rs`.
-- ui-egui: `panels/edit/relight.rs`, `panels/edit/relight/{effects,kinds,presets}.rs`, `panels/detail/relight.rs`, `panels/detail/relight/kinds.rs`, `panels/detail/relight_alt.rs`, `state/relight_look.rs`.
+- ui-egui: `panels/edit/relight.rs`, `panels/edit/relight/{effects,kinds,presets,water}.rs`, `panels/detail/relight.rs`, `panels/detail/relight/kinds.rs`, `panels/detail/relight_alt.rs`, `state/relight_look.rs`.
 - Docs: `fork/relight.md`, `fork/tests.d/relight.txt`.
 
 ## Hooks in official files

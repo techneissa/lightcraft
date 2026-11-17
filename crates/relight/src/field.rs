@@ -59,7 +59,7 @@ pub struct Field {
     /// surface facing the camera, and can be slightly positive for a floor under the lens.
     normal: Vec<[f32; 3]>,
     /// The guide's log2 luminance relative to 18 % grey.
-    lum: Vec<f32>,
+    pub(crate) lum: Vec<f32>,
     /// Log depth (relative) of the nearest and the farthest of the photo: the 2nd and 98th percentiles.
     pub near: f32,
     pub far: f32,
