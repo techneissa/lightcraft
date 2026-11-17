@@ -89,7 +89,8 @@ fn a_fill_lifts_shadows_clearly_and_fades_out_above_mid_grey() {
 #[test]
 fn a_bigger_softbox_is_softer_and_reaches_further() {
     let f = wall(0.0);
-    let boxed = |s: f64| Light { x: 0.2, softness: 0.5, ..light(LightKind::Softbox(Softbox { width: s, height: s, rotation: 0.0 })) };
+    let boxed =
+        |s: f64| Light { x: 0.2, softness: 0.5, ..light(LightKind::Softbox(Softbox { width: s, height: s, rotation: 0.0, aim_h: 0.0, aim_v: 0.0 })) };
     // (the ratio of the gain, in stops, a point far across the wall gets to the most lit point's)
     let share = |s: f64| {
         let rig = f.rig(&boxed(s), 0.0, 0.0);
@@ -106,8 +107,8 @@ fn hostile_numbers_give_finite_planes_for_every_type() {
     let kinds = [
         LightKind::Spot(Spot { aim_x: bad, aim_y: f64::INFINITY, angle: -9.0, edge: 1e9 }),
         LightKind::Sun(Sun { azimuth: f64::NEG_INFINITY, elevation: bad }),
-        LightKind::Softbox(Softbox { width: bad, height: -3.0, rotation: f64::INFINITY }),
-        LightKind::Softbox(Softbox { width: 1e300, height: 1e300, rotation: 1e300 }),
+        LightKind::Softbox(Softbox { width: bad, height: -3.0, rotation: f64::INFINITY, aim_h: 0.0, aim_v: 0.0 }),
+        LightKind::Softbox(Softbox { width: 1e300, height: 1e300, rotation: 1e300, aim_h: 0.0, aim_v: 0.0 }),
         LightKind::Rim(Rim { width: bad, angle: f64::INFINITY, one_sided: 1e9 }),
         LightKind::Rim(Rim { width: -1e300, angle: bad, one_sided: bad }),
         LightKind::Fill(Fill { near: f64::INFINITY }),

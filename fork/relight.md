@@ -9,7 +9,7 @@ History is in the PRs: #288 (the feature), #294 (⌥ overlay), #299 (several lig
   Handles sit on the photo; one drag is one undo step. Light is added in scene-linear light, with a roll-off to a ceiling and deep shadows held back. Full Amount is three stops at the most lit point.
 - **Several lights (#299):** up to 8, at least 1. Each has its own place, depth and colour. Darken Surroundings is one value for the section. Selection is UI state (`Session::relight_selected`), not saved.
   Each light's lobe (`Field::lobe`) is made once and kept (`pipeline::relight::LOBES`, `forget()` frees them). Lobes add up in linear light; colour planes follow each light's tilt. A scroll over a handle moves its depth.
-- **Types (#300):** Point (the original formula, byte for byte), Spot (aim, Cone Angle, Cone Edge), Sun / Window (azimuth, elevation, no fall-off), Softbox (rectangle at a depth), Rim (outline of depth steps, #319: `rimAngle`, `rimSide`), Fill (lifts shadows).
+- **Types (#300):** Point (the original formula, byte for byte), Spot (aim, Cone Angle, Cone Edge), Sun / Window (azimuth, elevation, no fall-off), Softbox (rectangle at a depth, aimed by `boxAimH`/`boxAimV` ±80°, #335), Rim (outline of depth steps, #319: `rimAngle`, `rimSide`), Fill (lifts shadows).
   A type only changes each pixel's `falloff · facing`, so everything after that is shared. `KindSettings::read` is lenient: an unknown kind reads as a Point.
 - **Effects (#302):** a gel (hue and strength, five named gels) goes through the finish stage's own temperature and tint, so the CPU and GPU cannot differ. The colour planes are four: warm, cool, magenta, green. A pattern (blinds, panes, leaves, dapple) and Haze are per light.
 - **Patterns (#316):** a projector throws the pattern into its window or gap and onto the first surface the light reaches. Edges blur with distance (`projector.rs`, `pattern.rs`, `leaves.rs`).
@@ -44,6 +44,7 @@ History is in the PRs: #288 (the feature), #294 (⌥ overlay), #299 (several lig
 - 17: `patternOpen`.
 - 18: `scatter`, `dust`.
 - 19: `mist`, `mistHeight`, `fade` (#331).
+- 20: `boxAimH`, `boxAimV` (#335). An aimed patterned softbox's far source sits along −n from its pool's middle, so shaft and shadows follow the aim.
 - If the upgrade snapshot cannot be written, the journal appends nothing (`Journal::upgrade_pending`) and retries before the next append.
 
 ## Own files
@@ -77,7 +78,7 @@ History is in the PRs: #288 (the feature), #294 (⌥ overlay), #299 (several lig
 - A blocker's own far side can be a little grainy for a big light.
 - A spot's hard edge (Cone Edge 0) leaks a little onto steep, evenly toned walls (the edge refit).
 - A Rim follows the depth model's edges, so on a staircase it also lights step edges.
-- A softbox has no aim, so its beam is seen end-on. A follow-up needs an aim.
+- Window panes pass only their open share, so a pane-cut beam is fainter (about 0.55 of a plain softbox's, a sun through panes 0.26 of a plain sun's); the air itself isn't dimmed.
 - A drag of a sun in haze is a little softer than the release.
 - A surface that is no blocker counts as a quarter of its depth deep to the air's rays, and open sky is far and bright, so a dark sky or a thick wall can let light through.
 - The air has no shadow from beyond the picture's edges.

@@ -33,6 +33,10 @@ pub struct KindSettings {
     pub box_width: f64,
     pub box_height: f64,
     pub box_rotation: f64,
+    /// Softbox: where it shines (issue #335), two tilts from straight into the scene in degrees: towards the photo's
+    /// right (negative: left) and towards its bottom (negative: up). 0 and 0 is the straight-in softbox.
+    pub box_aim_h: f64,
+    pub box_aim_v: f64,
     /// Rim: how far it reaches into things (0..100), the side of the photo it comes from (degrees: 0 from above, 90 from
     /// the right, −90 from the left) and how one-sided it is (0 the whole outline .. 100 only that side).
     pub rim_width: f64,
@@ -55,6 +59,8 @@ impl Default for KindSettings {
             box_width: 0.3,
             box_height: 0.2,
             box_rotation: 0.0,
+            box_aim_h: 0.0,
+            box_aim_v: 0.0,
             rim_width: 50.0,
             rim_angle: 90.0,
             rim_side: 0.0,
@@ -64,7 +70,7 @@ impl Default for KindSettings {
 }
 
 /// `(json key, control field)` of each number, besides `kind`.
-const NUMBERS: [(&str, &str); 13] = [
+const NUMBERS: [(&str, &str); 15] = [
     ("spotAimX", "spotAimX"),
     ("spotAimY", "spotAimY"),
     ("spotAngle", "spotAngle"),
@@ -74,6 +80,8 @@ const NUMBERS: [(&str, &str); 13] = [
     ("boxWidth", "boxWidth"),
     ("boxHeight", "boxHeight"),
     ("boxRotation", "boxRotation"),
+    ("boxAimH", "boxAimH"),
+    ("boxAimV", "boxAimV"),
     ("rimWidth", "rimWidth"),
     ("rimAngle", "rimAngle"),
     ("rimSide", "rimSide"),
@@ -108,6 +116,8 @@ impl KindSettings {
             "boxWidth" => &mut self.box_width,
             "boxHeight" => &mut self.box_height,
             "boxRotation" => &mut self.box_rotation,
+            "boxAimH" => &mut self.box_aim_h,
+            "boxAimV" => &mut self.box_aim_v,
             "rimWidth" => &mut self.rim_width,
             "rimAngle" => &mut self.rim_angle,
             "rimSide" => &mut self.rim_side,
@@ -191,6 +201,8 @@ pub static SPECS: &[ControlSpec] = &[
     spec("relight.boxWidth", "Box Width", (0.02, 1.5, 0.3), (0.001, 3)),
     spec("relight.boxHeight", "Box Height", (0.02, 1.5, 0.2), (0.001, 3)),
     spec("relight.boxRotation", "Box Angle", (-180.0, 180.0, 0.0), (1.0, 0)),
+    spec("relight.boxAimH", "Box Aim Left to Right", (-80.0, 80.0, 0.0), (1.0, 0)),
+    spec("relight.boxAimV", "Box Aim Top to Bottom", (-80.0, 80.0, 0.0), (1.0, 0)),
     spec("relight.rimWidth", "Rim Width", (0.0, 100.0, 50.0), (1.0, 0)),
     spec("relight.rimAngle", "Rim Direction", (-180.0, 180.0, 90.0), (1.0, 0)),
     spec("relight.rimSide", "Rim One-Sided", (0.0, 100.0, 0.0), (1.0, 0)),

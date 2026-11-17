@@ -230,7 +230,9 @@ fn kind_of(k: &KindSettings) -> LightKind {
     match k.index() {
         1 => LightKind::Spot(Spot { aim_x: k.spot_aim_x, aim_y: k.spot_aim_y, angle: k.spot_angle, edge: k.spot_edge / 100.0 }),
         2 => LightKind::Sun(Sun { azimuth: k.sun_azimuth, elevation: k.sun_elevation }),
-        3 => LightKind::Softbox(Softbox { width: k.box_width, height: k.box_height, rotation: k.box_rotation }),
+        3 => {
+            LightKind::Softbox(Softbox { width: k.box_width, height: k.box_height, rotation: k.box_rotation, aim_h: k.box_aim_h, aim_v: k.box_aim_v })
+        }
         4 => LightKind::Rim(Rim { width: k.rim_width / 100.0, angle: k.rim_angle, one_sided: k.rim_side / 100.0 }),
         5 => LightKind::Fill(Fill { near: k.fill_near / 100.0 }),
         _ => LightKind::Point,
@@ -332,7 +334,7 @@ fn shadow_amount(light: &Light, effects: &Effects) -> Option<f64> {
 
 /// The key naming `light`'s shadow visibility on `input`'s field: only what the march reads. A point and a spot: the
 /// place, depth and Softness (the size); a sun: its direction and Softness, not a place; a softbox: the place, depth and
-/// rectangle, not Softness; a patterned lamp (`far`, marched from `Field::pattern_rig`) adds its Wrap and Softness. Not
+/// rectangle and aim, not Softness; a patterned lamp (`far`, marched from `Field::pattern_rig`) adds its Wrap and Softness. Not
 /// Amount, a spot's cone or the shadow amount. `coarse`: the drag's march.
 fn shadow_key(input: &Input, light: &Light, coarse: bool, far: bool) -> u64 {
     hashed(|h| {
@@ -346,7 +348,12 @@ fn shadow_key(input: &Input, light: &Light, coarse: bool, far: bool) -> u64 {
         match light.kind {
             LightKind::Sun(s) => std::hash::Hash::hash(&(b'u', bits(s.azimuth), bits(s.elevation), bits(light.softness)), h),
             LightKind::Softbox(b) => {
-                std::hash::Hash::hash(&(b'b', bits(light.x), bits(light.y), bits(light.depth), (bits(b.width), bits(b.height), bits(b.rotation))), h)
+                std::hash::Hash::hash(&(b'b', bits(light.x), bits(light.y), bits(light.depth), (bits(b.width), bits(b.height), bits(b.rotation))), h);
+                // (an aimed box turns its rectangle, and a patterned one marches from along its aim, issue #335; an unaimed one
+                // hashes as it did before)
+                if b.aim_h != 0.0 || b.aim_v != 0.0 {
+                    std::hash::Hash::hash(&(b'a', bits(b.aim_h), bits(b.aim_v)), h);
+                }
             }
             _ => std::hash::Hash::hash(&(b'p', bits(light.x), bits(light.y), bits(light.depth), bits(light.softness)), h),
         }
@@ -716,5 +723,40 @@ mod tests {
         let (b, b_fresh) = marched(&lamp(1.0));
         assert!(a != b_fresh, "Wrap doesn't move the far source here: the test shows nothing");
         assert!(b == b_fresh, "the shadows of Wrap 0 were kept for Wrap 1");
+    }
+
+    #[test]
+    fn a_softboxs_shadows_follow_its_aim() {
+        // (issue #335) the shadow key holds the aim: another aim is another key, and a patterned softbox, which marches its shadows
+        // from a far source along its aim, gets another shadow map (the kept one of the other aim used to be reused)
+        let (w, h) = (160, 100);
+        let lz = (0..w * h).map(|i| if (60..100).contains(&(i % w)) && (30..80).contains(&(i / w)) { -0.6 } else { 0.0 }).collect();
+        let lum = (0..w * h).map(|i| if i % w < w / 2 { -1.0 } else { -3.0 }).collect();
+        let field = Arc::new(Field::from_parts(w, h, lz, lum).unwrap());
+        let input = Input { field: field.clone(), key: 335_101 };
+        let effects = Effects { pattern: Pattern::Blinds, ..Effects::default() };
+        let boxed = |aim_h: f64| Light {
+            x: 0.2,
+            y: 0.3,
+            depth: 0.1,
+            amount: 0.8,
+            softness: 0.4,
+            warmth: 0.0,
+            wrap: 0.4,
+            kind: LightKind::Softbox(Softbox { width: 0.2, height: 0.2, rotation: 0.0, aim_h, aim_v: 0.0 }),
+        };
+        for far in [false, true] {
+            assert_ne!(shadow_key(&input, &boxed(0.0), false, far), shadow_key(&input, &boxed(50.0), false, far));
+        }
+        let marched = |l: &Light| {
+            let far = field.pattern_rig(&field.rig(l, 0.0, 0.0), &effects).unwrap();
+            let kept = shadows_for(&input, l, &far, false, true).unwrap();
+            let fresh = field.visibility(&far, l, false).unwrap();
+            (field.visibility_plane(&kept), field.visibility_plane(&fresh))
+        };
+        let (a, _) = marched(&boxed(0.0));
+        let (b, b_fresh) = marched(&boxed(50.0));
+        assert!(a != b_fresh, "the aim doesn't move the far source here: the test shows nothing");
+        assert!(b == b_fresh, "the shadows of the straight-in softbox were kept for the aimed one");
     }
 }

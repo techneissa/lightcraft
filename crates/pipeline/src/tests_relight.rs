@@ -531,3 +531,31 @@ fn two_lights_with_distance_fade_dim_far_things_as_one_does() {
     assert!(a > 0.05, "the far wall doesn't fade: {a}");
     assert!((a - b).abs() < 1e-6, "one light {a}, two lights {b}");
 }
+
+#[test]
+fn a_softbox_aim_reaches_the_light_the_shadows_the_pattern_and_the_beam() {
+    // (issue #335) the same photo, key and light with and without an aim renders another picture however the light is
+    // dressed: each kept lobe, shadow, ray set and beam is keyed by the aim. The unaimed ones are rendered first, so a key
+    // that left the aim out would hand the aimed one the kept unaimed picture
+    let (src, info) = wall();
+    let req = RenderRequest::fit(W, H);
+    let boxed = |aim_h: f64, f: &dyn Fn(&mut lightcraft_develop::relight_effects::LightEffects)| {
+        let mut s = wall_with(&[(0.5, 0.0)]);
+        let l = &mut s.relight.lights[0];
+        (l.kind.which, l.kind.box_aim_h) = (3.0, aim_h);
+        f(&mut l.effects);
+        s
+    };
+    let dressings: [(&str, &dyn Fn(&mut lightcraft_develop::relight_effects::LightEffects)); 4] =
+        [("plain", &|_| {}), ("shadows", &|e| e.shadows = 80.0), ("pattern", &|e| e.pattern = 2.0), ("haze", &|e| e.haze = 60.0)];
+    for (name, f) in dressings {
+        let straight = render(&src, &info, &boxed(0.0, f), &req).image;
+        let aimed = render(&src, &info, &boxed(55.0, f), &req).image;
+        assert!(straight.data != aimed.data, "{name}: the aim changed nothing");
+    }
+    // an unaimed softbox saves no aim, and an aimed one reads back
+    let json = serde_json::to_value(&boxed(0.0, &|_| {}).relight).unwrap();
+    assert!(json["lights"][0].get("boxAimH").is_none() && json["lights"][0].get("boxAimV").is_none(), "{json}");
+    let back = DevelopSettings::from_json(&boxed(55.0, &|_| {}).to_json()).unwrap();
+    assert_eq!(back.relight.lights[0].kind.box_aim_h, 55.0);
+}

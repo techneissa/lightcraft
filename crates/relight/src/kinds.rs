@@ -52,6 +52,11 @@ pub struct Softbox {
     pub height: f64,
     /// Rotation in the photo's plane, in degrees (clockwise as the photo shows it).
     pub rotation: f64,
+    /// Where it shines (issue #335), as two tilts from straight into the scene, in degrees (−80..80): `aim_h` towards the
+    /// photo's right (negative: left), `aim_v` towards its bottom (negative: up). 0 and 0 is the straight-in softbox every
+    /// edit saved before this has; the rectangle turns with the aim, and the light it gives narrows towards it.
+    pub aim_h: f64,
+    pub aim_v: f64,
 }
 
 /// A [`LightKind::Rim`].
@@ -104,7 +109,8 @@ impl LightKind {
             LightKind::Point => vec![0],
             LightKind::Spot(s) => vec![1, b(s.aim_x), b(s.aim_y), b(s.angle), b(s.edge)],
             LightKind::Sun(s) => vec![2, b(s.azimuth), b(s.elevation)],
-            LightKind::Softbox(s) => vec![3, b(s.width), b(s.height), b(s.rotation)],
+            LightKind::Softbox(s) if s.aim_h == 0.0 && s.aim_v == 0.0 => vec![3, b(s.width), b(s.height), b(s.rotation)],
+            LightKind::Softbox(s) => vec![3, b(s.width), b(s.height), b(s.rotation), b(s.aim_h), b(s.aim_v)],
             LightKind::Rim(r) => vec![4, b(r.width), b(r.angle), b(r.one_sided)],
             LightKind::Fill(f) => vec![5, b(f.near)],
         }
@@ -134,6 +140,10 @@ pub(crate) enum Shape {
         hh: f32,
         /// The squared radius each sample of the box shines as (keeps a pixel on the box finite).
         eps2: f32,
+        /// The way it shines (a unit vector; `[0, 0, 1]` straight into the scene) and how narrow its light is about it
+        /// (the exponent of the cosine off the axis: 1 for the straight-in box, more the more it is turned, issue #335).
+        n: [f32; 3],
+        focus: f32,
     },
     Rim {
         /// The rim over the field, made when a pixel first asks for it ([`crate::rim`]).
@@ -166,6 +176,33 @@ fn norm(v: [f32; 3], fallback: [f32; 3]) -> [f32; 3] {
 
 fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+/// The direction a softbox with tilts `aim_h` and `aim_v` (degrees) shines in, in camera space: `[0, 0, 1]` for no tilt.
+pub fn box_normal(aim_h: f64, aim_v: f64) -> [f32; 3] {
+    let t = |v: f64| finite(v, -AIM_MAX, AIM_MAX, 0.0).to_radians().tan() as f32;
+    norm([t(aim_h), t(aim_v), 1.0], [0.0, 0.0, 1.0])
+}
+
+/// The farthest a softbox is turned from straight in (degrees, each way).
+pub const AIM_MAX: f64 = 80.0;
+
+/// `v` turned the way that takes `[0, 0, 1]` to unit vector `n` (the shortest turn).
+fn tilted(v: [f32; 3], n: [f32; 3]) -> [f32; 3] {
+    let a = [-n[1], n[0], 0.0];
+    let cross = |u: [f32; 3], w: [f32; 3]| [u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0]];
+    let (av, aav) = (cross(a, v), cross(a, cross(a, v)));
+    let k = 1.0 / (1.0 + n[2]).max(1e-3);
+    [v[0] + av[0] + aav[0] * k, v[1] + av[1] + aav[1] * k, v[2] + av[2] + aav[2] * k]
+}
+
+/// How much of a softbox's light leaves towards the point `-d/r` of the scene (`d` the way to the box's sample, `r` its
+/// length): the cosine off the box's axis, to the power `focus`. For the straight-in box that is `-d.z / r`, as it
+/// always was.
+#[inline]
+fn box_emit(n: [f32; 3], focus: f32, d: [f32; 3], r: f32) -> f32 {
+    let e = (-dot(n, d) / r).max(0.0);
+    if focus == 1.0 { e } else { e.powf(focus) }
 }
 
 /// The sun's direction towards it in camera space (x right, y down, z away from the camera) for `azimuth` and
@@ -204,13 +241,21 @@ impl Shape {
                 let hw = 0.5 * w as f32 * field.width as f32 / long * LENS * z;
                 let hh = 0.5 * h as f32 * field.height as f32 / long * LENS * z;
                 let cell = |half: f32| half / BOX_GRID as f32;
+                // (the rectangle turns with its aim; an unaimed one is left exactly as it always was)
+                let n = box_normal(b.aim_h, b.aim_v);
+                let (mut tx, mut ty) = ([cos, sin, 0.0], [-sin, cos, 0.0]);
+                if n != [0.0, 0.0, 1.0] {
+                    (tx, ty) = (tilted(tx, n), tilted(ty, n));
+                }
                 Shape::Box {
                     c: pos,
-                    tx: [cos, sin, 0.0],
-                    ty: [-sin, cos, 0.0],
+                    tx,
+                    ty,
                     hw,
                     hh,
                     eps2: 1.5 * (cell(hw) * cell(hw) + cell(hh) * cell(hh)) + 1e-6,
+                    n,
+                    focus: 1.0 + FOCUS * (1.0 - n[2]),
                 }
             }
             LightKind::Rim(r) => {
@@ -231,6 +276,12 @@ impl Shape {
 
 /// Points across a softbox on a side (`BOX_GRID²` samples per pixel).
 const BOX_GRID: usize = 4;
+#[cfg(test)]
+pub(crate) const BOX_GRID_TEST: usize = BOX_GRID;
+
+/// How much narrower an aimed softbox's light gets with its turn: its cosine's exponent is `1 + FOCUS · (1 − cos turn)`
+/// (a box turned 45° gives 2.2, one turned 80°, 4.3).
+const FOCUS: f32 = 4.0;
 
 /// How much of a pixel's light a fill gives at full Amount: under half the point light's, so the Amount reads about as
 /// strongly as the other types' (a fill spreads over the whole shadow, a point over a pool: at full Amount about 1.5 stops
@@ -269,18 +320,18 @@ pub(crate) fn light_at(field: &Field, rig: &Rig, (u, v): (f32, f32), lz: f32, n:
             let t = ((dot(n, *to) + rig.wrap) / (1.0 + rig.wrap)).clamp(0.0, 1.0);
             1.0 - rig.face + rig.face * t.powf(*sharp)
         }
-        Shape::Box { c, tx, ty, hw, hh, eps2 } => {
+        Shape::Box { c, tx, ty, hw, hh, eps2, n: bn, focus } => {
             let mut sum = 0.0f32;
             for j in 0..BOX_GRID {
                 let b = ((j as f32 + 0.5) / BOX_GRID as f32 * 2.0 - 1.0) * hh;
                 for i in 0..BOX_GRID {
                     let a = ((i as f32 + 0.5) / BOX_GRID as f32 * 2.0 - 1.0) * hw;
-                    let s = [c[0] + tx[0] * a + ty[0] * b, c[1] + tx[1] * a + ty[1] * b, c[2]];
+                    let s = [c[0] + tx[0] * a + ty[0] * b, c[1] + tx[1] * a + ty[1] * b, c[2] + tx[2] * a + ty[2] * b];
                     let d = [s[0] - p[0], s[1] - p[1], s[2] - p[2]];
                     let r2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
                     let r = r2.sqrt().max(1e-9);
                     // (the box faces into the scene: a surface in front of it gets nothing from it)
-                    let emit = (-d[2] / r).max(0.0);
+                    let emit = box_emit(*bn, *focus, d, r);
                     sum += facing(rig.face, rig.wrap, dot(n, d) / r) * emit * (eps2 / (eps2 + r2));
                 }
             }
@@ -329,16 +380,16 @@ pub(crate) fn air_light(rig: &Rig, q: [f32; 3]) -> f32 {
             falloff(rig.pos) * smooth(*cos_outer, *cos_inner, dot(from, *dir)) * rig.peak() / point_peak
         }
         Shape::Sun { .. } => 1.0,
-        Shape::Box { c, tx, ty, hw, hh, eps2 } => {
+        Shape::Box { c, tx, ty, hw, hh, eps2, n: bn, focus } => {
             let mut sum = 0.0f32;
             for j in 0..BOX_GRID {
                 let b = ((j as f32 + 0.5) / BOX_GRID as f32 * 2.0 - 1.0) * hh;
                 for i in 0..BOX_GRID {
                     let a = ((i as f32 + 0.5) / BOX_GRID as f32 * 2.0 - 1.0) * hw;
-                    let d = [c[0] + tx[0] * a + ty[0] * b - q[0], c[1] + tx[1] * a + ty[1] * b - q[1], c[2] - q[2]];
+                    let d = [c[0] + tx[0] * a + ty[0] * b - q[0], c[1] + tx[1] * a + ty[1] * b - q[1], c[2] + tx[2] * a + ty[2] * b - q[2]];
                     let r2 = dot(d, d);
                     // (the box shines into the scene, as on the surfaces)
-                    let emit = (-d[2] / r2.sqrt().max(1e-9)).max(0.0);
+                    let emit = box_emit(*bn, *focus, d, r2.sqrt().max(1e-9));
                     sum += emit * (eps2 / (eps2 + r2));
                 }
             }

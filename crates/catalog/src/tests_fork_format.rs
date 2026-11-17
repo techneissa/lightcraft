@@ -664,6 +664,46 @@ fn a_fork_17_log_patch_of_a_hazy_patterned_light_is_applied_and_nothing_is_set_a
     );
 }
 
+/// Fork 20 (#335) made a fork 18 library an older one, but a fork 18 softbox has no aim: its log's patches replay as they are.
+/// A fork 18 snapshot with a hazy softbox and a log patch on its width opens with the patch applied, the softbox still
+/// straight in (aim 0 and 0), and nothing set aside; a softbox's aim written by this build reads back.
+#[test]
+fn a_fork_18_log_patch_of_a_softbox_is_applied_and_an_aim_reads_back() {
+    let mut c = Catalog::new();
+    let mut d = DevelopSettings::default();
+    d.relight.lights[0].amount = 60.0;
+    (d.relight.lights[0].kind.which, d.relight.lights[0].kind.box_width) = (3.0, 0.4);
+    d.relight.lights[0].effects.haze = 30.0;
+    let id = photo(&mut c, d.clone(), None);
+    let m = MemStore::new();
+    let (mut j, _, _) = Journal::open(Box::new(m.clone())).unwrap();
+    j.snapshot(&c).unwrap();
+    d.relight.lights[0].kind.box_width = 0.55;
+    j.append(&[Op::SetDevelop { id, settings: Arc::new(d.clone()), label: "Relight".into(), edited: None }]).unwrap();
+    drop(j);
+    let snap = String::from_utf8(m.get(SNAPSHOT).unwrap()).unwrap();
+    assert!(!snap.contains("boxAim"), "an unaimed softbox writes no aim");
+    let now = format!("\"version\":{}", crate::fork_format::VERSION);
+    assert!(snap.contains(&now), "{}", &snap[..snap.len().min(120)]);
+    m.set(SNAPSHOT, snap.replacen(&now, "\"version\":18", 1).into_bytes());
+    let (_, loaded, r) = Journal::open(Box::new(m.clone())).unwrap();
+    assert_eq!((r.replayed, r.failed), (1, 0), "{r:?}");
+    assert_eq!(r.upgraded_from, Some(18));
+    let k = &loaded.photo(id).unwrap().develop.relight.lights[0].kind;
+    assert_eq!((k.name(), k.box_width, k.box_aim_h, k.box_aim_v), ("softbox", 0.55, 0.0, 0.0), "the patch on the width was lost");
+    assert!(
+        !m.files.lock().unwrap().keys().any(|k| k.contains("damaged")),
+        "a log was set aside: {:?}",
+        m.files.lock().unwrap().keys().collect::<Vec<_>>()
+    );
+    // (an aimed softbox saved and read again)
+    d.relight.lights[0].kind.box_aim_h = 35.0;
+    d.relight.lights[0].kind.box_aim_v = -20.0;
+    let back = DevelopSettings::from_json(&d.to_json()).unwrap();
+    let k = &back.relight.lights[0].kind;
+    assert_eq!((k.box_aim_h, k.box_aim_v), (35.0, -20.0));
+}
+
 /// A store whose snapshot file can't be written while `full` is set (the log's small lines still fit).
 #[derive(Clone, Default)]
 struct FullForSnapshots {
