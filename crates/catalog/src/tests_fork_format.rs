@@ -593,6 +593,42 @@ fn a_fork_13_log_patch_of_a_light_with_a_gel_is_applied_and_nothing_is_set_aside
     );
 }
 
+/// Fork 16 (#315) made a fork 14 library an older one, but fork 14 already wrote the lights list with types: its log's
+/// patches name `lights` and replay as they are. A fork 14 snapshot with a spot as the second light and a log patch on that
+/// light opens with the patch applied, the type kept, no shadows, and nothing set aside.
+#[test]
+fn a_fork_14_log_patch_of_a_spot_light_is_applied_and_nothing_is_set_aside() {
+    let mut c = Catalog::new();
+    let mut d = DevelopSettings::default();
+    d.relight.lights[0].amount = 60.0;
+    let mut second = lightcraft_develop::relight::LightSettings { amount: 10.0, ..Default::default() };
+    second.kind.which = 1.0;
+    second.kind.spot_angle = 22.0;
+    d.relight.lights.push(second);
+    let id = photo(&mut c, d.clone(), None);
+    let m = MemStore::new();
+    let (mut j, _, _) = Journal::open(Box::new(m.clone())).unwrap();
+    j.snapshot(&c).unwrap();
+    d.relight.lights[1].amount = 70.0;
+    j.append(&[Op::SetDevelop { id, settings: Arc::new(d), label: "Relight".into(), edited: None }]).unwrap();
+    drop(j);
+    let snap = String::from_utf8(m.get(SNAPSHOT).unwrap()).unwrap();
+    let now = format!("\"version\":{}", crate::fork_format::VERSION);
+    assert!(snap.contains(&now), "{}", &snap[..snap.len().min(120)]);
+    m.set(SNAPSHOT, snap.replacen(&now, "\"version\":14", 1).into_bytes());
+    let (_, loaded, r) = Journal::open(Box::new(m.clone())).unwrap();
+    assert_eq!((r.replayed, r.failed), (1, 0), "{r:?}");
+    assert_eq!(r.upgraded_from, Some(14));
+    let lights = &loaded.photo(id).unwrap().develop.relight.lights;
+    assert_eq!((lights.len(), lights[0].amount, lights[1].amount), (2, 60.0, 70.0), "the patch on the second light was lost");
+    assert_eq!((lights[1].kind.name(), lights[1].kind.spot_angle, lights[1].effects.shadows), ("spot", 22.0, 0.0));
+    assert!(
+        !m.files.lock().unwrap().keys().any(|k| k.contains("damaged")),
+        "a log was set aside: {:?}",
+        m.files.lock().unwrap().keys().collect::<Vec<_>>()
+    );
+}
+
 /// A store whose snapshot file can't be written while `full` is set (the log's small lines still fit).
 #[derive(Clone, Default)]
 struct FullForSnapshots {

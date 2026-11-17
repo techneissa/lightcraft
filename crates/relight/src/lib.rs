@@ -19,19 +19,24 @@ pub mod field;
 pub mod filter;
 pub mod kinds;
 pub mod light;
+mod occluder;
 pub mod overlay;
 mod rim;
+pub mod shadow;
 #[cfg(test)]
 mod tests_edge;
 #[cfg(test)]
 mod tests_kinds;
 #[cfg(test)]
 mod tests_rim;
+#[cfg(test)]
+mod tests_shadow;
 
 pub use effects::{Effects, HAZE_GAIN, Pattern};
 pub use field::{DepthMap, Field, Kind};
 pub use kinds::{Fill, LightKind, Rim, Softbox, Spot, Sun};
 pub use light::{Light, Lobe, MAX_LIGHTS, Part, Planes, Rig, Shade, Shading, Split, ambient, warmth_tilt};
+pub use shadow::Visibility;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {

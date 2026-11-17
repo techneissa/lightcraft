@@ -315,12 +315,12 @@ fn the_same_effect_on_another_light_is_another_scene() {
     };
     let (first, second) = (with_gel_on(0), with_gel_on(1));
     let input = info.relight.as_ref().unwrap();
-    let key = |s: &DevelopSettings| relight::shading_key(input, &relight::scene_of(s).unwrap(), 0.0);
+    let key = |s: &DevelopSettings| relight::shading_key(input, &relight::scene_of(s).unwrap(), 0.0, false);
     assert_ne!(key(&first), key(&second), "the key doesn't say which light has the gel");
     // (and shading_for, asked in turn, gives each its own)
     for _ in 0..2 {
         for s in [&first, &second] {
-            let (k, _) = relight::shading_for(input, &relight::scene_of(s).unwrap(), 0.0);
+            let (k, _) = relight::shading_for(input, &relight::scene_of(s).unwrap(), 0.0, false);
             assert_eq!(k, key(s));
         }
     }
@@ -333,4 +333,52 @@ fn the_same_effect_on_another_light_is_another_scene() {
     assert!(redness(&a, left) > 1.5 * redness(&a, right), "the gel on the first light isn't on the left");
     let b = render(&src, &info, &second, &req).image;
     assert!(redness(&b, right) > 1.5 * redness(&b, left), "the gel on the second light isn't on the right");
+}
+
+#[test]
+fn shadows_darken_what_a_near_thing_hides_from_the_light_and_no_amount_changes_no_byte() {
+    // a sun from above and a little to the left, in front: the wall below the near square is in its shadow, the wall beside it
+    // is not
+    let (src, info) = (scene(W, H), info());
+    let req = RenderRequest::fit(W, H);
+    let side = |shadows: f64| {
+        let mut s = DevelopSettings::default();
+        s.relight.lights[0] = LightSettings { amount: 100.0, softness: 20.0, wrap: 100.0, ..LightSettings::default() };
+        for (field, v) in [("kind", 2.0), ("sunAzimuth", -25.0), ("sunElevation", 40.0), ("shadows", shadows)] {
+            assert!(lightcraft_develop::relight::set(&mut s, &format!("relight.{field}"), v));
+        }
+        s
+    };
+    let (plain, shadowed) = (render(&src, &info, &side(0.0), &req).image, render(&src, &info, &side(100.0), &req).image);
+    // an edit saved before shadows (a block with no `shadows` key) reads as Shadows 0 and renders to the byte as Shadows 0 does:
+    // the shadow code is not run for it, and the kept lobe has the key it had
+    let mut json = serde_json::to_value(&side(0.0).relight).unwrap();
+    assert!(json["lights"][0].as_object_mut().unwrap().remove("shadows").is_none(), "Shadows 0 is not saved");
+    let mut old = side(0.0);
+    old.relight = DevelopSettings::from_json(&serde_json::json!({ "fork_relight": json })).unwrap().relight;
+    assert_eq!(old.relight, side(0.0).relight);
+    assert_eq!(render(&src, &info, &old, &req).image.data, plain.data);
+    let (behind, beside) = ((0.45, 0.78, 0.6, 0.9), (0.8, 0.4, 0.95, 0.6));
+    assert!(
+        mean(&shadowed, behind) < mean(&plain, behind) - 3.0,
+        "below the square: {} lit, {} shadowed",
+        mean(&plain, behind),
+        mean(&shadowed, behind)
+    );
+    assert!(
+        (mean(&shadowed, beside) - mean(&plain, beside)).abs() < 1.5,
+        "beside it: {} lit, {} shadowed",
+        mean(&plain, beside),
+        mean(&shadowed, beside)
+    );
+    // a rim or a fill takes no shadow: the same render at any amount
+    for kind in [4.0, 5.0] {
+        let with = |shadows: f64| {
+            let mut s = side(shadows);
+            assert!(lightcraft_develop::relight::set(&mut s, "relight.kind", kind));
+            assert!(lightcraft_develop::relight::set(&mut s, "relight.shadows", shadows));
+            render(&src, &info, &s, &req).image.data
+        };
+        assert_eq!(with(0.0), with(100.0), "kind {kind}");
+    }
 }

@@ -54,7 +54,7 @@ pub struct Field {
     pub width: usize,
     pub height: usize,
     /// Log depth relative to the photo's median depth.
-    ln_z: Vec<f32>,
+    pub(crate) ln_z: Vec<f32>,
     /// Unit normals in camera space, on the camera's side of the surface (`n · view ray < 0`): z is negative for a
     /// surface facing the camera, and can be slightly positive for a floor under the lens.
     normal: Vec<[f32; 3]>,
@@ -67,6 +67,10 @@ pub struct Field {
     pub(crate) gi: Vec<f32>,
     /// The pixels near a step in depth, each with the mean and variance of `gi` over its window.
     pub(crate) band: Vec<(u32, f32, f32)>,
+    /// The field reduced for the shadow march (issue #315), made the first time a light asks.
+    pub(crate) reduced: std::sync::OnceLock<crate::shadow::Reduced>,
+    /// The same, coarser, for a drag's shadows.
+    pub(crate) reduced_draft: std::sync::OnceLock<crate::shadow::Reduced>,
 }
 
 /// The radius of the window the light is refined over along an edge (field pixels).
@@ -243,12 +247,30 @@ impl Field {
         let ln_z = deterrace(&ln_z, &gi, w, h);
         let normal = normals(&ln_z, w, h);
         let band = edge_band(&ln_z, &gi, w, h);
-        Ok(Field { width: w, height: h, ln_z, normal, lum, near, far, gi, band })
+        Ok(Field {
+            width: w,
+            height: h,
+            ln_z,
+            normal,
+            lum,
+            near,
+            far,
+            gi,
+            band,
+            reduced: std::sync::OnceLock::new(),
+            reduced_draft: std::sync::OnceLock::new(),
+        })
     }
 
     /// Memory held (bytes).
     pub fn bytes(&self) -> usize {
-        self.ln_z.len() * 4 + self.normal.len() * 12 + self.lum.len() * 4 + self.gi.len() * 4 + self.band.len() * 12
+        self.ln_z.len() * 4
+            + self.normal.len() * 12
+            + self.lum.len() * 4
+            + self.gi.len() * 4
+            + self.band.len() * 12
+            + self.reduced.get().map_or(0, crate::shadow::Reduced::bytes)
+            + self.reduced_draft.get().map_or(0, crate::shadow::Reduced::bytes)
     }
 
     /// Log depth, normal and guide luminance at normalized photo coordinates `(u, v)` (bilinear).
@@ -318,7 +340,19 @@ impl Field {
         let normal = normals(&ln_z, width, height);
         let (near, far) = (percentile(&ln_z, 0.02), percentile(&ln_z, 0.98));
         let band = edge_band(&ln_z, &gi, width, height);
-        Ok(Field { width, height, ln_z, normal, lum, near, far, gi, band })
+        Ok(Field {
+            width,
+            height,
+            ln_z,
+            normal,
+            lum,
+            near,
+            far,
+            gi,
+            band,
+            reduced: std::sync::OnceLock::new(),
+            reduced_draft: std::sync::OnceLock::new(),
+        })
     }
 }
 
