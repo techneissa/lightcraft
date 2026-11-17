@@ -454,7 +454,7 @@ mod tests {
         assert_eq!((get(&s, "relight.0.warmth"), get(&s, "relight.1.warmth")), (Some(-50.0), Some(0.0)));
         assert_eq!(for_light("relight.amount", 2).as_deref(), Some("relight.2.amount"));
         assert_eq!((for_light("relight.darken", 2), for_light("relight.1.amount", 2)), (None, None));
-        assert_eq!(light_instances(&s).len(), 52);
+        assert_eq!(light_instances(&s).len(), 56);
         assert_eq!(crate::controls::find("relight.1.wrap").map(|c| c.id), Some("relight.wrap"));
         assert!(crate::controls::find("relight.x.wrap").is_none() && crate::controls::find("relight.0.darken").is_none());
         // a section reset puts all the lights back

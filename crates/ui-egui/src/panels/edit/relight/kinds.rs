@@ -1,6 +1,6 @@
 //! Fork (issue #300, `fork/relight.md`): a light's type in the Relight section: the menu on its row, and which
 //! controls the selected light shows for its type (a spot's cone, a sun's direction and height, a softbox's size and
-//! turn, a rim's width, a fill's bias towards near things).
+//! turn, a rim's width and side, a fill's bias towards near things).
 
 use egui::{Align2, Rect, Sense, pos2};
 use lightcraft_develop::relight::LightSettings;
@@ -18,7 +18,7 @@ pub(super) fn fields(kind: usize) -> &'static [&'static str] {
         1 => &["amount", "softness", "warmth", "spotAngle", "spotEdge"],
         2 => &["amount", "softness", "warmth", "sunAzimuth", "sunElevation"],
         3 => &["amount", "warmth", "boxWidth", "boxHeight", "boxRotation"],
-        4 => &["amount", "warmth", "rimWidth"],
+        4 => &["amount", "warmth", "rimWidth", "rimAngle", "rimSide"],
         5 => &["amount", "softness", "warmth", "fillNear"],
         _ => &["amount", "softness", "warmth"],
     }

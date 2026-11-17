@@ -20,8 +20,11 @@ pub mod filter;
 pub mod kinds;
 pub mod light;
 pub mod overlay;
+mod rim;
 #[cfg(test)]
 mod tests_kinds;
+#[cfg(test)]
+mod tests_rim;
 
 pub use effects::{Effects, HAZE_GAIN, Pattern};
 pub use field::{DepthMap, Field, Kind};

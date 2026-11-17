@@ -157,7 +157,7 @@ fn kind_of(k: &KindSettings) -> LightKind {
         1 => LightKind::Spot(Spot { aim_x: k.spot_aim_x, aim_y: k.spot_aim_y, angle: k.spot_angle, edge: k.spot_edge / 100.0 }),
         2 => LightKind::Sun(Sun { azimuth: k.sun_azimuth, elevation: k.sun_elevation }),
         3 => LightKind::Softbox(Softbox { width: k.box_width, height: k.box_height, rotation: k.box_rotation }),
-        4 => LightKind::Rim(Rim { width: k.rim_width / 100.0 }),
+        4 => LightKind::Rim(Rim { width: k.rim_width / 100.0, angle: k.rim_angle, one_sided: k.rim_side / 100.0 }),
         5 => LightKind::Fill(Fill { near: k.fill_near / 100.0 }),
         _ => LightKind::Point,
     }
