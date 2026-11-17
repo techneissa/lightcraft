@@ -315,12 +315,12 @@ fn the_same_effect_on_another_light_is_another_scene() {
     };
     let (first, second) = (with_gel_on(0), with_gel_on(1));
     let input = info.relight.as_ref().unwrap();
-    let key = |s: &DevelopSettings| relight::shading_key(input, &relight::scene_of(s).unwrap(), 0.0);
+    let key = |s: &DevelopSettings| relight::shading_key(input, &relight::scene_of(s).unwrap(), 0.0, false);
     assert_ne!(key(&first), key(&second), "the key doesn't say which light has the gel");
     // (and shading_for, asked in turn, gives each its own)
     for _ in 0..2 {
         for s in [&first, &second] {
-            let (k, _) = relight::shading_for(input, &relight::scene_of(s).unwrap(), 0.0);
+            let (k, _) = relight::shading_for(input, &relight::scene_of(s).unwrap(), 0.0, false);
             assert_eq!(k, key(s));
         }
     }

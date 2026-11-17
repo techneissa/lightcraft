@@ -95,9 +95,9 @@ impl<T> Memo<T> {
 
 static MEMO: Memo<Shading> = Memo::new(KEEP);
 static LOBES: Memo<Lobe> = Memo::new(KEEP_LOBES);
-/// Shadow visibilities kept (issue #315): one per light, at a sixteenth of the field's size, so the Shadows slider and
+/// Shadow visibilities kept (issue #315): one per light (and one coarse one for a light being dragged), at a sixteenth of the field's size, so the Shadows slider and
 /// the light's other numbers don't march again; only a move of the light, its size or its type's numbers do.
-static SHADOWS: Memo<Visibility> = Memo::new(KEEP_LOBES);
+static SHADOWS: Memo<Visibility> = Memo::new(2 * KEEP_LOBES);
 
 /// Let go of every kept lobe and shading (the engine drops a photo's field: what was made from it goes too; they are
 /// made again by the next render). They are keyed by the field, so one photo's go with another's.
@@ -119,6 +119,13 @@ pub struct Scene {
     pub effects: Vec<Effects>,
     /// Darken Surroundings, 0..1.
     pub darken: f64,
+}
+
+impl Scene {
+    /// Whether some light casts shadows.
+    pub fn has_shadows(&self) -> bool {
+        self.lights.iter().zip(&self.effects).any(|(l, e)| shadow_amount(l, e).is_some())
+    }
 }
 
 /// The lights in settings `s` (`None`: Relight is off, or its section's eye is).
@@ -171,10 +178,12 @@ fn kind_of(k: &KindSettings) -> LightKind {
 }
 
 /// The light of a render of `info` with settings `s` (`None`: off, or the photo has no field yet).
-pub fn lit(info: &SourceInfo, s: &DevelopSettings) -> Option<Lit> {
+///
+/// `draft`: a drag's render. Its shadows are marched coarser (see [`shading_for`]); everything else is the same.
+pub fn lit(info: &SourceInfo, s: &DevelopSettings, draft: bool) -> Option<Lit> {
     let input = info.relight.as_ref()?;
     let scene = scene_of(s)?;
-    let (_, shading) = shading_for(input, &scene, s.light.exposure);
+    let (_, shading) = shading_for(input, &scene, s.light.exposure, draft);
     Some(Lit { shading })
 }
 
@@ -186,7 +195,7 @@ fn hashed(parts: impl FnOnce(&mut std::collections::hash_map::DefaultHasher)) ->
 
 /// The key naming `light`'s lobe on `input`'s field: its place, depth, Softness and Wrap and its pattern (not Amount,
 /// Warmth, a gel, haze or Darken Surroundings, which the lobe doesn't depend on).
-fn lobe_key(input: &Input, light: &Light, effects: &Effects, ev: f64) -> u64 {
+fn lobe_key(input: &Input, light: &Light, effects: &Effects, ev: f64, coarse: bool) -> u64 {
     hashed(|h| {
         std::hash::Hash::hash(&(0u8, input.key), h);
         for v in [light.x, light.y, light.depth, light.softness, light.wrap] {
@@ -201,8 +210,12 @@ fn lobe_key(input: &Input, light: &Light, effects: &Effects, ev: f64) -> u64 {
             std::hash::Hash::hash(&ev.to_bits(), h);
         }
         // (a light without shadows hashes as it did before them: the same key, the same kept lobe)
+        // (a coarse one, made for a drag, is another lobe)
         if shadow_amount(light, effects).is_some() {
             std::hash::Hash::hash(&(b's', effects.shadows.to_bits()), h);
+            if coarse {
+                std::hash::Hash::hash(&b'c', h);
+            }
         }
         // (a light without a pattern hashes as it did before patterns: the same key, the same kept lobe)
         if effects.pattern != Pattern::None {
@@ -216,7 +229,7 @@ fn lobe_key(input: &Input, light: &Light, effects: &Effects, ev: f64) -> u64 {
 
 /// The key naming the shading of `scene` on `input`'s field for a photo at exposure `ev`: the field and every number the
 /// shading depends on.
-pub fn shading_key(input: &Input, scene: &Scene, ev: f64) -> u64 {
+pub fn shading_key(input: &Input, scene: &Scene, ev: f64, draft: bool) -> u64 {
     hashed(|h| {
         std::hash::Hash::hash(&(1u8, input.key, ev.to_bits(), scene.darken.to_bits(), scene.lights.len()), h);
         for l in &scene.lights {
@@ -230,6 +243,10 @@ pub fn shading_key(input: &Input, scene: &Scene, ev: f64) -> u64 {
         }
         // each light's effects with the light's place in the list (a scene whose lights have none hashes as it did before
         // them; the same effect on another light is another scene)
+        // (a drag's shading, whose shadows are coarse, is not the full one; a scene with no shadows is the same for both)
+        if draft && scene.has_shadows() {
+            std::hash::Hash::hash(&b'd', h);
+        }
         for (i, e) in scene.effects.iter().enumerate().filter(|(_, e)| **e != Effects::default()) {
             std::hash::Hash::hash(&(i, e.gel_hue.to_bits(), e.gel_strength.to_bits(), e.pattern, e.scale.to_bits()), h);
             std::hash::Hash::hash(&(e.rotation.to_bits(), e.softness.to_bits(), e.haze.to_bits(), e.shadows.to_bits()), h);
@@ -243,48 +260,61 @@ fn shadow_amount(light: &Light, effects: &Effects) -> Option<f64> {
     (light.kind.takes_shadows() && effects.shadows.is_finite() && effects.shadows > 0.0).then(|| effects.shadows.min(1.0))
 }
 
-/// The key naming `light`'s shadow visibility on `input`'s field: what the march depends on (the light's place, depth and
-/// size, a sun's direction, a softbox's rectangle), not its Amount, a spot's cone or the shadow amount.
-fn shadow_key(input: &Input, light: &Light) -> u64 {
+/// The key naming `light`'s shadow visibility on `input`'s field: only what the march reads. A point and a spot: the
+/// place, depth and Softness (the size); a sun: its direction and Softness, not a place; a softbox: the place, depth and
+/// rectangle, not Softness. Not Amount, a spot's cone or the shadow amount. `coarse`: the drag's march.
+fn shadow_key(input: &Input, light: &Light, coarse: bool) -> u64 {
     hashed(|h| {
-        std::hash::Hash::hash(&(2u8, input.key), h);
-        for v in [light.x, light.y, light.depth, light.softness] {
-            std::hash::Hash::hash(&v.to_bits(), h);
-        }
+        std::hash::Hash::hash(&(2u8, input.key, coarse), h);
+        let bits = |v: f64| v.to_bits();
         match light.kind {
-            LightKind::Sun(_) | LightKind::Softbox(_) => std::hash::Hash::hash(&light.kind.key_bits(), h),
-            _ => std::hash::Hash::hash(&0u8, h),
+            LightKind::Sun(s) => std::hash::Hash::hash(&(b'u', bits(s.azimuth), bits(s.elevation), bits(light.softness)), h),
+            LightKind::Softbox(b) => {
+                std::hash::Hash::hash(&(b'b', bits(light.x), bits(light.y), bits(light.depth), (bits(b.width), bits(b.height), bits(b.rotation))), h)
+            }
+            _ => std::hash::Hash::hash(&(b'p', bits(light.x), bits(light.y), bits(light.depth), bits(light.softness)), h),
         }
     })
 }
 
-/// `light`'s shadow visibility on `input`'s field; made once and kept.
-fn shadows_for(input: &Input, light: &Light, rig: &Rig) -> Option<Arc<Visibility>> {
-    let key = shadow_key(input, light);
-    if let Some(v) = SHADOWS.get(key) {
+/// `light`'s shadow visibility on `input`'s field; made once and kept. A drag (`draft`) takes the full one when it is
+/// kept (the other lights of the scene, a light that is not moving) and else makes a coarse one, so the full ones are
+/// not made again at the release.
+fn shadows_for(input: &Input, light: &Light, rig: &Rig, draft: bool) -> Option<Arc<Visibility>> {
+    let full = shadow_key(input, light, false);
+    if let Some(v) = SHADOWS.get(full) {
+        return Some(v);
+    }
+    let key = shadow_key(input, light, draft);
+    if draft && let Some(v) = SHADOWS.get(key) {
         return Some(v);
     }
     let t = crate::profiling().then(std::time::Instant::now);
-    let vis = Arc::new(input.field.visibility(rig, light)?);
+    let vis = Arc::new(input.field.visibility(rig, light, draft)?);
     if let Some(t) = t {
-        eprintln!("    relight shadows ({} × {}): {:.1} ms", input.field.width, input.field.height, t.elapsed().as_secs_f64() * 1e3);
+        eprintln!("    relight shadows ({} × {}, draft {draft}): {:.1} ms", input.field.width, input.field.height, t.elapsed().as_secs_f64() * 1e3);
     }
     SHADOWS.put(key, vis.clone());
     Some(vis)
 }
 
 /// `light`'s lobe on `input`'s field (`rig`: the light set up on it), seen through its pattern and with the shadows it
-/// casts; made once and kept.
-fn lobe_for(input: &Input, light: &Light, effects: &Effects, rig: &Rig, ev: f64) -> Arc<Lobe> {
-    let key = lobe_key(input, light, effects, ev);
-    if let Some(l) = LOBES.get(key) {
+/// casts; made once and kept. A drag (`draft`) takes the full lobe when it is kept and else makes one with coarse shadows
+/// (a light without shadows has one lobe for both).
+fn lobe_for(input: &Input, light: &Light, effects: &Effects, rig: &Rig, ev: f64, draft: bool) -> Arc<Lobe> {
+    let coarse = draft && shadow_amount(light, effects).is_some();
+    if let Some(l) = LOBES.get(lobe_key(input, light, effects, ev, false)) {
+        return l;
+    }
+    let key = lobe_key(input, light, effects, ev, coarse);
+    if coarse && let Some(l) = LOBES.get(key) {
         return l;
     }
     let t = crate::profiling().then(std::time::Instant::now);
     let mut lobe = input.field.patterned(rig, input.field.lobe(rig), effects);
     // (the shadows multiply the lobe before the lights add up)
     if let Some(amount) = shadow_amount(light, effects)
-        && let Some(vis) = shadows_for(input, light, rig)
+        && let Some(vis) = shadows_for(input, light, rig, coarse)
     {
         lobe = input.field.shadowed(lobe, &vis, amount);
     }
@@ -299,8 +329,11 @@ fn lobe_for(input: &Input, light: &Light, effects: &Effects, rig: &Rig, ev: f64)
 /// The shading of `scene` on `input`'s field for a photo at exposure `ev`, and the key naming it. Made once per set of
 /// lights and kept, from one lobe per light that is made once and kept too: the render ([`lit`]) and the ⌥-drag preview
 /// (`fork/relight.md`) take the same one, and dragging one light makes one lobe and one shading, not one per light.
-pub fn shading_for(input: &Input, scene: &Scene, ev: f64) -> (u64, Arc<Shading>) {
-    let key = shading_key(input, scene, ev);
+///
+/// `draft`: a slider drag's render: the shadows are marched coarser (a quarter of the cost; a light whose full shadows are
+/// kept uses those), and the release makes the full ones. The export is never a draft.
+pub fn shading_for(input: &Input, scene: &Scene, ev: f64, draft: bool) -> (u64, Arc<Shading>) {
+    let key = shading_key(input, scene, ev, draft);
     if let Some(sh) = MEMO.get(key) {
         return (key, sh);
     }
@@ -308,7 +341,7 @@ pub fn shading_for(input: &Input, scene: &Scene, ev: f64) -> (u64, Arc<Shading>)
     let rigs: Vec<Rig> = scene.lights.iter().take(MAX_LIGHTS).map(|l| input.field.rig(l, scene.darken, ev)).collect();
     let none = Effects::default();
     let effects = |i: usize| scene.effects.get(i).unwrap_or(&none);
-    let lobes: Vec<Arc<Lobe>> = scene.lights.iter().zip(&rigs).enumerate().map(|(i, (l, r))| lobe_for(input, l, effects(i), r, ev)).collect();
+    let lobes: Vec<Arc<Lobe>> = scene.lights.iter().zip(&rigs).enumerate().map(|(i, (l, r))| lobe_for(input, l, effects(i), r, ev, draft)).collect();
     // (a light's haze is one more lobe of the same light, in the same colour; made here, not kept: it is one pass)
     let hazes: Vec<Option<Lobe>> =
         scene.lights.iter().enumerate().map(|(i, l)| (effects(i).haze > 0.0 && l.kind.has_place()).then(|| input.field.haze_lobe(l))).collect();

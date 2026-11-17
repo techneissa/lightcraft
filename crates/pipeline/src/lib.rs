@@ -879,7 +879,7 @@ pub fn plan_kept<'a>(
         (w, h) == (full.1, full.2),
     ));
     let lens_subject = lens_blur::subject_estimate(src, s, info.mattes.as_deref()).map(Arc::new);
-    let relight = relight::lit(info, s);
+    let relight = relight::lit(info, s, req.quality == Quality::Draft);
     let mut plan = Plan {
         settings,
         frame,

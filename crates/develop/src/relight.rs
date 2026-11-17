@@ -300,7 +300,7 @@ pub static SPECS: &[ControlSpec] = &[
     spec("relight.patternSoftness", "Pattern Softness", (0.0, 100.0, 30.0), (1.0, 0), Track::Plain),
     spec("relight.haze", "Haze", (0.0, 100.0, 0.0), (1.0, 0), Track::Plain),
     // (issue #315: how much the photo's own things block the light)
-    spec("relight.shadows", "Shadows", (0.0, 100.0, 0.0), (1.0, 0), Track::Plain),
+    spec("relight.shadows", "Cast Shadows", (0.0, 100.0, 0.0), (1.0, 0), Track::Plain),
 ];
 
 /// Relight's control specs: the per-light ones (`relight.amount` …, templates of `relight.<n>.amount` …) and

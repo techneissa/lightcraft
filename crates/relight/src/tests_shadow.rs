@@ -25,7 +25,7 @@ fn light(softness: f64, kind: LightKind) -> Light {
 /// The share of the light each pixel of row `v` sees (the visibility brought to the field's size, full amount).
 fn row(f: &Field, l: &Light, v: f32) -> Vec<f32> {
     let rig = f.rig(l, 0.0, 0.0);
-    let vis = f.visibility(&rig, l).unwrap();
+    let vis = f.visibility(&rig, l, false).unwrap();
     let ones = f.shadowed(crate::Lobe { m: vec![1.0; W * H] }, &vis, 1.0);
     let y = (v * H as f32) as usize;
     ones.m[y * W..(y + 1) * W].to_vec()
@@ -78,7 +78,7 @@ fn no_shadow_amount_changes_nothing_and_half_is_half() {
     let l = light(0.2, LightKind::Point);
     let rig = f.rig(&l, 0.0, 0.0);
     let lobe = f.lobe(&rig);
-    let vis = f.visibility(&rig, &l).unwrap();
+    let vis = f.visibility(&rig, &l, false).unwrap();
     let same = f.shadowed(lobe.clone(), &vis, 0.0);
     assert!(same.m.iter().zip(&lobe.m).all(|(a, b)| a.to_bits() == b.to_bits()));
     // half the amount lights a blocked pixel by half
@@ -94,7 +94,7 @@ fn no_shadow_amount_changes_nothing_and_half_is_half() {
     // a rim and a fill take none
     for k in [LightKind::Rim(crate::Rim::default()), LightKind::Fill(crate::Fill { near: 0.5 })] {
         let l = light(0.2, k);
-        assert!(f.visibility(&f.rig(&l, 0.0, 0.0), &l).is_none());
+        assert!(f.visibility(&f.rig(&l, 0.0, 0.0), &l, false).is_none());
     }
 }
 
@@ -115,7 +115,7 @@ fn a_sun_casts_parallel_shadows_and_hostile_numbers_give_finite_planes() {
     ] {
         let l = Light { kind, ..bad };
         let rig = f.rig(&l, f64::NAN, f64::NAN);
-        let vis = f.visibility(&rig, &l).unwrap();
+        let vis = f.visibility(&rig, &l, false).unwrap();
         for amount in [f64::NAN, 1e9, -3.0, 1.0] {
             let out = f.shadowed(crate::Lobe { m: vec![1.0; W * H] }, &vis, amount);
             assert!(out.m.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v)), "{amount}");
@@ -124,6 +124,47 @@ fn a_sun_casts_parallel_shadows_and_hostile_numbers_give_finite_planes() {
     // a visibility of another field's size adds nothing
     let small = Field::from_parts(8, 8, vec![0.0; 64], vec![-2.0; 64]).unwrap();
     let l = light(0.2, LightKind::Point);
-    let vis = small.visibility(&small.rig(&l, 0.0, 0.0), &l).unwrap();
+    let vis = small.visibility(&small.rig(&l, 0.0, 0.0), &l, false).unwrap();
     assert!(f.shadowed(crate::Lobe { m: vec![0.5; W * H] }, &vis, 1.0).m.iter().all(|v| *v == 0.5));
+}
+
+/// The share of the wall (the pixels outside the box and a margin round it) that sees at least 90 % of the light, with the
+/// visibility made as a drag's draft or in full.
+fn lit_wall(f: &Field, l: &Light, draft: bool) -> f32 {
+    let rig = f.rig(l, 0.0, 0.0);
+    let vis = f.visibility(&rig, l, draft).unwrap();
+    let v = f.shadowed(crate::Lobe { m: vec![1.0; W * H] }, &vis, 1.0).m;
+    let wall: Vec<f32> = (0..W * H)
+        .filter(|i| {
+            let (u, vv) = ((i % W) as f32 / W as f32, (i / W) as f32 / H as f32);
+            !((0.35..0.6).contains(&u) && (0.25..0.75).contains(&vv))
+        })
+        .map(|i| v[i])
+        .collect();
+    wall.iter().filter(|s| **s > 0.9).count() as f32 / wall.len() as f32
+}
+
+#[test]
+fn a_light_a_little_behind_the_subject_does_not_shade_the_whole_wall() {
+    // the light at depth 0.6 lies inside the near box's assumed thickness at its own pixel (the box is 0.55 deep, the light
+    // 0.70): every ray to it ran behind that surface and the whole wall went dark
+    let f = box_before_wall();
+    for kind in [LightKind::Point, LightKind::Softbox(Softbox { width: 0.2, height: 0.2, rotation: 0.0 })] {
+        let l = Light { x: 0.5, y: 0.5, depth: 0.6, ..light(0.2, kind) };
+        for draft in [false, true] {
+            let lit = lit_wall(&f, &l, draft);
+            assert!(lit > 0.8, "{kind:?} draft {draft}: only {lit} of the wall sees the light");
+        }
+    }
+}
+
+#[test]
+fn a_drags_coarse_shadows_fall_where_the_full_ones_do() {
+    let f = box_before_wall();
+    let l = light(0.0, LightKind::Point);
+    let (rig, mid) = (f.rig(&l, 0.0, 0.0), shadow_middle(&f, &l));
+    let vis = f.visibility(&rig, &l, true).unwrap();
+    let wall = f.shadowed(crate::Lobe { m: vec![1.0; W * H] }, &vis, 1.0).m;
+    let at = |u: f32| wall[(0.5 * H as f32) as usize * W + (u * W as f32) as usize];
+    assert!(at(mid) < 0.1 && at(0.05) > 0.95 && at(0.3) > 0.95, "{} {} {}", at(mid), at(0.05), at(0.3));
 }

@@ -2,8 +2,8 @@
 //! with a soft shoulder, not the app's tone curve), and pictures of the field.
 //!
 //! `cargo run --release -p lightcraft-relight --example relight -- photo.jpg <depth dump dir> out-prefix
-//! [x y depth amount softness warmth darken wrap]` with, from the environment, `LC_KIND=sun|softbox` (a spot or others: not here),
-//! `LC_SUN=azimuth,elevation`, `LC_BOX=width,height,rotation` and `LC_SHADOWS=0..1` (issue #315: how much the photo's own things
+//! [x y depth amount softness warmth darken wrap]` with, from the environment, `LC_KIND=sun|softbox` (anything else is a point light: this tool has no spot, rim or fill),
+//! `LC_SUN=azimuth,elevation`, `LC_BOX=width,height,rotation` and `LC_SHADOWS=0..1` and `LC_DRAFT=1` (the coarse shadows of a drag) (issue #315: how much the photo's own things
 //! block the light; the time of each stage of one drag step is printed) (the dump dir is `lightcraft-depth`'s example `--dump`: `depth.f32`
 //! and `size.txt`). Writes `<prefix>-before.png`, `<prefix>-after.png`, `<prefix>-gain.png`, `<prefix>-normals.png`, `<prefix>-depth.png` (the field's depth, near light).
 
@@ -76,7 +76,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let lobe = field.lobe(&rig);
     let t_lobe = t.elapsed().as_secs_f64() * 1e3;
     let lobe = if shadows > 0.0 && light.kind.takes_shadows() {
-        let vis = field.visibility(&rig, &light).ok_or("no shadow for this light")?;
+        let vis = field.visibility(&rig, &light, std::env::var_os("LC_DRAFT").is_some()).ok_or("no shadow for this light")?;
         let t_vis = t.elapsed().as_secs_f64() * 1e3;
         let lobe = field.shadowed(lobe, &vis, shadows);
         eprintln!("lobe {t_lobe:.1} ms, march {:.1} ms, upsample {:.1} ms", t_vis - t_lobe, t.elapsed().as_secs_f64() * 1e3 - t_vis);

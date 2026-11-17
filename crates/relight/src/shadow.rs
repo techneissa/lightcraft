@@ -12,6 +12,10 @@
 //! the field's size with the field's own edge-aware filter (a joint bilateral upsample guided by the photo's
 //! brightness and its depth, so a shadow stops at a near thing's outline) and multiplies it into the light's lobe, before
 //! the lights add up.
+//!
+//! **Drag quality:** a drag's draft render asks for [`Field::visibility`] with `draft`: a grid of about 200 pixels on the long side
+//! (1/8 of a 1600-pixel field), the first four rays only (no penumbra pass) and, in [`Field::shadowed`], the nearest sample
+//! instead of the filter. The full one is made at the release and for every export.
 
 use rayon::prelude::*;
 
@@ -20,7 +24,8 @@ use crate::kinds::{LightKind, Shape};
 use crate::light::{Light, Lobe, Rig};
 
 /// The long side of the reduced field the march runs on (the reduction is the whole number of field pixels that brings
-/// it closest to this from above: 4 for the usual 1600-pixel field, 1 for a small one).
+/// it closest to this from above: 4 for the usual 1600-pixel field, 1 for a small one), for a drag's draft and for the full march.
+const LOW_SIDE_DRAFT: usize = 200;
 const LOW_SIDE: usize = 400;
 /// Steps along each ray.
 const STEPS: usize = 24;
@@ -41,7 +46,8 @@ const SUN_MIN: f32 = 0.012;
 const SUN_SPREAD: f32 = 0.26;
 /// Where the weights of the upsampling fall to 1/e: the photo's brightness (cube root of linear light) and log depth.
 const SIGMA_LUM: f32 = 0.1;
-const SIGMA_DEPTH: f32 = 0.09;
+/// (the depth's is narrow: a step of 5–10 % of depth, a near thing's outline, must not let its shadow leak across)
+const SIGMA_DEPTH: f32 = 0.04;
 
 impl LightKind {
     /// Whether a light of this type casts shadows: a point, a spot, a sun and a softbox do, a rim and a fill have no
@@ -64,9 +70,9 @@ pub(crate) struct Reduced {
 }
 
 impl Reduced {
-    pub(crate) fn of(field: &Field) -> Reduced {
+    pub(crate) fn of(field: &Field, low_side: usize) -> Reduced {
         let (fw, fh) = (field.width.max(1), field.height.max(1));
-        let f = fw.max(fh).div_ceil(LOW_SIDE).max(1);
+        let f = fw.max(fh).div_ceil(low_side.max(1)).max(1);
         let (w, h) = (fw.div_ceil(f), fh.div_ceil(f));
         let (mut z, mut lz, mut gi) = (Vec::with_capacity(w * h), Vec::with_capacity(w * h), Vec::with_capacity(w * h));
         for y in 0..h {
@@ -94,6 +100,8 @@ pub struct Visibility {
     w: usize,
     h: usize,
     v: Vec<f32>,
+    /// Made for a drag (coarse): [`Field::shadowed`] reads it by the nearest sample.
+    draft: bool,
 }
 
 impl Visibility {
@@ -174,6 +182,8 @@ struct March<'a> {
     z_cap: f32,
     /// The sun's frame ⟂ its direction.
     sun_axes: ([f32; 3], [f32; 3]),
+    /// The light's own depth (none for a sun, which has no place).
+    light_z: Option<f32>,
 }
 
 impl March<'_> {
@@ -201,6 +211,13 @@ impl March<'_> {
         if t.is_finite() { t.max(0.0) } else { 0.0 }
     }
 
+    /// Whether the light itself lies in the band behind a surface of depth `zs` that would block (a light placed a little behind a
+    /// near subject): such a surface blocks nothing for it, as the light is taken to be in front of it. Else a light
+    /// over its subject's shoulder would shade the whole picture.
+    fn light_inside(&self, zs: f32) -> bool {
+        self.light_z.is_some_and(|z| z > zs * BIAS && z < zs * THICK)
+    }
+
     /// Whether the ray from `p` along `d` (`d` spans the whole way to the light when `whole`, else it is a direction)
     /// reaches the light: `false` when something blocks it. `jit` (0..1) offsets the steps.
     fn clear(&self, p: [f32; 3], d: [f32; 3], whole: bool, jit: f32) -> bool {
@@ -223,7 +240,7 @@ impl March<'_> {
             let (u, v) = (q[0] * iz / self.kx + 0.5, q[1] * iz / self.ky + 0.5);
             let (ix, iy) = (((u * lw).max(0.0) as usize).min(r.w - 1), ((v * lh).max(0.0) as usize).min(r.h - 1));
             let Some(zs) = r.z.get(iy * r.w + ix) else { continue };
-            if q[2] > zs * BIAS && q[2] < zs * THICK {
+            if q[2] > zs * BIAS && q[2] < zs * THICK && !self.light_inside(*zs) {
                 return false;
             }
         }
@@ -254,7 +271,7 @@ impl March<'_> {
     }
 
     /// The share of the light that reaches pixel `(x, y)` of the reduced field.
-    fn visible(&self, x: usize, y: usize) -> f32 {
+    fn visible(&self, x: usize, y: usize, draft: bool) -> f32 {
         let r = self.r;
         let i = y * r.w + x;
         let (Some(z), f) = (r.z.get(i).copied(), r.f) else { return 1.0 };
@@ -264,7 +281,7 @@ impl March<'_> {
         let turn = noise(x, y, 1) * std::f32::consts::TAU;
         let jit = noise(x, y, 2);
         let first = (0..FIRST).filter(|k| self.ray(p, *k, turn, jit)).count();
-        if first == 0 || first == FIRST {
+        if draft || first == 0 || first == FIRST {
             return first as f32 / FIRST as f32;
         }
         // (a pixel in a penumbra: more rays across the whole light)
@@ -302,14 +319,18 @@ const SAME: f32 = 0.08;
 
 impl Field {
     /// The reduced field the march runs on (made once).
-    pub(crate) fn reduced(&self) -> &Reduced {
-        self.reduced.get_or_init(|| Reduced::of(self))
+    pub(crate) fn reduced(&self, draft: bool) -> &Reduced {
+        if draft {
+            self.reduced_draft.get_or_init(|| Reduced::of(self, LOW_SIDE_DRAFT))
+        } else {
+            self.reduced.get_or_init(|| Reduced::of(self, LOW_SIDE))
+        }
     }
 
     /// How much of `light` (set up as `rig`) each pixel of the reduced field sees, `None` for a light that takes no
     /// shadow (a rim, a fill). It depends on the light's place, depth, Softness and type numbers and the field, not on
     /// its Amount or the shadow amount, so the caller keeps it until the light moves.
-    pub fn visibility(&self, rig: &Rig, light: &Light) -> Option<Visibility> {
+    pub fn visibility(&self, rig: &Rig, light: &Light, draft: bool) -> Option<Visibility> {
         let soft = if light.softness.is_finite() { light.softness.clamp(0.0, 1.0) as f32 } else { 0.5 };
         let src = match &rig.shape {
             Shape::Point | Shape::Spot { .. } => Source::Point { pos: rig.pos, radius: rig.r2.max(0.0).sqrt() * POINT_SHARE },
@@ -317,11 +338,16 @@ impl Field {
             Shape::Box { c, tx, ty, hw, hh, .. } => Source::Box { c: *c, tx: *tx, ty: *ty, hw: *hw, hh: *hh },
             Shape::Rim { .. } | Shape::Fill { .. } => return None,
         };
-        let r = self.reduced();
+        let r = self.reduced(draft);
         let long = self.width.max(self.height).max(1) as f32;
         let sun_axes = match &src {
             Source::Sun { to, .. } => frame(*to),
             _ => ([1.0, 0.0, 0.0], [0.0, 1.0, 0.0]),
+        };
+        let light_z = match &src {
+            Source::Point { pos, .. } => Some(pos[2]),
+            Source::Box { c, .. } => Some(c[2]),
+            Source::Sun { .. } => None,
         };
         let march = March {
             r,
@@ -331,15 +357,16 @@ impl Field {
             z_cut: self.near.exp() * 0.5,
             z_cap: self.far.exp() * 3.0,
             sun_axes,
+            light_z,
         };
         let mut v = vec![1f32; r.w * r.h];
         v.par_chunks_mut(r.w.max(1)).enumerate().for_each(|(y, row)| {
             for (x, o) in row.iter_mut().enumerate() {
-                let s = march.visible(x, y);
+                let s = march.visible(x, y, draft);
                 *o = if s.is_finite() { s.clamp(0.0, 1.0) } else { 1.0 };
             }
         });
-        Some(Visibility { w: r.w, h: r.h, v: smoothed(r, &v) })
+        Some(Visibility { w: r.w, h: r.h, v: smoothed(r, &v), draft })
     }
 
     /// `lobe` with the shadows `vis` cast, `amount` of them (0 none, 1 all): each pixel's light is multiplied by
@@ -347,9 +374,20 @@ impl Field {
     /// A visibility of another size, or no amount, leaves the lobe as it is.
     pub fn shadowed(&self, mut lobe: Lobe, vis: &Visibility, amount: f64) -> Lobe {
         let a = if amount.is_finite() { amount.clamp(0.0, 1.0) as f32 } else { 0.0 };
-        let r = self.reduced();
+        let r = self.reduced(vis.draft);
         let (w, h) = (self.width, self.height);
         if a <= 0.0 || vis.w != r.w || vis.h != r.h || vis.v.len() != r.w * r.h || lobe.m.len() != w * h || w == 0 {
+            return lobe;
+        }
+        if vis.draft {
+            // (a drag: the nearest sample, no filter)
+            lobe.m.par_chunks_mut(w).enumerate().for_each(|(y, row)| {
+                let by = (y / r.f).min(r.h - 1) * r.w;
+                for (x, m) in row.iter_mut().enumerate() {
+                    let s = vis.v.get(by + (x / r.f).min(r.w - 1)).copied().unwrap_or(1.0);
+                    *m *= 1.0 - a * (1.0 - if s.is_finite() { s.clamp(0.0, 1.0) } else { 1.0 });
+                }
+            });
             return lobe;
         }
         let f = r.f as f32;

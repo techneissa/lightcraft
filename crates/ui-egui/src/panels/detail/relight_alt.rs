@@ -61,7 +61,7 @@ struct Key {
 
 impl Key {
     fn new(input: &Input, scene: &Scene, ev: f64, shape: What) -> Key {
-        Key { field: input.key, lights: shading_key(input, scene, ev), shape }
+        Key { field: input.key, lights: shading_key(input, scene, ev, true), shape }
     }
 }
 
@@ -113,7 +113,7 @@ fn lock(s: &Store) -> MutexGuard<'_, Slot> {
 /// the milliseconds each took.
 fn build(req: &Request) -> (Geometry, [f64; 2]) {
     let t = std::time::Instant::now();
-    let (_, shading) = shading_for(&req.input, &req.scene, req.ev);
+    let (_, shading) = shading_for(&req.input, &req.scene, req.ev, true);
     let shaded = t.elapsed().as_secs_f64() * 1e3;
     let geometry = match req.key.shape {
         What::Crosses { grid } => Geometry::Marks(overlay::marks(&req.input.field, &shading, grid)),
