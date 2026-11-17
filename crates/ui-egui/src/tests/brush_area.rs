@@ -32,10 +32,17 @@ fn spots(h: &Headless) -> Vec<Spot> {
     h.app.session.develop_of(h.app.session.active().unwrap()).unwrap_or_default().spots.clone()
 }
 
+/// The shapes of the last frame that lie inside the loupe: the photo's overlay, without the top bar's activity ring
+/// (which paints circles and a long arc of its own while a task is shown) or any other chrome.
+fn photo_shapes(h: &Headless) -> Vec<Shape> {
+    let canvas = h.app.canvas_rect.expect("the loupe was drawn");
+    h.view.painted_shapes().into_iter().filter(|s| canvas.contains_rect(s.visual_bounding_rect())).collect()
+}
+
 /// (circles, outline paths with many points, translucent fills) the last frame painted.
 fn counts(h: &Headless) -> (usize, usize, usize) {
     let fill = egui::Color32::from_white_alpha(60);
-    let shapes = h.view.painted_shapes();
+    let shapes = photo_shapes(h);
     let circles = shapes.iter().filter(|s| matches!(s, Shape::Circle(_))).count();
     let outlines = shapes.iter().filter(|s| matches!(s, Shape::Path(p) if p.points.len() > 12)).count();
     let fills = shapes.iter().filter(|s| matches!(s, Shape::Mesh(m) if m.vertices.first().is_some_and(|v| v.color == fill))).count();
@@ -53,7 +60,13 @@ fn a_brushed_spot_is_one_outline() {
     let mut h = detail();
     exec(&mut h, "view.toolOverlay", json!({"mode": "always"}));
     let mut drawn = Vec::new();
+    let mut _task = None;
     for n in [40, 400] {
+        if n == 400 {
+            // a slow runner: a task turns old enough to show in the top-bar ring between the two frames
+            _task = Some(h.app.session.activity.start("test", "Slow work", lightcraft_engine::activity::Cancel::No));
+            std::thread::sleep(Duration::from_millis(600));
+        }
         exec(&mut h, "spot.add", json!({"mode": "heal", "points": stroke(n), "size": 0.02, "source": [0.0, 0.2]}));
         exec(&mut h, "spot.select", json!({"index": 0}));
         h.step();
@@ -198,8 +211,7 @@ fn the_outline_follows_the_spot() {
     exec(&mut h, "spot.add", json!({"mode": "heal", "points": stroke(60), "size": 0.02, "source": [0.0, 0.2]}));
     exec(&mut h, "spot.select", json!({"index": null}));
     let width = |h: &Headless| {
-        h.view
-            .painted_shapes()
+        photo_shapes(h)
             .iter()
             .filter_map(|s| match s {
                 Shape::Path(p) if p.points.len() > 12 && p.stroke.color == egui::epaint::ColorMode::Solid(egui::Color32::from_white_alpha(150)) => {
