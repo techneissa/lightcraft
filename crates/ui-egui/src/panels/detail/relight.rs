@@ -9,8 +9,10 @@ use egui::{Color32, Pos2, Stroke};
 use serde_json::json;
 
 use super::geometry::CanvasMap;
-use super::{DevelopSettings, LightcraftApp, Point, Rect, register, vec2};
+use super::{DevelopSettings, LightcraftApp, Rect, register, vec2};
 use crate::panels::edit::{light_tint, nearest};
+
+mod kinds;
 
 /// How near a press must be to a handle to take it (points).
 const HIT: f32 = 16.0;
@@ -50,6 +52,7 @@ pub(super) fn shown(app: &LightcraftApp, d: &DevelopSettings) -> bool {
 /// preview would stay).
 pub(super) fn release_if_hidden(app: &mut LightcraftApp, ui: &egui::Ui, d: &DevelopSettings) {
     let showing = app.ui.right == crate::state::RightPanel::Edit && shown(app, d);
+    kinds::release(app, ui, showing);
     let dragging = ui.ctx().data(|m| m.get_temp::<Grab>(grab_id())).is_some();
     if dragging && !showing {
         ui.ctx().data_mut(|m| m.remove::<Grab>(grab_id()));
@@ -71,7 +74,7 @@ pub(super) fn release_if_hidden(app: &mut LightcraftApp, ui: &egui::Ui, d: &Deve
 
 /// The handles' places on screen, in the lights' order.
 fn spots(map: &CanvasMap, d: &DevelopSettings) -> Vec<Pos2> {
-    d.relight.lights.iter().map(|l| map.screen(Point::new(l.x, l.y))).collect()
+    d.relight.lights.iter().map(|l| kinds::spot_of(map, l)).collect()
 }
 
 /// The size ring's radius (points) for Softness `softness` (0..100).
@@ -140,7 +143,8 @@ pub(super) fn overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::R
     let grab = ui.ctx().data(|m| m.get_temp::<Grab>(grab_id()));
     let Some(chosen) = d.relight.lights.get(sel) else { return false };
     let ring = ring_radius(chosen.softness);
-    let on_ring = |q: Pos2| at.get(sel).is_some_and(|c| (q.distance(*c) - ring).abs() <= RING_HIT && q.distance(*c) > HIT);
+    let ring_on = kinds::has_ring(chosen);
+    let on_ring = |q: Pos2| ring_on && at.get(sel).is_some_and(|c| (q.distance(*c) - ring).abs() <= RING_HIT && q.distance(*c) > HIT);
     let hover = resp.hover_pos();
     let clip = app.canvas_rect.unwrap_or(map.rect);
     {
@@ -154,7 +158,9 @@ pub(super) fn overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::R
         }
         if let Some(c) = at.get(sel) {
             if clip.contains(*c) {
-                paint_ring(&p, *c, ring, chosen.warmth, grab == Some(Grab::Size) || hover.is_some_and(on_ring));
+                if ring_on {
+                    paint_ring(&p, *c, ring, chosen.warmth, grab == Some(Grab::Size) || hover.is_some_and(on_ring));
+                }
                 crate::panels::edit::paint_light(
                     &p,
                     *c,
@@ -165,8 +171,16 @@ pub(super) fn overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::R
                 register(ui, "relight:onPhoto", Rect::from_center_size(*c, vec2(20.0, 20.0)));
                 register(ui, format!("relight:onPhoto:{sel}"), Rect::from_center_size(*c, vec2(20.0, 20.0)));
             }
-            register(ui, "relight:ring", Rect::from_center_size(*c + vec2(ring, 0.0), vec2(14.0, 14.0)));
+            if ring_on {
+                register(ui, "relight:ring", Rect::from_center_size(*c + vec2(ring, 0.0), vec2(14.0, 14.0)));
+            }
         }
+    }
+    // the handles of the light's type (a spot's aim and cone, a sun's arrow, a softbox's corner and knob)
+    if let Some(c) = at.get(sel)
+        && kinds::overlay(app, ui, resp, &map, chosen, *c, clip)
+    {
+        return true;
     }
     if grab.is_none()
         && let Some(q) = hover

@@ -243,9 +243,15 @@ pub(super) fn draw(app: &LightcraftApp, ui: &egui::Ui, p: &Painter, map: &Canvas
 fn mark_selected(app: &LightcraftApp, ui: &egui::Ui, p: &Painter, map: &CanvasMap, d: &DevelopSettings, id: PhotoId) {
     let sel = app.session.relight_selected(id);
     let Some(l) = d.relight.lights.get(sel) else { return };
-    let Some(at) = map.try_screen(Point::new(l.x, l.y)) else { return };
     let t = Tokens::get(ui.ctx());
-    let text = crate::i18n::tr_format!("Light {n}", n = sel + 1);
+    // (a rim and a fill have no place: their name goes in the photo's corner)
+    let (at, text) = if l.kind.has_place() {
+        let Some(at) = map.try_screen(Point::new(l.x, l.y)) else { return };
+        (at, crate::i18n::tr_format!("Light {n}", n = sel + 1))
+    } else {
+        let name = crate::i18n::tr(["Point", "Spot", "Sun / Window", "Softbox", "Rim", "Fill"].get(l.kind.index()).copied().unwrap_or("Point"));
+        (p.clip_rect().left_top() + vec2(70.0, 20.0), crate::i18n::tr_format!("Light {n}: {kind}", n = sel + 1, kind = name))
+    };
     let galley = p.layout_no_wrap(text, t.font(11.0), Color32::WHITE);
     // (just under the handle, inside its ring)
     let r = Rect::from_min_size(at + vec2(-(galley.size().x + 10.0) / 2.0, 14.0), galley.size() + vec2(10.0, 4.0));
