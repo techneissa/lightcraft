@@ -5,6 +5,8 @@
 //! [x y depth amount softness warmth darken wrap]` with, from the environment, `LC_KIND=sun|softbox|spot` (anything else is a point light: this tool has no rim or fill),
 //! `LC_SPOT=aim_x,aim_y,angle,edge`, `LC_HAZE=haze,scatter,dust` (0..1 each: the light's beam through haze, issue #317; the time of
 //! the rays, their weighing and the upsample is printed, and with `LC_VISPIC=1` the beam alone goes to `<prefix>-beam.png`),
+//! `LC_EDGE=glow,sunburst` (0..1 each: the light sits just behind an edge and glows round it, issue #332) and `LC_SNAP=1`
+//! (put the light on the nearest depth edge to its place first, a sun turning to shine from there; the time of the snap and of the glow is printed),
 //! `LC_SUN=azimuth,elevation`, `LC_BOX=width,height,rotation,aim_h,aim_v` (the aim: tilts in degrees from straight in, issue #335) and `LC_SHADOWS=0..1` and `LC_DRAFT=1` (the coarse shadows of a drag) and `LC_PATPIC=1` (also write `<prefix>-pattern.png`, the pattern alone) and `LC_VISPIC=1` (also write `<prefix>-vis.png`, the shadow's visibility, and `<prefix>-blockers.png`, what blocks: red how sure, green how deep, a share of 0.5 at full) (issue #315: how much the photo's own things
 //! block the light; the time of each stage of one drag step is printed) (the dump dir is `lightcraft-depth`'s example `--dump`: `depth.f32`
 //! and `size.txt`). Writes `<prefix>-before.png`, `<prefix>-after.png`, `<prefix>-gain.png`, `<prefix>-normals.png`, `<prefix>-depth.png` (the field's depth, near light).
@@ -71,7 +73,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err("usage: relight photo dump-dir prefix [x y depth amount softness warmth darken wrap]".into());
     };
     let num = |i: usize, d: f64| rest.get(i).and_then(|s| s.parse().ok()).unwrap_or(d);
-    let light = Light {
+    let mut light = Light {
         x: num(0, 0.3),
         y: num(1, 0.3),
         depth: num(2, 0.2),
@@ -100,6 +102,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let field = Field::prepare_model(DepthMap { width: dw, height: dh, values: &depth, kind: Kind::Depth }, &lin)?;
     eprintln!("field {w} × {h} in {:.0} ms", t.elapsed().as_secs_f64() * 1e3);
     let draft = std::env::var_os("LC_DRAFT").is_some();
+    if std::env::var_os("LC_SNAP").is_some() {
+        let t = std::time::Instant::now();
+        let snapped = field.snap_to_edge(light.x, light.y);
+        eprintln!("snap to the nearest edge: {:.1} ms", t.elapsed().as_secs_f64() * 1e3);
+        if let Some(s) = snapped {
+            eprintln!("snapped ({:.3}, {:.3}) to ({:.3}, {:.3}), depth {:.2}", light.x, light.y, s.x, s.y, s.depth);
+            // (the app also lowers Wrap to at most 10 of 100 here)
+            (light.x, light.y, light.depth, light.wrap) = (s.x, s.y, s.depth, light.wrap.min(0.1));
+            if matches!(light.kind, LightKind::Sun(_)) {
+                let (azimuth, elevation) = field.sun_towards(s.x, s.y);
+                eprintln!("the sun shines from azimuth {azimuth:.0}, elevation {elevation:.0}");
+                light.kind = LightKind::Sun(Sun { azimuth, elevation });
+            }
+        } else {
+            eprintln!("no edge near");
+        }
+    }
     if shadows > 0.0 && light.kind.takes_shadows() {
         // (the reduced field the march runs on is made once per field, as in the app: not part of a drag step)
         let t = std::time::Instant::now();
@@ -173,6 +192,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(plane)
     } else {
         None
+    };
+    // (issue #332: the glow past an edge, added to the beam's plane as the render does)
+    let edge = env_numbers("LC_EDGE");
+    let beam = {
+        let e = Effects { edge_glow: edge.first().copied().unwrap_or(0.0), sunburst: edge.get(1).copied().unwrap_or(0.0), ..effects };
+        let t = std::time::Instant::now();
+        let glow = field.edge_glow(&light, &e).map(|g| field.plane_at(&g, w, h, &|x, y| (x / w as f64, y / h as f64)));
+        if glow.is_some() {
+            eprintln!("glow: {:.1} ms", t.elapsed().as_secs_f64() * 1e3);
+        }
+        match (beam, glow) {
+            (Some(b), Some(g)) => Some(b.iter().zip(&g).map(|(a, c)| a + c).collect()),
+            (a, None) | (None, a) => a,
+        }
     };
     let mut parts = vec![Part { lobe: &lobe, gain: rig.gain(), tilt, tint }];
     let (ttilt, ttint) = effects.through_colour(light.warmth);

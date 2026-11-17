@@ -164,6 +164,10 @@ static BEAM_LOBES: Memo<Lobe> = Memo::new(KEEP_LOBES);
 static FADES: Memo<Lobe> = Memo::new(KEEP_LOBES);
 /// The underwater colour planes (issue #333): one per set of the water's numbers on a field (six planes of 4 bytes a pixel: about 41 MB on a 1600 × 1067 one, two sets kept).
 static WATER: Memo<WaterPlanes> = Memo::new(2);
+/// The glow past an edge (issue #332) at the field's size, per light and place, and the glow and the beam added up where a light
+/// has both. Cheap to make (a closed form over the field), so few are kept.
+static GLOW_LOBES: Memo<Lobe> = Memo::new(KEEP_LOBES);
+static ADDED_LOBES: Memo<Lobe> = Memo::new(KEEP_LOBES);
 
 /// Let go of every kept lobe and shading (the engine drops a photo's field: what was made from it goes too; they are
 /// made again by the next render). They are keyed by the field, so one photo's go with another's.
@@ -176,6 +180,8 @@ pub fn forget() {
     BEAM_LOBES.clear();
     FADES.clear();
     WATER.clear();
+    GLOW_LOBES.clear();
+    ADDED_LOBES.clear();
 }
 
 // (the settings and the light's numbers keep to the same cap)
@@ -289,6 +295,8 @@ fn effects_of(e: &lightcraft_develop::relight_effects::LightEffects) -> Effects 
         mist_height: e.mist_height / 100.0,
         fade: e.fade / 100.0,
         source: e.source / 100.0,
+        edge_glow: e.edge_glow / 100.0,
+        sunburst: e.sunburst / 100.0,
     }
 }
 
@@ -310,6 +318,35 @@ fn kind_of(k: &KindSettings) -> LightKind {
         5 => LightKind::Fill(Fill { near: k.fill_near / 100.0 }),
         _ => LightKind::Point,
     }
+}
+
+/// Where a light dragged to `(x, y)` goes when it is put on the nearest depth edge (issue #332): its place and depth in the
+/// settings' units, and for a sun the direction it must shine from to come from there (azimuth, elevation).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Snapped {
+    pub x: f64,
+    pub y: f64,
+    /// 0..100.
+    pub depth: f64,
+    /// The light's Wrap, 0..100: a light behind the edge shines at the scene's back, so it keeps to a low Wrap (what faces the
+    /// camera is not lit by it) unless the light already had a lower one.
+    pub wrap: f64,
+    pub sun: Option<(f64, f64)>,
+}
+
+/// The most Wrap a light put behind an edge keeps (of 100).
+pub const SNAP_WRAP: f64 = 10.0;
+
+/// `light` dragged to `(x, y)` on `field`: the place just behind the nearest depth edge ([`Field::snap_to_edge`]), or
+/// `None` when no edge is near (the light stays where it was put). A sun also gets the direction towards that place
+/// ([`Field::sun_towards`]), so its shafts fan out from the edge.
+pub fn snap_to_edge(field: &Field, light: &lightcraft_develop::relight::LightSettings, x: f64, y: f64) -> Option<Snapped> {
+    let s = field.snap_to_edge(x, y)?;
+    let sun = (light.kind.index() == 2).then(|| {
+        let (az, el) = field.sun_towards(s.x, s.y);
+        (az.round(), el.round())
+    });
+    Some(Snapped { x: s.x, y: s.y, depth: (100.0 * s.depth).round(), wrap: light.wrap.min(SNAP_WRAP), sun })
 }
 
 /// The light of a render of `info` with settings `s` (`None`: off, or the photo has no field yet).
@@ -403,8 +440,19 @@ pub fn shading_key(input: &Input, scene: &Scene, ev: f64, draft: bool) -> u64 {
         if draft && scene.drafts_differ() {
             std::hash::Hash::hash(&b'd', h);
         }
-        // (not the air's numbers: the beams and the fade are not in the shading, issues #317 and #331; nor the source's, issue #334: a point of light added on top)
-        let shaded = |e: &Effects| Effects { haze: 0.0, scatter: 0.5, dust: 0.0, mist: 0.0, mist_height: 0.3, fade: 0.0, source: 0.0, ..*e };
+        // (not the air's numbers: the beams and the fade are not in the shading, issues #317 and #331; nor the source's, issue #334, nor the edge glow's, issue #332: points and glows of light added on top)
+        let shaded = |e: &Effects| Effects {
+            haze: 0.0,
+            scatter: 0.5,
+            dust: 0.0,
+            mist: 0.0,
+            mist_height: 0.3,
+            fade: 0.0,
+            source: 0.0,
+            edge_glow: 0.0,
+            sunburst: 0.0,
+            ..*e
+        };
         for (i, e) in scene.effects.iter().map(shaded).enumerate().filter(|(_, e)| *e != Effects::default()) {
             std::hash::Hash::hash(&(i, e.gel_hue.to_bits(), e.gel_strength.to_bits(), e.pattern, e.scale.to_bits()), h);
             std::hash::Hash::hash(&(e.rotation.to_bits(), e.softness.to_bits(), e.haze.to_bits(), e.shadows.to_bits(), e.open.to_bits()), h);
@@ -515,20 +563,20 @@ fn beam_key(input: &Input, light: &Light, effects: &Effects, coarse: bool) -> u6
 /// `light`'s beam through its haze on `input`'s field ([`Field::beam_plane`]; `None`: no beam). The rays are made once per
 /// place of the light and kept, the beam once per set of the haze's numbers. A drag (`draft`) takes the full ones when they are
 /// kept, else makes coarse ones.
-fn beam_for(input: &Input, light: &Light, effects: &Effects, rig: &Rig, draft: bool) -> Option<Arc<Lobe>> {
+fn beam_for(input: &Input, light: &Light, effects: &Effects, rig: &Rig, draft: bool) -> Option<(Arc<Lobe>, bool)> {
     if !has_beam(light, effects) {
         return None;
     }
     let plane_key = |coarse: bool| hashed(|h| std::hash::Hash::hash(&(5u8, beam_key(input, light, effects, coarse)), h));
     if let Some(l) = BEAM_LOBES.get(plane_key(false)) {
-        return Some(l);
+        return Some((l, false));
     }
     let t = crate::profiling().then(std::time::Instant::now);
     // (the full rays when kept, also for a drag: a drag of the Haze slider weighs them again and marches nothing)
     let full = SHAFTS.get(shafts_key(input, light, effects, false));
     let coarse = draft && full.is_none();
     if coarse && let Some(l) = BEAM_LOBES.get(plane_key(true)) {
-        return Some(l);
+        return Some((l, true));
     }
     let beam = match BEAMS.get(beam_key(input, light, effects, coarse)) {
         Some(b) => b,
@@ -556,7 +604,7 @@ fn beam_for(input: &Input, light: &Light, effects: &Effects, rig: &Rig, draft: b
         eprintln!("    relight beam ({} × {}, draft {coarse}): {:.1} ms", input.field.width, input.field.height, t.elapsed().as_secs_f64() * 1e3);
     }
     BEAM_LOBES.put(plane_key(coarse), plane.clone());
-    Some(plane)
+    Some((plane, coarse))
 }
 
 /// The key naming `light`'s source glow on `input`'s field (issue #334): the place it is drawn at (x, y and depth: the depth
@@ -566,6 +614,23 @@ fn source_key(input: &Input, light: &Light, effects: &Effects) -> u64 {
     hashed(|h| {
         std::hash::Hash::hash(&(7u8, input.key, effects.source.to_bits()), h);
         for v in [light.x, light.y, light.depth] {
+            std::hash::Hash::hash(&v.to_bits(), h);
+        }
+    })
+}
+
+/// Whether `light` shows a glow past an edge with `effects` (issue #332): it has a place, and Edge Glow or Sunburst.
+fn has_glow(light: &Light, effects: &Effects) -> bool {
+    let on = |v: f64| v.is_finite() && v > 0.0;
+    light.kind.has_place() && (on(effects.edge_glow) || on(effects.sunburst))
+}
+
+/// The key naming `light`'s glow on `input`'s field: what the glow reads (its place, depth and Softness, and its two numbers),
+/// not Amount, Warmth, a gel, the haze or the light's type.
+fn glow_key(input: &Input, light: &Light, effects: &Effects) -> u64 {
+    hashed(|h| {
+        std::hash::Hash::hash(&(8u8, input.key), h);
+        for v in [light.x, light.y, light.depth, light.softness, effects.edge_glow, effects.sunburst] {
             std::hash::Hash::hash(&v.to_bits(), h);
         }
     })
@@ -585,7 +650,25 @@ fn source_for(input: &Input, light: &Light, effects: &Effects, rig: &Rig) -> Opt
     Some(plane)
 }
 
-/// The scene's beams (issue #317): each light with haze, its plane and the light it adds per unit of it, in its own colour
+/// `light`'s glow past an edge on `input`'s field ([`Field::edge_glow`]; `None`: none), made once per set of its numbers and kept.
+fn glow_for(input: &Input, light: &Light, effects: &Effects) -> Option<Arc<Lobe>> {
+    if !has_glow(light, effects) {
+        return None;
+    }
+    let key = glow_key(input, light, effects);
+    if let Some(l) = GLOW_LOBES.get(key) {
+        return Some(l);
+    }
+    let t = crate::profiling().then(std::time::Instant::now);
+    let glow = Arc::new(input.field.edge_glow(light, effects)?);
+    if let Some(t) = t {
+        eprintln!("    relight glow ({} × {}): {:.1} ms", input.field.width, input.field.height, t.elapsed().as_secs_f64() * 1e3);
+    }
+    GLOW_LOBES.put(key, glow.clone());
+    Some(glow)
+}
+
+/// The scene's added light (issues #317, #332): each light with haze or a glow past an edge, its plane and the light it adds per unit of it, in its own colour
 /// (Warmth and gel, as the finish stage's temperature and tint colour a grey of the same luminance) and strength; and (issue
 /// #334) each light whose source shows as a point, as a plane of its own.
 pub fn beams_of(input: &Input, scene: &Scene, draft: bool) -> Vec<Beamed> {
@@ -594,7 +677,7 @@ pub fn beams_of(input: &Input, scene: &Scene, draft: bool) -> Vec<Beamed> {
     for (i, l) in scene.lights.iter().take(MAX_LIGHTS).enumerate() {
         let e = scene.effects.get(i).unwrap_or(&none);
         let shows_source = l.kind.shows_source() && e.source.is_finite() && e.source > 0.0;
-        if !has_beam(l, e) && !shows_source {
+        if !has_beam(l, e) && !shows_source && !has_glow(l, e) {
             continue;
         }
         // (the rig's place and peak don't depend on Darken Surroundings or the exposure: a light with a place is no fill)
@@ -604,7 +687,24 @@ pub fn beams_of(input: &Input, scene: &Scene, draft: bool) -> Vec<Beamed> {
         let lum = (0.2627 * c[0] + 0.678 * c[1] + 0.0593 * c[2]).max(1e-6);
         let k = rig.gain() * crate::tone::GREY / lum;
         let colour = c.map(|v| if (v * k).is_finite() { (v * k).max(0.0) } else { 0.0 });
-        if let Some(plane) = beam_for(input, l, e, &rig, draft) {
+        // (issue #332: the glow past an edge is added into the beam's plane, the same light in the same colour)
+        let beam = beam_for(input, l, e, &rig, draft);
+        let glow = glow_for(input, l, e);
+        let plane = match (beam, glow) {
+            (Some((b, coarse)), Some(g)) => {
+                // (both: the sum, kept while neither changes; the beam's key takes the flag the beam was made with, which is a drag's
+                // only when its rays were not kept in full)
+                let key = hashed(|h| std::hash::Hash::hash(&(9u8, beam_key(input, l, e, coarse), glow_key(input, l, e)), h));
+                Some(ADDED_LOBES.get(key).unwrap_or_else(|| {
+                    let sum = Arc::new(b.added(&g));
+                    ADDED_LOBES.put(key, sum.clone());
+                    sum
+                }))
+            }
+            (Some((p, _)), None) | (None, Some(p)) => Some(p),
+            (None, None) => None,
+        };
+        if let Some(plane) = plane {
             out.push(Beamed { plane, colour, slot: i as u32, shafts: false });
         }
         if let Some(plane) = source_for(input, l, e, &rig) {
@@ -622,7 +722,7 @@ pub fn beams_of(input: &Input, scene: &Scene, draft: bool) -> Vec<Beamed> {
         let lum = (0.2627 * c[0] + 0.678 * c[1] + 0.0593 * c[2]).max(1e-6);
         let k = rig.gain() * crate::tone::GREY / lum;
         let colour = c.map(|v| if (v * k).is_finite() { (v * k).max(0.0) } else { 0.0 });
-        if let Some(plane) = beam_for(input, l, e, &rig, draft) {
+        if let Some((plane, _)) = beam_for(input, l, e, &rig, draft) {
             out.push(Beamed { plane, colour, slot: 0, shafts: true });
         }
     }

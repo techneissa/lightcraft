@@ -37,6 +37,19 @@ fn grab_id() -> egui::Id {
     egui::Id::unique("relightOnPhotoDrag")
 }
 
+/// What a light's depth, Wrap and sun turn were when a drag of its handle began (kept in the context while it goes): a light that
+/// glows round an edge snaps onto edges as it is dragged and takes them back when it is dragged off every edge (issue #332).
+#[derive(Clone, Copy)]
+struct Start {
+    depth: f64,
+    wrap: f64,
+    sun: Option<(f64, f64)>,
+}
+
+fn start_id() -> egui::Id {
+    egui::Id::unique("relightOnPhotoDragStart")
+}
+
 fn scroll_id() -> egui::Id {
     egui::Id::unique("relightOnPhotoScroll")
 }
@@ -69,7 +82,10 @@ pub(super) fn release_if_hidden(app: &mut LightcraftApp, ui: &egui::Ui, d: &Deve
     kinds::release(app, ui, showing);
     let dragging = ui.ctx().data(|m| m.get_temp::<Grab>(grab_id())).is_some();
     if dragging && !showing {
-        ui.ctx().data_mut(|m| m.remove::<Grab>(grab_id()));
+        ui.ctx().data_mut(|m| {
+            m.remove::<Grab>(grab_id());
+            m.remove::<Start>(start_id());
+        });
         app.ui.dragging_control = None;
         let _ = app.run("develop.endInteraction", json!({}));
     }
@@ -160,6 +176,36 @@ fn paint_ring(p: &egui::Painter, at: Pos2, radius: f32, warmth: f64, hot: bool) 
     p.circle_filled(grip, 3.4, tint);
 }
 
+/// What dragging a light's handle to `(x, y)` sets: its place, and with `glows` (Edge Glow or Sunburst on) the place `snap` found
+/// on an edge with its depth, Wrap and a sun's turn; dragged off every edge (`snap` none) the depth, Wrap and turn it had at the
+/// start of the drag, so a light taken off a building does not keep the building's depth.
+fn move_values((x, y): (f64, f64), snap: Option<lightcraft_pipeline::relight::Snapped>, glows: bool, start: Option<Start>) -> serde_json::Value {
+    let mut v = json!({"relight.x": x.clamp(-0.5, 1.5), "relight.y": y.clamp(-0.5, 1.5)});
+    let Some(o) = v.as_object_mut() else { return v };
+    match (snap, start) {
+        (Some(s), _) => {
+            o.insert("relight.x".into(), json!(s.x));
+            o.insert("relight.y".into(), json!(s.y));
+            o.insert("relight.depth".into(), json!(s.depth));
+            o.insert("relight.wrap".into(), json!(s.wrap));
+            if let Some((az, el)) = s.sun {
+                o.insert("relight.sunAzimuth".into(), json!(az));
+                o.insert("relight.sunElevation".into(), json!(el));
+            }
+        }
+        (None, Some(start)) if glows => {
+            o.insert("relight.depth".into(), json!(start.depth));
+            o.insert("relight.wrap".into(), json!(start.wrap));
+            if let Some((az, el)) = start.sun {
+                o.insert("relight.sunAzimuth".into(), json!(az));
+                o.insert("relight.sunElevation".into(), json!(el));
+            }
+        }
+        _ => {}
+    }
+    v
+}
+
 /// Draw the lights' handles and move them when a drag starts on one. True while the pointer belongs to them (a press,
 /// a click or a drag on a handle or the ring): the loupe's own interactions then wait.
 pub(super) fn overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, map: &CanvasMap, d: &DevelopSettings) -> bool {
@@ -238,6 +284,10 @@ pub(super) fn overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::R
                 if handle.is_some() { ("Relight Light", "relight.x", Grab::Move) } else { ("Relight Size", "relight.softness", Grab::Size) };
             let _ = app.run("develop.beginInteraction", json!({"label": label}));
             ui.ctx().data_mut(|m| m.insert_temp(grab_id(), g));
+            if let Some(l) = handle.and_then(|i| d.relight.lights.get(i)) {
+                let start = Start { depth: l.depth, wrap: l.wrap, sun: (l.kind.index() == 2).then_some((l.kind.sun_azimuth, l.kind.sun_elevation)) };
+                ui.ctx().data_mut(|m| m.insert_temp(start_id(), start));
+            }
             // (⌥ while it is held shows where the light reaches: `relight_alt`)
             app.ui.dragging_control = Some(control.into());
         }
@@ -251,7 +301,14 @@ pub(super) fn overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::R
         let values = match grab {
             Grab::Move => {
                 let n = map.norm(q);
-                json!({"relight.x": n.x.clamp(-0.5, 1.5), "relight.y": n.y.clamp(-0.5, 1.5)})
+                // (issue #332: a light that glows round an edge goes onto the nearest depth edge as it is dragged, just behind it, and a sun
+                // turns to shine from there; the release keeps what the drag showed)
+                let glows = chosen.effects.edge_glow > 0.0 || chosen.effects.sunburst > 0.0;
+                let snap = glows
+                    .then(|| app.session.relight_made(photo))
+                    .flatten()
+                    .and_then(|made| lightcraft_pipeline::relight::snap_to_edge(&made.input.field, chosen, n.x, n.y));
+                move_values((n.x, n.y), snap, glows, ui.ctx().data(|m| m.get_temp::<Start>(start_id())))
             }
             Grab::Size => {
                 let dist = at.get(sel).map_or(0.0, |c| q.distance(*c));
@@ -263,9 +320,37 @@ pub(super) fn overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::R
         }
     }
     if resp.drag_stopped() || !resp.dragged() {
-        ui.ctx().data_mut(|m| m.remove::<Grab>(grab_id()));
+        ui.ctx().data_mut(|m| {
+            m.remove::<Grab>(grab_id());
+            m.remove::<Start>(start_id());
+        });
         app.ui.dragging_control = None;
         let _ = app.run("develop.endInteraction", json!({}));
     }
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_light_dragged_off_every_edge_gets_back_the_depth_wrap_and_turn_it_had_before_the_drag() {
+        let start = Start { depth: 30.0, wrap: 40.0, sun: Some((40.0, 35.0)) };
+        let snapped = lightcraft_pipeline::relight::Snapped { x: 0.5, y: 0.45, depth: 100.0, wrap: 10.0, sun: Some((-180.0, 2.0)) };
+        // on an edge: its place, depth, Wrap and turn
+        let on = move_values((0.47, 0.36), Some(snapped), true, Some(start));
+        assert_eq!(
+            (on["relight.depth"].as_f64(), on["relight.wrap"].as_f64(), on["relight.sunAzimuth"].as_f64()),
+            (Some(100.0), Some(10.0), Some(-180.0))
+        );
+        // off every edge: what the drag began with, at the pointer's place
+        let off = move_values((0.9, 0.2), None, true, Some(start));
+        assert_eq!((off["relight.x"].as_f64(), off["relight.y"].as_f64()), (Some(0.9), Some(0.2)));
+        assert_eq!((off["relight.depth"].as_f64(), off["relight.wrap"].as_f64()), (Some(30.0), Some(40.0)));
+        assert_eq!((off["relight.sunAzimuth"].as_f64(), off["relight.sunElevation"].as_f64()), (Some(40.0), Some(35.0)));
+        // a light with no Edge Glow or Sunburst only moves
+        let plain = move_values((0.9, 0.2), None, false, Some(start));
+        assert_eq!(plain.as_object().map(|o| o.len()), Some(2));
+    }
 }

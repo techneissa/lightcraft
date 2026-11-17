@@ -2,7 +2,7 @@
 //! depth model's download; and (issue #299) adding, duplicating, deleting and selecting lights. A photo holds up to
 //! eight lights. Each light's numbers are develop controls, `relight.<n>.amount`, `.softness`, `.warmth`, `.x`, `.y`,
 //! `.depth`, `.wrap`, (issue #302) `.gelHue`, `.gelStrength`, `.pattern`, `.patternScale`, `.patternRotation`,
-//! `.patternSoftness`, `.haze`, (issue #316) `.patternOpen`, (issue #317) `.scatter` and `.dust`, (issue #331) `.mist`, `.mistHeight` and `.fade`, (issue #334) `.source` (Visible Source: the light's own source as a bright point when it is inside the photo, 0..100) and a spot's `.spotSharp` (0 or 1: a sharp-edged cone) with Cone Angle down to 2, and (issue #315) `.shadows` and (issue #300) `.kind` (0 point, 1 spot, 2 sun / window, 3 softbox, 4 rim, 5 fill) and the
+//! `.patternSoftness`, `.haze`, (issue #316) `.patternOpen`, (issue #317) `.scatter` and `.dust`, (issue #331) `.mist`, `.mistHeight` and `.fade`, (issue #334) `.source` (Visible Source: the light's own source as a bright point when it is inside the photo, 0..100) and a spot's `.spotSharp` (0 or 1: a sharp-edged cone) with Cone Angle down to 2, (issue #332) `.edgeGlow` and `.sunburst`, and (issue #315) `.shadows` and (issue #300) `.kind` (0 point, 1 spot, 2 sun / window, 3 softbox, 4 rim, 5 fill) and the
 //! numbers of each type (`.spotAimX` …; `lightcraft_develop::relight_kinds`) (`n` from 0), and `relight.darken` is the photo's; `relight.amount` and the other shorthands act
 //! on the selected light (see [`Session::relight_selected`]). They are set like every slider (`develop.set`,
 //! `develop.merge`), so undo, presets, copy settings and sync reach them.
@@ -204,6 +204,42 @@ fn set_gel(s: &mut Session, p: &Value) -> Result<Value> {
     })
 }
 
+/// `relight.snapToEdge`: put a light on the nearest depth edge to a point, just behind it (issue #332).
+fn snap_to_edge(s: &mut Session, p: &Value) -> Result<Value> {
+    let c = "relight.snapToEdge";
+    let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
+    let made = s.relight_made(id).ok_or_else(|| bad(c, "the photo's depth is not found yet: relight.status says when it is"))?;
+    let field = made.input.field.clone();
+    let num = |k: &str| p.get(k).filter(|v| !v.is_null()).map(|v| v.as_f64().ok_or_else(|| bad(c, format!("{k} is a number")))).transpose();
+    let (px, py) = (num("x")?, num("y")?);
+    let mut at = None;
+    change(s, c, "Snap Light to Edge", |d, sel| {
+        let i = light_param(p, c, d, sel)?;
+        let l = &mut d.relight.lights[i];
+        if !l.kind.has_place() {
+            return Err(bad(
+                c,
+                format!("light {i} is a {} and has no place on the photo: only a point, spot, sun or softbox goes onto an edge", l.kind.name()),
+            ));
+        }
+        let (x, y) = (px.unwrap_or(l.x), py.unwrap_or(l.y));
+        let snap = lightcraft_pipeline::relight::snap_to_edge(&field, l, x, y)
+            .ok_or_else(|| bad(c, "no depth edge near that point: the light stays where it is"))?;
+        (l.x, l.y, l.depth, l.wrap) = (snap.x, snap.y, snap.depth, snap.wrap);
+        if let Some((azimuth, elevation)) = snap.sun {
+            (l.kind.sun_azimuth, l.kind.sun_elevation) = (azimuth, elevation);
+        }
+        l.sanitize();
+        at = Some(snap);
+        // (the selection stays where it was)
+        Ok(sel)
+    })?;
+    let snap = at.ok_or_else(|| bad(c, "no light"))?;
+    Ok(
+        json!({"x": snap.x, "y": snap.y, "depth": snap.depth, "wrap": snap.wrap, "sun": snap.sun.map(|(azimuth, elevation)| json!({"azimuth": azimuth, "elevation": elevation}))}),
+    )
+}
+
 fn select(s: &mut Session, p: &Value) -> Result<Value> {
     let c = "relight.selectLight";
     let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
@@ -280,6 +316,15 @@ pub fn specs() -> Vec<CommandSpec> {
             "{gel?: Warm Amber|Teal|Magenta|Deep Blue|Red, hue?: 0..360 degrees, strength?: 0..100, index?: light (default the selected one)} → {index, count} — put a gel on a light: a named one (hue and strength set together; strength overrides its own), or any hue (0 red, 120 green, 240 blue) and/or strength (one alone keeps the light's other); strength 0 takes the gel off. Warmth stays. The gel is also the controls relight.<n>.gelHue and .gelStrength; one undo step",
             has_active,
             set_gel
+        ),
+        cmd!(
+            "relight.snapToEdge",
+            "Snap Light to Edge",
+            [],
+            None,
+            "{index?: light (default the selected one), x?, y?: the point to start from (default the light's own place)} → {x, y, depth, wrap, sun?: {azimuth, elevation}} — put a light on the nearest depth edge (a building's corner, a wall, a trunk, a shoulder) within about a seventh of the photo, just behind it: on the step, at its far side's depth; a sun also turns to shine from that point, and its Wrap drops to at most 10 (what faces the camera is not lit by a light behind the scene). With Edge Glow (relight.<n>.edgeGlow) the light glows round the edge, its beams fan out from there through haze and the edge's shadow cuts them. An error when the photo's depth is not found yet or no edge is near; one undo step",
+            has_active,
+            snap_to_edge
         ),
         cmd!(
             query "relight.selectLight",
@@ -369,6 +414,36 @@ mod tests {
             s.execute("relight.deleteLight", &json!({})).unwrap();
         }
         assert!(s.develop_of(id).unwrap().relight.is_default(), "the last light goes back to its defaults");
+    }
+
+    #[test]
+    fn a_sun_snaps_to_the_depth_edge_just_behind_it_and_turns_to_shine_from_there() {
+        use lightcraft_relight::Field;
+        let (mut s, id) = session();
+        // no depth yet: an error, nothing changed
+        s.execute("relight.addLight", &json!({"kind": "sun", "x": 0.42, "y": 0.3})).unwrap();
+        assert!(s.execute("relight.snapToEdge", &json!({})).is_err());
+        // a near wall on the left half, the open far side on the right
+        let (w, h) = (160, 100);
+        let lz: Vec<f32> = (0..w * h).map(|i| if (i % w) < w / 2 { -0.6 } else { 0.4 }).collect();
+        s.relight_test_field(id, Field::from_parts(w, h, lz, vec![-2.0; w * h]).unwrap());
+        let r = s.execute("relight.snapToEdge", &json!({})).unwrap();
+        let l = lights(&s, id).pop().unwrap();
+        assert!((l.x - 0.5).abs() < 0.03 && (r["x"].as_f64().unwrap() - l.x).abs() < 1e-9, "x {} {r}", l.x);
+        assert!(l.wrap <= 10.0, "a light behind the scene keeps a low Wrap: {}", l.wrap);
+        assert!(l.depth > 90.0, "just behind the edge, at the far side's depth: {}", l.depth);
+        assert!(l.kind.sun_azimuth.abs() > 150.0 && l.kind.sun_elevation > 0.0, "a sun behind the scene: {:?}", l.kind);
+        // one undo step; no edge near is an error that changes nothing
+        s.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(lights(&s, id).pop().unwrap().x, 0.42);
+        assert!(s.execute("relight.snapToEdge", &json!({"x": 0.99, "y": 0.5})).is_err());
+        assert_eq!(lights(&s, id).pop().unwrap().x, 0.42);
+        // a rim and a fill have no place: an error that says so
+        s.execute("relight.addLight", &json!({"kind": "fill"})).unwrap();
+        let before = s.develop_of(id).unwrap();
+        let e = s.execute("relight.snapToEdge", &json!({})).unwrap_err().to_string();
+        assert!(e.contains("no place"), "{e}");
+        assert!(std::sync::Arc::ptr_eq(&before, &s.develop_of(id).unwrap()), "an undo step was made");
     }
 
     #[test]

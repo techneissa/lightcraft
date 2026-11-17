@@ -16,6 +16,7 @@
 
 pub mod beam;
 mod caustics;
+pub mod edge;
 pub mod effects;
 pub mod field;
 pub mod filter;
@@ -38,6 +39,8 @@ mod tests_beam;
 #[cfg(test)]
 mod tests_edge;
 #[cfg(test)]
+mod tests_edge_glow;
+#[cfg(test)]
 mod tests_kinds;
 #[cfg(test)]
 mod tests_mist;
@@ -54,6 +57,7 @@ mod tests_water;
 pub mod water;
 
 pub use beam::{Beam, Shafts};
+pub use edge::EdgeSnap;
 pub use effects::{Effects, Pattern, PatternPlanes};
 pub use field::{DepthMap, Field, Kind};
 pub use kinds::{Fill, LightKind, MIN_ANGLE, Rim, Softbox, Spot, Sun};
