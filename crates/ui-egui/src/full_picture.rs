@@ -200,6 +200,12 @@ impl Store {
         }
     }
 
+    /// Let go of the picture (its disk copy stays) without refusing its look: the window went to the background, so the
+    /// same look is built again when it is back (a 1:1 view returns at 1:1, not at view resolution).
+    pub fn free_for_background(&mut self) {
+        self.picture = None;
+    }
+
     /// The photo and key of the picture held, if one is.
     pub fn held(&self) -> Option<(PhotoId, u64)> {
         self.picture.as_ref().map(|p| (p.photo, p.key))

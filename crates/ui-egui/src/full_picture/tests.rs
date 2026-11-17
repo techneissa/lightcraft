@@ -236,6 +236,22 @@ fn short_memory_lets_go_of_the_picture() {
     assert_eq!((full.held(), full.stats.freed_for_memory, full.holds_anything()), (None, 1, false), "{}", full.to_json());
 }
 
+// Given the finished picture, when the window goes to the background and the picture is let go, then the same look is
+// built again (unlike memory pressure, nothing is refused)
+#[test]
+fn the_picture_let_go_in_the_background_is_built_again_for_the_same_look() {
+    let fixture = RenderFixture::new("full-picture-background", 1);
+    let mut h = loupe(&fixture, None);
+    assert!(h.settle(SETTLE), "Fit settles");
+    until_ready(&mut h);
+    let key = h.app.renderer.full.held();
+    assert!(key.is_some());
+    h.app.renderer.release_for_background();
+    assert_eq!(h.app.renderer.full.held(), None, "let go");
+    until_ready(&mut h);
+    assert_eq!(h.app.renderer.full.held(), key, "the same look is back");
+}
+
 // Given a photo open in the Edit view whose original is being read ahead (#182), when its finished picture is due,
 // then the build waits for the read-ahead and renders from the original it decoded: the file is decoded once
 #[test]

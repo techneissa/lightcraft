@@ -2221,6 +2221,8 @@ fn abandoned_line(slot: Slot, request: Option<&Requested>, why: &str) -> String 
     }
 }
 
+mod background;
+
 #[cfg(test)]
 mod thumbnail_tests;
 

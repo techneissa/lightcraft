@@ -14,7 +14,7 @@ use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use lightcraft_parsing::{FaceHint, ModelSet, Parsing, RgbImage, cache};
 
@@ -29,8 +29,8 @@ pub use download::Download;
 const IN_MEMORY: usize = 4;
 /// What the parse files on disk may take together (the oldest go first).
 const CACHE_BYTES: u64 = 512 << 20;
-/// How long the models stay loaded after their last use.
-const KEEP_LOADED: Duration = Duration::from_secs(60);
+/// How long [`PeopleParsing::installed_lately`] trusts what it found in the models folder.
+const INSTALLED_MEMO: Duration = Duration::from_secs(3);
 /// The long edge of the picture a photo is parsed at.
 pub const PARSE_EDGE: usize = 2048;
 
@@ -137,7 +137,6 @@ impl Jobs {
 struct Loaded {
     set: ModelSet,
     parser: Arc<lightcraft_parsing::Parser>,
-    last_used: Instant,
 }
 
 #[derive(Default)]
@@ -175,7 +174,11 @@ struct Inner {
     /// Called by a run just before it loads the set (tests hold a load there).
     #[cfg(test)]
     before_load: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
-    watcher: AtomicBool,
+    /// What [`PeopleParsing::installed_lately`] last found, by set.
+    installed_memo: Mutex<Vec<(ModelSet, web_time::Instant, bool)>>,
+    /// Lets the loaded set go after a while without use.
+    #[cfg(not(target_arch = "wasm32"))]
+    idle: std::sync::OnceLock<crate::idle::Tracker>,
     runs: std::sync::atomic::AtomicUsize,
     message: Mutex<Option<String>>,
     /// BiRefNet-matting edges for Entire Person and Background (`fork/hair-edges.md`), when the session has them.
@@ -219,7 +222,9 @@ impl PeopleParsing {
                 runtimes: Mutex::new(lightcraft_parsing::Runtimes::default()),
                 #[cfg(test)]
                 before_load: Mutex::new(None),
-                watcher: AtomicBool::new(false),
+                installed_memo: Mutex::new(Vec::new()),
+                #[cfg(not(target_arch = "wasm32"))]
+                idle: std::sync::OnceLock::new(),
                 runs: std::sync::atomic::AtomicUsize::new(0),
                 message: Mutex::new(None),
                 hair_edges: Mutex::new(None),
@@ -248,6 +253,7 @@ impl PeopleParsing {
         let saved = choice.as_deref().and_then(read_choice);
         *lock(&self.inner.paths) = Paths { models, cache, choice };
         *lock(&self.inner.set) = saved;
+        self.forget_installed();
         self.unload();
     }
 
@@ -277,12 +283,31 @@ impl PeopleParsing {
         self.models_dir().is_some_and(|d| set.installed_in(&d))
     }
 
+    /// [`Self::installed`] as it was at most [`INSTALLED_MEMO`] ago, for what asks on every frame: the models folder is
+    /// not looked at each time (issue #304). A download that finishes is seen within that time.
+    pub(crate) fn installed_lately(&self, set: ModelSet) -> bool {
+        let now = web_time::Instant::now();
+        let mut memo = lock(&self.inner.installed_memo);
+        if let Some((.., yes)) = memo.iter().find(|(s, at, _)| *s == set && now.duration_since(*at) < INSTALLED_MEMO) {
+            return *yes;
+        }
+        let yes = self.installed(set);
+        memo.retain(|(s, ..)| *s != set);
+        memo.push((set, now, yes));
+        yes
+    }
+
+    /// What is in the models folder changed: look at it again at the next [`Self::installed_lately`].
+    pub(crate) fn forget_installed(&self) {
+        lock(&self.inner.installed_memo).clear();
+    }
+
     /// The set that parses: the saved choice; else the first installed set; else SegFormer.
     pub fn model_set(&self) -> ModelSet {
         if let Some(s) = *lock(&self.inner.set) {
             return s;
         }
-        ModelSet::ALL.into_iter().find(|s| self.installed(*s)).unwrap_or(ModelSet::Segformer)
+        ModelSet::ALL.into_iter().find(|s| self.installed_lately(*s)).unwrap_or(ModelSet::Segformer)
     }
 
     /// Choose the set that parses from now on (kept in the choice file when there is one).
@@ -737,13 +762,14 @@ impl PeopleParsing {
                 );
                 let mut slot = lock(&self.inner.loaded);
                 if self.inner.stale.load(Ordering::Acquire) == stale {
-                    *slot = Some(Loaded { set, parser: p.clone(), last_used: Instant::now() });
+                    *slot = Some(Loaded { set, parser: p.clone() });
                 }
                 lightcraft_parsing::profile::mark("model load");
                 p
             }
         };
-        self.watch();
+        // (not let go while it parses; its idle time counts from the end)
+        let _in_use = self.idle().using();
         parser.parse(img, hints, &lightcraft_parsing::Options::default(), cancelled).map_err(|e| e.to_string())
     }
 
@@ -753,7 +779,6 @@ impl PeopleParsing {
     fn loaded_parser(&self, set: ModelSet) -> Option<Arc<lightcraft_parsing::Parser>> {
         let mut slot = lock(&self.inner.loaded);
         if let Some(l) = slot.as_mut().filter(|l| l.set == set) {
-            l.last_used = Instant::now();
             return Some(l.parser.clone());
         }
         let old = slot.take();
@@ -773,28 +798,22 @@ impl PeopleParsing {
         Err("the web build has no people parsing".into())
     }
 
-    /// Drop the loaded models once they have been idle for [`KEEP_LOADED`] (one watcher thread at a time).
+    /// The shared idle rule's handle (`crate::idle`): the loaded set is let go after a while without use.
     #[cfg(not(target_arch = "wasm32"))]
-    fn watch(&self) {
-        if self.inner.watcher.swap(true, Ordering::AcqRel) {
-            return;
-        }
-        let weak = Arc::downgrade(&self.inner);
-        let spawned = std::thread::Builder::new().name("parsing-idle".into()).spawn(move || {
-            loop {
-                std::thread::sleep(Duration::from_secs(10));
-                let Some(inner) = weak.upgrade() else { return };
-                let mut slot = lock(&inner.loaded);
-                if slot.as_ref().is_none_or(|l| l.last_used.elapsed() >= KEEP_LOADED) {
-                    *slot = None;
-                    inner.watcher.store(false, Ordering::Release);
-                    return;
-                }
-            }
-        });
-        if spawned.is_err() {
-            self.inner.watcher.store(false, Ordering::Release);
-        }
+    fn idle(&self) -> &crate::idle::Tracker {
+        self.inner.idle.get_or_init(|| {
+            let weak = Arc::downgrade(&self.inner);
+            crate::idle::register("People parsing models", move || {
+                use crate::idle::Unload;
+                let Some(inner) = weak.upgrade() else { return Unload::Nothing };
+                let old = match inner.loaded.try_lock() {
+                    Ok(mut slot) => slot.take(),
+                    Err(std::sync::TryLockError::Poisoned(p)) => p.into_inner().take(),
+                    Err(std::sync::TryLockError::WouldBlock) => return Unload::Busy,
+                };
+                if old.is_some() { Unload::Freed } else { Unload::Nothing }
+            })
+        })
     }
 }
 

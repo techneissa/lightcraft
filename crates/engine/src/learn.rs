@@ -48,6 +48,9 @@ struct Inner {
     profiles_dir: Mutex<Option<PathBuf>>,
     #[cfg(not(target_arch = "wasm32"))]
     encoder: Mutex<Option<Arc<lightcraft_learn::image_encoder::ImageEncoder>>>,
+    /// Lets the encoder go after a while without use (`crate::idle`, issue #304).
+    #[cfg(not(target_arch = "wasm32"))]
+    idle: std::sync::OnceLock<crate::idle::Tracker>,
     /// Which engine runs the encoder (`fork/coreml.md`).
     runtime: Mutex<crate::model_runtime::Runtime>,
     download: Mutex<Download>,
@@ -122,6 +125,8 @@ impl LearnEdits {
                 profiles_dir: Mutex::new(None),
                 #[cfg(not(target_arch = "wasm32"))]
                 encoder: Mutex::new(None),
+                #[cfg(not(target_arch = "wasm32"))]
+                idle: std::sync::OnceLock::new(),
                 runtime: Mutex::new(Default::default()),
                 download: Mutex::new(Download::Idle),
                 read: Mutex::new(HashMap::new()),
@@ -201,6 +206,7 @@ impl LearnEdits {
         if self.statistics_only() {
             return Ok(None);
         }
+        self.idle().touch();
         if let Some(e) = lock(&self.inner.encoder).clone() {
             return Ok(Some(e));
         }
@@ -219,6 +225,19 @@ impl LearnEdits {
         );
         *lock(&self.inner.encoder) = Some(e.clone());
         Ok(Some(e))
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn idle(&self) -> &crate::idle::Tracker {
+        self.inner.idle.get_or_init(|| {
+            let weak = Arc::downgrade(&self.inner);
+            crate::idle::register("Learn My Edits' image model", move || {
+                let Some(inner) = weak.upgrade() else { return crate::idle::Unload::Nothing };
+                // (a job running keeps its own copy until it ends)
+                let old = lock(&inner.encoder).take();
+                if old.is_some() { crate::idle::Unload::Freed } else { crate::idle::Unload::Nothing }
+            })
+        })
     }
 
     /// Which engine runs the encoder: Automatic, Core ML or Candle.

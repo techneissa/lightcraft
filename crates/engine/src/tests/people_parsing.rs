@@ -125,6 +125,8 @@ fn the_chosen_set_is_kept_and_installed_files_count() {
         file.set_len(f.size).unwrap();
     }
     assert!(p.installed(ModelSet::BiSeNet) && !p.installed(ModelSet::Segformer));
+    // (files put there by hand: a download tells the models it finished)
+    p.forget_installed();
     assert_eq!(p.model_set(), ModelSet::BiSeNet);
     p.set_model_set(ModelSet::Segformer).unwrap();
     let again = PeopleParsing::new(Activity::default());

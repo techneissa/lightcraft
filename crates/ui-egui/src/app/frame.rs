@@ -257,6 +257,7 @@ impl LightcraftApp {
         self.collect_screenshots(ctx);
         self.issue_screenshots(ctx);
         self.request_paint_while_hidden(ctx);
+        crate::background::tick(self, ctx, now);
     }
 
     /// While hidden, queued captures and an injected gesture step need a real UI pass; a pending

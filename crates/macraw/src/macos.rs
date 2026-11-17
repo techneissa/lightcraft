@@ -106,8 +106,28 @@ fn cameras() -> &'static [String] {
     })
 }
 
+/// Whether Apple lists `exif_model`. Answered from a memo by model: the loupe asks for each photo it looks ahead to
+/// on every frame, and walking the whole list (a string made per name) each time kept an idle window busy (#304).
 pub(crate) fn supports(exif_model: &str) -> bool {
-    available() && model_listed(exif_model, cameras().iter().map(String::as_str))
+    use std::collections::HashMap;
+    use std::sync::{Mutex, PoisonError};
+    /// Models remembered at most (a library has a few dozen; a hostile file name cannot grow it).
+    const MEMO: usize = 256;
+    static ANSWERS: Mutex<Option<HashMap<String, bool>>> = Mutex::new(None);
+    if !available() {
+        return false;
+    }
+    if let Some(known) = ANSWERS.lock().unwrap_or_else(PoisonError::into_inner).as_ref().and_then(|m| m.get(exif_model)) {
+        return *known;
+    }
+    let listed = model_listed(exif_model, cameras().iter().map(String::as_str));
+    let mut memo = ANSWERS.lock().unwrap_or_else(PoisonError::into_inner);
+    let memo = memo.get_or_insert_with(HashMap::new);
+    if memo.len() >= MEMO {
+        memo.clear();
+    }
+    memo.insert(exif_model.to_string(), listed);
+    listed
 }
 
 pub(crate) fn probe(input: Input<'_>) -> Result<Probe, Error> {
