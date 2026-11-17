@@ -1,7 +1,8 @@
 //! The field: what no control changes, made once per photo from its depth and a guide picture of it, and kept.
 //! Log depth brought up to the guide's size edge-aware (joint-bilateral upsampling against the photo's colours,
 //! so depth stops at outlines and hair), surface normals from a copy of it smoothed at a scale tied to the photo
-//! (self-guided, so the steps between near and far stay steps and the depth model's small blocks and ripples go),
+//! (self-guided, so the steps between near and far stay steps and the depth model's small blocks and ripples go;
+//! before that, small steps on a surface of one colour, the depth model's terraces, are smoothed away),
 //! and the guide's luminance (for highlight roll-off and shadow protection). Along each step between near and far
 //! (the edge band) it keeps the guide's local statistics, so the light can follow the photo's own edge there.
 
@@ -105,6 +106,32 @@ fn edge_band(lz: &[f32], gi: &[f32], w: usize, h: usize) -> Vec<(u32, f32, f32)>
         .collect()
 }
 
+/// The depth model's terraces: a floor or wall comes out as flat plateaus with small steps between them, not as the
+/// ramp it is, and a step kept as a step shows in the light as a band (and as an edge the light is refitted to
+/// the photo's brightness along, so the photo's own lines print into it). So log depth `lz` (`w × h`) is
+/// smoothed by a guided filter against the photo's luminance `gi` over a window of 6 % of the long side (a surface
+/// of one colour takes the mean of its terraces; at the photo's own edges the filter follows them), and a pixel
+/// takes that where it is within [`TERRACE`] of its own depth. A real step between two things is larger than a
+/// terrace and stays as it is, sharp.
+fn deterrace(lz: &[f32], gi: &[f32], w: usize, h: usize) -> Vec<f32> {
+    let r = ((w.max(h) as f32 * 0.03).round() as usize).max(2);
+    let smooth = guided(gi, lz, w, h, r, 1.5e-2);
+    lz.par_iter()
+        .zip(&smooth)
+        .map(|(&a, &b)| {
+            // (the weight of the smoothed value: 1 within a terrace of the pixel's own depth, 0 past it)
+            let t = ((a - b).abs() - TERRACE.0) / (TERRACE.1 - TERRACE.0);
+            let t = 1.0 - t.clamp(0.0, 1.0);
+            let keep = t * t * (3.0 - 2.0 * t);
+            if b.is_finite() { a + (b - a) * keep } else { a }
+        })
+        .collect()
+}
+
+/// How far (log depth) a pixel may be from the smoothed depth and still be a terrace of it: fully smoothed under
+/// `.0` (about 4 %), left alone over `.1` (about 11 %).
+const TERRACE: (f32, f32) = (0.04, 0.11);
+
 /// Percentile `q` (0..1) of `v` (copied and sorted; `v` is not empty).
 fn percentile(v: &[f32], q: f64) -> f32 {
     let mut s: Vec<f32> = v.iter().copied().filter(|x| x.is_finite()).collect();
@@ -179,10 +206,11 @@ impl Field {
         let hi_guide: Vec<Guide> = guide.data.par_iter().map(|c| guide_colour(*c)).collect();
         let lo_guide = area_down(&hi_guide, (w, h), (lw, lh));
         let ln_z = joint_bilateral_up(&lz_lo, (lw, lh), &lo_guide, &hi_guide, (w, h), &Upsample { sigma_s: 1.0, sigma_r: 0.08, split: 0.05 });
-        let normal = normals(&ln_z, w, h);
         let y: Vec<f32> = guide.data.par_iter().map(|c| lightcraft_color::luminance_2020(*c).max(1e-6)).collect();
         let lum = y.par_iter().map(|y| (y / 0.18).log2()).collect();
         let gi: Vec<f32> = y.par_iter().map(|y| y.cbrt()).collect();
+        let ln_z = deterrace(&ln_z, &gi, w, h);
+        let normal = normals(&ln_z, w, h);
         let band = edge_band(&ln_z, &gi, w, h);
         Ok(Field { width: w, height: h, ln_z, normal, lum, near, far, gi, band })
     }
@@ -254,9 +282,10 @@ impl Field {
         if width == 0 || height == 0 || ln_z.len() != width * height || lum.len() != ln_z.len() {
             return Err(Error::BadDepth(format!("{} values for {width} × {height}", ln_z.len())));
         }
+        let gi: Vec<f32> = lum.iter().map(|l| (0.18 * l.exp2()).cbrt()).collect();
+        let ln_z = deterrace(&ln_z, &gi, width, height);
         let normal = normals(&ln_z, width, height);
         let (near, far) = (percentile(&ln_z, 0.02), percentile(&ln_z, 0.98));
-        let gi: Vec<f32> = lum.iter().map(|l| (0.18 * l.exp2()).cbrt()).collect();
         let band = edge_band(&ln_z, &gi, width, height);
         Ok(Field { width, height, ln_z, normal, lum, near, far, gi, band })
     }
@@ -336,6 +365,7 @@ fn normals(lz: &[f32], w: usize, h: usize) -> Vec<[f32; 3]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Light;
 
     fn flat_guide(w: usize, h: usize) -> Rgb32f {
         Rgb32f::filled(w, h, [0.18; 3])
@@ -411,6 +441,30 @@ mod tests {
             let (_, n, _) = f.at((x as f32 + 0.5) / w as f32, 0.5);
             assert!(n[2] < -0.9, "x {x}: {n:?}");
         }
+    }
+
+    #[test]
+    fn a_floor_in_terraces_takes_the_same_light_as_the_smooth_floor_it_is() {
+        // a floor receding up the photo whose depth comes in 8-row terraces (steps of 8 %, the depth model's way)
+        // against the same floor as a ramp, under one light: the light must not follow the steps
+        let (w, h) = (320, 240);
+        let ramp: Vec<f32> = (0..w * h).map(|i| 0.01 * (h - i / w) as f32).collect();
+        let terraces: Vec<f32> = (0..w * h).map(|i| 0.08 * ((h - i / w) / 8) as f32 + 0.04).collect();
+        let lum = vec![-1.0; w * h];
+        let light = Light { x: 0.3, y: 0.4, depth: 0.2, amount: 1.0, softness: 0.6, warmth: 0.5, darken: 0.0, wrap: 0.3 };
+        let lit = |lz: Vec<f32>| {
+            let f = Field::from_parts(w, h, lz, lum.clone()).unwrap();
+            let sh = f.shading(&f.rig(&light, 0.0));
+            sh.planes(w, h, &|x, y| (x / w as f64, y / h as f64))
+        };
+        let (a, b) = (lit(ramp), lit(terraces));
+        // (the middle of the photo: the borders have fewer rows to average over)
+        let worst = |p: &[f32], q: &[f32]| -> f32 {
+            (30..h - 30).flat_map(|y| (0..w).step_by(16).map(move |x| y * w + x)).map(|i| (p[i] - q[i]).abs()).fold(0.0, f32::max)
+        };
+        let (stops, share) = (worst(&a.stops, &b.stops), worst(&a.share, &b.share));
+        assert!(stops < 0.07, "the gain differs by {stops} stops");
+        assert!(share < 0.03, "the light's colour differs by {share}");
     }
 
     #[test]
