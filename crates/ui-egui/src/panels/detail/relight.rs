@@ -10,7 +10,7 @@ use serde_json::json;
 
 use super::geometry::CanvasMap;
 use super::{DevelopSettings, LightcraftApp, Point, Rect, register, vec2};
-use crate::panels::edit::{light_tint, nearest};
+use crate::panels::edit::{light_tint, topmost};
 
 /// How near a press must be to a handle to take it (points).
 const HIT: f32 = 16.0;
@@ -21,8 +21,8 @@ const RING_PER_SOFTNESS: f32 = 0.4;
 const RING_HIT: f32 = 7.0;
 /// How long after the last scroll the run of scrolling ends (seconds): one undo step.
 const SCROLL_IDLE: f64 = 0.4;
-/// Depth (of 100) a scroll of one point moves the light.
-const SCROLL_DEPTH: f64 = 0.12;
+/// Depth (of 100) one notch of a wheel moves the light.
+const SCROLL_STEP: f64 = 5.0;
 
 /// What a drag of the handles is doing (kept in the context while it goes).
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -39,10 +39,24 @@ fn scroll_id() -> egui::Id {
     egui::Id::unique("relightOnPhotoScroll")
 }
 
+/// A run of scrolling over a handle (kept in the context while it goes).
+#[derive(Clone, Copy)]
+struct Scroll {
+    /// When it ends if nothing more comes (the context's time, seconds).
+    until: f64,
+    /// Whether its undo step is open (a scroll too small to move the depth opens none).
+    open: bool,
+    /// Scrolled points not yet spent on a step of depth: a slow trackpad scroll adds up between frames.
+    remainder: f32,
+}
+
 /// Whether the lights' handles are on the photo now: the Edit panel's Relight section is open, the lights change the
 /// photo (an Amount or Darken Surroundings above 0, the section's eye on) and no tool has the photo.
 pub(super) fn shown(app: &LightcraftApp, d: &DevelopSettings) -> bool {
-    app.ui.section_open(lightcraft_develop::relight::SECTION) && lightcraft_pipeline::relight::scene_of(d).is_some() && app.ui.tool.is_empty()
+    !cfg!(target_arch = "wasm32")
+        && app.ui.section_open(lightcraft_develop::relight::SECTION)
+        && lightcraft_pipeline::relight::scene_of(d).is_some()
+        && app.ui.tool.is_empty()
 }
 
 /// A drag of a handle (or a run of scrolling) that is going when the handles stop showing (the section closed, the
@@ -57,14 +71,16 @@ pub(super) fn release_if_hidden(app: &mut LightcraftApp, ui: &egui::Ui, d: &Deve
         let _ = app.run("develop.endInteraction", json!({}));
     }
     // a run of scrolling ends when it has been quiet for a moment, or the handles stop showing
-    if let Some(until) = ui.ctx().data(|m| m.get_temp::<f64>(scroll_id())) {
+    if let Some(run) = ui.ctx().data(|m| m.get_temp::<Scroll>(scroll_id())) {
         let now = ui.input(|i| i.time);
-        if !showing || now >= until {
-            ui.ctx().data_mut(|m| m.remove::<f64>(scroll_id()));
-            app.ui.dragging_control = None;
-            let _ = app.run("develop.endInteraction", json!({}));
+        if !showing || now >= run.until {
+            ui.ctx().data_mut(|m| m.remove::<Scroll>(scroll_id()));
+            if run.open {
+                app.ui.dragging_control = None;
+                let _ = app.run("develop.endInteraction", json!({}));
+            }
         } else {
-            ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(until - now + 0.02));
+            ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(run.until - now + 0.02));
         }
     }
 }
@@ -80,8 +96,9 @@ fn ring_radius(softness: f64) -> f32 {
 }
 
 /// A scroll over a handle moves its light nearer (up) or farther (down), instead of zooming or panning the view. Called
-/// before the view takes the scroll; the handle under the pointer is selected first. A run of scrolling is one undo step
-/// (it ends after a quiet moment, in [`release_if_hidden`]).
+/// before the view takes the scroll; the handle under the pointer is selected first. One notch of a wheel is
+/// [`SCROLL_STEP`] of depth and the rest of a slow scroll is kept between frames. A run of scrolling is one undo step
+/// (it ends after a quiet moment, in [`release_if_hidden`]); a scroll during a drag of a handle moves nothing.
 pub(super) fn claim_scroll(app: &mut LightcraftApp, ui: &egui::Ui, resp: &egui::Response, map: &CanvasMap, d: &DevelopSettings) {
     if !resp.hovered() || !shown(app, d) || app.ui.right != crate::state::RightPanel::Edit {
         return;
@@ -92,27 +109,37 @@ pub(super) fn claim_scroll(app: &mut LightcraftApp, ui: &egui::Ui, resp: &egui::
         return;
     }
     let map = map.for_mask(true);
-    let Some(i) = nearest(&spots(&map, d), q, HIT) else { return };
+    let Some(photo) = app.session.active() else { return };
+    let sel = app.session.relight_selected(photo);
+    let Some(i) = topmost(&spots(&map, d), sel, q, HIT) else { return };
     // (the view doesn't take this scroll)
     ui.input_mut(|inp| {
         inp.smooth_scroll_delta = egui::Vec2::ZERO;
         inp.events.retain(|e| !matches!(e, egui::Event::MouseWheel { modifiers, .. } if modifiers.is_none()));
     });
-    let Some(photo) = app.session.active() else { return };
-    let mut depth = d.relight.lights.get(i).map_or(0.0, |l| l.depth);
-    if i != app.session.relight_selected(photo) {
-        let _ = app.run("relight.selectLight", json!({"index": i}));
+    // (a drag of a handle has its own undo step: a scroll in it changes nothing)
+    if ui.ctx().data(|m| m.get_temp::<Grab>(grab_id())).is_some() {
+        return;
     }
-    if ui.ctx().data(|m| m.get_temp::<f64>(scroll_id())).is_none() {
-        let _ = app.run("develop.beginInteraction", json!({"label": "Relight Depth"}));
-        app.ui.dragging_control = Some("relight.depth".into());
+    let now = ui.input(|i| i.time);
+    let mut run = ui.ctx().data(|m| m.get_temp::<Scroll>(scroll_id())).unwrap_or(Scroll { until: now, open: false, remainder: 0.0 });
+    let steps = crate::widgets::wheel_nudges(&mut run.remainder, dy);
+    if steps != 0.0 {
+        if i != sel {
+            let _ = app.run("relight.selectLight", json!({"index": i}));
+        }
+        if !run.open {
+            let _ = app.run("develop.beginInteraction", json!({"label": "Relight Depth"}));
+            app.ui.dragging_control = Some("relight.depth".into());
+            run.open = true;
+        }
+        let depth = (d.relight.lights.get(i).map_or(0.0, |l| l.depth) - steps * SCROLL_STEP).clamp(0.0, 100.0);
+        if let Err(e) = app.run("develop.set", json!({"control": "relight.depth", "value": depth.round()})) {
+            app.toast(ui.ctx(), e);
+        }
     }
-    depth = (depth - f64::from(dy) * SCROLL_DEPTH).clamp(0.0, 100.0);
-    if let Err(e) = app.run("develop.set", json!({"control": "relight.depth", "value": depth.round()})) {
-        app.toast(ui.ctx(), e);
-    }
-    let until = ui.input(|i| i.time) + SCROLL_IDLE;
-    ui.ctx().data_mut(|m| m.insert_temp(scroll_id(), until));
+    run.until = now + SCROLL_IDLE;
+    ui.ctx().data_mut(|m| m.insert_temp(scroll_id(), run));
     ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(SCROLL_IDLE + 0.02));
 }
 
@@ -149,7 +176,7 @@ pub(super) fn overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::R
             if i == sel || !clip.contains(*c) {
                 continue;
             }
-            crate::panels::edit::paint_light(&p, *c, 5.5, l.warmth, hover.is_some_and(|q| nearest(&at, q, HIT) == Some(i)));
+            crate::panels::edit::paint_light(&p, *c, 5.5, l.warmth, hover.is_some_and(|q| topmost(&at, sel, q, HIT) == Some(i)));
             register(ui, format!("relight:onPhoto:{i}"), Rect::from_center_size(*c, vec2(20.0, 20.0)));
         }
         if let Some(c) = at.get(sel) {
@@ -160,7 +187,7 @@ pub(super) fn overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::R
                     *c,
                     7.0,
                     chosen.warmth,
-                    grab == Some(Grab::Move) || hover.is_some_and(|q| nearest(&at, q, HIT) == Some(sel)),
+                    grab == Some(Grab::Move) || hover.is_some_and(|q| topmost(&at, sel, q, HIT) == Some(sel)),
                 );
                 register(ui, "relight:onPhoto", Rect::from_center_size(*c, vec2(20.0, 20.0)));
                 register(ui, format!("relight:onPhoto:{sel}"), Rect::from_center_size(*c, vec2(20.0, 20.0)));
@@ -171,7 +198,7 @@ pub(super) fn overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::R
     if grab.is_none()
         && let Some(q) = hover
     {
-        if nearest(&at, q, HIT).is_some() {
+        if topmost(&at, sel, q, HIT).is_some() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
         } else if on_ring(q) {
             ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeNeSw);
@@ -182,7 +209,7 @@ pub(super) fn overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::R
     if (resp.drag_started() || resp.clicked())
         && let Some(q) = press()
     {
-        let handle = nearest(&at, q, HIT);
+        let handle = topmost(&at, sel, q, HIT);
         if handle.is_none() && !on_ring(q) {
             return false;
         }

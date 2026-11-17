@@ -89,7 +89,16 @@ impl DevelopSettings {
     /// Kelvin settings. Out-of-range values are brought back into range ([`DevelopSettings::keep_in_range`]).
     pub fn merged(&self, partial: &Value) -> Result<DevelopSettings, serde_json::Error> {
         let mut v = self.to_json();
-        presets::deep_merge(&mut v, partial);
+        // (fork, issue #299: a Relight block of the first form, one light's numbers, lands on the first light)
+        let upgraded = partial.get(relight::KEY).and_then(|b| relight::merge_first_form(&self.relight, b));
+        match (upgraded, partial.as_object()) {
+            (Some(block), Some(o)) => {
+                let mut o = o.clone();
+                o.insert(relight::KEY.into(), block);
+                presets::deep_merge(&mut v, &Value::Object(o));
+            }
+            _ => presets::deep_merge(&mut v, partial),
+        }
         let mut out = DevelopSettings::from_json(&v)?;
         if let Some(wb) = partial.get("wb").and_then(Value::as_object)
             && (wb.contains_key("temp") || wb.contains_key("tint"))

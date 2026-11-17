@@ -371,6 +371,12 @@ pub fn specs() -> Vec<CommandSpec> {
                     return ok();
                 }
                 let id = active(s, "develop.set")?;
+                // (fork, issue #299: a light the photo doesn't have is an error, and no undo step)
+                if let Some(d) = s.develop_of(id)
+                    && let Some((k, _)) = vals.iter().find(|(k, _)| k.starts_with("relight.") && controls::get(&d, k).is_none())
+                {
+                    return Err(bad("develop.set", format!("`{k}`: the photo has no such light ({} lights)", d.relight.lights.len())));
+                }
                 let info = s.source_info(id);
                 let dims = crop_dims(s, id);
                 edit(s, "develop.set", &label, |d| {
@@ -386,6 +392,12 @@ pub fn specs() -> Vec<CommandSpec> {
             let spec = controls::find(&c).ok_or_else(|| bad("develop.adjust", "unknown control"))?;
             let delta = f64_req(p, "delta", "develop.adjust")?;
             let id = active(s, "develop.adjust")?;
+            if let Some(d) = s.develop_of(id)
+                && c.starts_with("relight.")
+                && controls::get(&d, &c).is_none()
+            {
+                return Err(bad("develop.adjust", format!("`{c}`: the photo has no such light ({} lights)", d.relight.lights.len())));
+            }
             let (info, dims) = (s.source_info(id), crop_dims(s, id));
             edit(s, "develop.adjust", spec.label, |d| {
                 let before = d.crop.geometry;
@@ -1321,6 +1333,8 @@ pub fn specs() -> Vec<CommandSpec> {
                             }
                         }
                         let before = nd.crop.geometry;
+                        // (fork, issue #299: `relight.amount` … act on the photo's selected light)
+                        let ctl = lightcraft_develop::relight::for_light(&ctl, s.relight_selected(id)).unwrap_or_else(|| ctl.clone());
                         let v = controls::get(&nd, &ctl).unwrap_or(spec.default);
                         controls::set(&mut nd, &ctl, v + delta);
                         refit_crop_angle(ctl == CROP_ANGLE, before, &mut nd, crop_dims(s, id));

@@ -485,3 +485,43 @@ fn culling_eyes_are_fork_format_9() {
     assert_eq!(eyes.out_of_focus(), Some(true));
     assert_eq!(Eyes { focus: Some(f32::NAN), ..eyes }.out_of_focus(), None, "a NaN score is no score");
 }
+
+/// Fork 12 (#299): a fork 11 library whose log holds patches of Relight's block in its first form (one light's numbers
+/// and `darken` in one object) opens with them applied to the first light, for a develop edit and for a History step.
+#[test]
+fn a_fork_11_log_patch_of_relight_lands_on_the_first_light() {
+    use lightcraft_develop::relight::first_form;
+    fn first_forms(v: &mut serde_json::Value) {
+        match v {
+            serde_json::Value::Object(o) => {
+                if let Some(flat) = o.get("fork_relight").and_then(first_form) {
+                    o.insert("fork_relight".into(), flat);
+                }
+                o.values_mut().for_each(first_forms);
+            }
+            serde_json::Value::Array(a) => a.iter_mut().for_each(first_forms),
+            _ => {}
+        }
+    }
+    let mut c = Catalog::new();
+    let mut d = DevelopSettings::default();
+    d.relight.lights[0].amount = 60.0;
+    let id = photo(&mut c, d, None);
+    // the snapshot as fork 11 wrote it
+    let mut body: serde_json::Value = serde_json::from_str(&c.to_snapshot()).unwrap();
+    first_forms(&mut body);
+    let m = MemStore::new();
+    m.set(SNAPSHOT, snapshot(FORK_FORMAT, 11, 1, &body.to_string()));
+    let line = |seq: u64, op: &str| format!("{{\"seq\":{seq},\"crc\":{},\"op\":{op}}}\n", crc32fast::hash(op.as_bytes()));
+    let amount = |v: f64| format!(r#"{{"o":{{"s":{{"fork_relight":{{"o":{{"s":{{"amount":{{"v":{v:?}}}}}}}}}}}}}}}"#);
+    let edit = format!(r#"{{"op":"patchDevelop","id":{},"patch":{},"label":"Relight","edited":null}}"#, id.0, amount(70.0));
+    let push = format!(r#"{{"op":"patchPush","id":{},"label":"Relight","base":{{"patch":{}}}}}"#, id.0, amount(80.0));
+    m.set(LOG, [line(2, &edit), line(3, &push)].concat().into_bytes());
+    let (_, loaded, r) = Journal::open(Box::new(m.clone())).unwrap();
+    assert_eq!((r.replayed, r.failed), (2, 0), "{r:?}");
+    let p = loaded.photo(id).unwrap();
+    assert_eq!(p.develop.relight.lights[0].amount, 70.0);
+    assert_eq!(p.history.last().unwrap().settings.relight.lights[0].amount, 80.0);
+    // and a fork 11 snapshot read without a log is one light, as it was
+    assert_eq!(r.upgraded_from, Some(11));
+}

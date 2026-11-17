@@ -538,6 +538,7 @@ impl Journal {
         };
         let log = log.unwrap_or_default();
         let mut replay = Replay::default();
+        replay.first_form_relight = matches!(header, Some(crate::fork_format::Header::Older { .. }));
 
         // Scan records; `good_end` is the byte offset just past the last good record.
         let mut pos = 0usize;

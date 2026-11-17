@@ -155,6 +155,9 @@ fn select(s: &mut Session, p: &Value) -> Result<Value> {
     let c = "relight.selectLight";
     let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
     let d = s.develop_of(id).ok_or_else(|| bad(c, "no photo"))?;
+    if p.get("index").is_none_or(Value::is_null) {
+        return Err(bad(c, "missing `index`"));
+    }
     let i = light_param(p, c, &d, 0)?;
     s.relight_select(id, i);
     Ok(json!({"index": i, "count": d.relight.lights.len()}))
@@ -212,7 +215,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Delete Light",
             [],
             None,
-            "{index?: light (default the selected one)} → {index, count} — remove a light and select the one before it; a photo's only light goes back to its defaults (off) instead; one undo step",
+            "{index?: light (default the selected one)} → {index, count} — remove a light and select the one before it (deleting the first selects the one that follows); a photo's only light goes back to its defaults (off) instead; one undo step",
             has_active,
             delete
         ),
@@ -221,7 +224,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Select Light",
             [],
             None,
-            "{index: light, from 0} → {index, count} — select a light: relight.amount, .softness, .warmth, .x, .y, .depth and .wrap act on it, and its handle is the one marked on the photo. Not part of the edit: no undo step",
+            "{index: light, from 0; required} → {index, count} — select a light: relight.amount, .softness, .warmth, .x, .y, .depth and .wrap act on it, and its handle is the one marked on the photo. Not part of the edit: no undo step",
             has_active,
             select
         ),
@@ -282,6 +285,18 @@ mod tests {
         assert_eq!((lights(&s, id).len(), s.relight_selected(id)), (1, 0));
         // errors, not panics: no such light, past the cap, the only light
         assert!(s.execute("relight.selectLight", &json!({"index": 5})).is_err());
+        assert!(s.execute("relight.selectLight", &json!({})).is_err(), "no index is an error, not light 0");
+        // a control of a light the photo doesn't have is an error and makes no undo step
+        let before = s.develop_of(id).unwrap();
+        assert!(s.execute("develop.set", &json!({"control": "relight.6.amount", "value": 5})).is_err());
+        assert!(s.execute("develop.adjust", &json!({"control": "relight.6.amount", "delta": 5})).is_err());
+        assert!(std::sync::Arc::ptr_eq(&before, &s.develop_of(id).unwrap()));
+        // Quick Develop's shorthand acts on the selected light
+        s.execute("relight.addLight", &json!({})).unwrap();
+        s.execute("develop.quickAdjust", &json!({"control": "relight.softness", "delta": 10})).unwrap();
+        assert_eq!((lights(&s, id)[0].softness, lights(&s, id)[1].softness), (50.0, 60.0));
+        s.execute("edit.undo", &json!({})).unwrap();
+        s.execute("edit.undo", &json!({})).unwrap();
         assert!(s.execute("relight.deleteLight", &json!({"index": 9})).is_err());
         for _ in 0..7 {
             s.execute("relight.addLight", &json!({})).unwrap();

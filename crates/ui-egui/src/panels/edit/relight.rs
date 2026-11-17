@@ -16,9 +16,11 @@ use super::{Icon, LightcraftApp, Tokens, control, register};
 /// How near a press must be to a handle to take it (points).
 const HIT: f32 = 12.0;
 
-/// The nearest of `spots` to `q` within `reach` (points), if any.
-pub(crate) fn nearest(spots: &[Pos2], q: Pos2, reach: f32) -> Option<usize> {
-    spots.iter().enumerate().map(|(i, p)| (i, p.distance(q))).filter(|(_, d)| *d <= reach).min_by(|a, b| a.1.total_cmp(&b.1)).map(|(i, _)| i)
+/// The handle a press at `q` takes: the one drawn on top within `reach` (points). The selected light is drawn last, so
+/// it comes first; the others are drawn in their order, so the later one comes first.
+pub(crate) fn topmost(spots: &[Pos2], selected: usize, q: Pos2, reach: f32) -> Option<usize> {
+    let near = |i: &usize| spots.get(*i).is_some_and(|p| p.distance(q) <= reach);
+    Some(selected).filter(near).or_else(|| (0..spots.len()).rev().find(near))
 }
 
 /// The depth box's largest height (points).
@@ -239,7 +241,7 @@ fn depth_box(
     let mut sel = sel;
     if (resp.drag_started() || resp.clicked())
         && let Some(q) = resp.interact_pointer_pos()
-        && let Some(i) = nearest(&spots, q, HIT)
+        && let Some(i) = topmost(&spots, sel, q, HIT)
         && i != sel
     {
         match app.run("relight.selectLight", json!({"index": i})) {

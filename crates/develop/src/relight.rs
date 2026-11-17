@@ -192,6 +192,37 @@ impl Relight {
     }
 }
 
+/// A stored block in its first form (issue #288: one light's numbers and `darken` in one object), for replaying a log
+/// written before several lights: its patches name those flat keys. `None` when the block isn't of the new form.
+pub fn first_form(block: &Value) -> Option<Value> {
+    let o = block.as_object()?;
+    let mut flat = o.get("lights")?.as_array()?.first()?.as_object()?.clone();
+    if let Some(d) = o.get("darken") {
+        flat.insert("darken".into(), d.clone());
+    }
+    Some(Value::Object(flat))
+}
+
+/// A partial block of the first form (no `lights`: an older preset, a pasted setting) as a whole block that merges onto
+/// `current`: the first light takes the numbers it names and Darken Surroundings its own. `None` when `partial` isn't
+/// of the first form.
+pub fn merge_first_form(current: &Relight, partial: &Value) -> Option<Value> {
+    let o = partial.as_object().filter(|o| !o.contains_key("lights"))?;
+    let mut r = current.clone();
+    for (k, v) in o {
+        let Some(n) = v.as_f64() else { continue };
+        match k.as_str() {
+            "darken" => r.darken = n,
+            f => {
+                if let Some(slot) = r.lights.first_mut().and_then(|l| l.field(f)) {
+                    *slot = n;
+                }
+            }
+        }
+    }
+    serde_json::to_value(r).ok()
+}
+
 /// `relight.amount` → `(None, "amount")`, `relight.2.amount` → `(Some(2), "amount")`.
 fn split(id: &str) -> Option<(Option<usize>, &str)> {
     let rest = id.strip_prefix("relight.")?;
@@ -364,5 +395,22 @@ mod tests {
         // a section reset puts all the lights back
         s.reset_section(crate::Section::Relight);
         assert!(s.relight.is_default());
+    }
+
+    #[test]
+    fn a_preset_of_the_first_form_lands_on_the_first_light() {
+        let mut photo = DevelopSettings::default();
+        photo.relight.lights[0] = LightSettings { amount: 40.0, x: 0.6, ..LightSettings::default() };
+        photo.relight.lights.push(LightSettings { amount: 30.0, ..LightSettings::default() });
+        let old = json!({"fork_relight": {"amount": 70.0, "darken": 20.0}});
+        let m = photo.merged(&old).unwrap();
+        assert_eq!((m.relight.lights[0].amount, m.relight.lights[0].x, m.relight.darken), (70.0, 0.6, 20.0));
+        assert_eq!(m.relight.lights[1].amount, 30.0, "the other lights stay");
+        // a block of the new shape merges as it always did
+        let new = json!({"fork_relight": {"lights": [{"amount": 10.0}], "darken": 5.0}});
+        assert_eq!(photo.merged(&new).unwrap().relight.lights.len(), 1);
+        // and the first form is what an older log's patches name
+        let flat = first_form(&serde_json::to_value(&photo.relight).unwrap()).unwrap();
+        assert_eq!((flat["amount"].as_f64(), flat["x"].as_f64(), flat.get("lights")), (Some(40.0), Some(0.6), None));
     }
 }
