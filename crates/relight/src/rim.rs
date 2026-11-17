@@ -38,8 +38,26 @@ pub(crate) struct Setup {
     pub one_sided: f32,
 }
 
+/// A Rim light on a field: its setup, and the rim's value at every pixel, made the first time a pixel is asked for (a rig
+/// that is only set up, as every drag step of another light does, costs nothing; the lobe made from it is what is kept).
+#[derive(Debug)]
+pub(crate) struct RimShape {
+    setup: Setup,
+    map: std::sync::OnceLock<RimMap>,
+}
+
+impl RimShape {
+    pub(crate) fn new(setup: Setup) -> Self {
+        RimShape { setup, map: std::sync::OnceLock::new() }
+    }
+
+    /// The rim over `field` (the field it was set up on), made now if it was not yet.
+    pub(crate) fn map(&self, field: &Field) -> &RimMap {
+        self.map.get_or_init(|| build(field, &self.setup))
+    }
+}
+
 /// The rim's value at every pixel of a field (0..1).
-#[derive(Clone)]
 pub(crate) struct RimMap {
     width: usize,
     height: usize,
@@ -139,13 +157,14 @@ pub(crate) fn build(field: &Field, setup: &Setup) -> RimMap {
             let pl = (p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt().max(1e-9);
             let c = -(nrm[0] * p[0] + nrm[1] * p[1] + nrm[2] * p[2]) / pl;
             let away = 1.0 - smooth(0.05, setup.turned, c);
-            // (squared: a bright edge that falls away quickly, not a band)
-            let mut value = edge * edge * (0.4 + 0.6 * away);
+            // (squared: a bright edge that falls away quickly, not a band; the turn from the camera takes up to half of it)
+            let mut value = edge * edge * (0.5 + 0.5 * away);
             if setup.one_sided > 0.0 {
                 // the outline's outward direction: where the dilation climbs (towards the far side of the step)
                 let (gx, gy) = (at(x + 2, y) - at(x.saturating_sub(2), y), at(x, y + 2) - at(x, y.saturating_sub(2)));
                 let gl = (gx * gx + gy * gy).sqrt();
-                let toward = if gl > 1e-6 { (gx * fx + gy * fy) / gl } else { 1.0 };
+                // (no direction to the far side, no side it faces: nothing)
+                let toward = if gl > 1e-6 { (gx * fx + gy * fy) / gl } else { 0.0 };
                 let side = smooth(0.0, 0.8, toward);
                 value *= 1.0 - setup.one_sided * (1.0 - side);
             }

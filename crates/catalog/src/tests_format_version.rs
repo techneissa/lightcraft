@@ -343,8 +343,8 @@ fn op_variants_are_versioned() {
     /// v6: Face Reshape's sliders in the `fork_retouch` block (`fork/retouch-reshape.md`).
     /// v7: Portrait Background's `blur`, `swap`, `clean` and `with` (#141). v8: the Portrait tab's Refine strokes,
     /// `fork_retouch.refine` and `fork_retouch.faces[].refine` (#99). v9: `Analysis.eyes`, Assisted Culling's eyes
-    /// (`fork/ai-culling.md`). v10: the official v13's Lens Blur fields. v11: Relight's `fork_relight` block (#288). v12: its list of lights (#299). v13: each light's gel, pattern and haze (#302). v14: each light's type and its numbers (#300).
-    const NEWEST_FORK_FIELDS: u32 = 14;
+    /// (`fork/ai-culling.md`). v10: the official v13's Lens Blur fields. v11: Relight's `fork_relight` block (#288). v12: its list of lights (#299). v13: each light's gel, pattern and haze (#302). v14: each light's type and its numbers (#300). v15: a Rim's side, `rimAngle` and `rimSide` (#319).
+    const NEWEST_FORK_FIELDS: u32 = 15;
     let newest = since(&Op::SetHistoryCursor { id: PhotoId(1), cursor: None });
     assert_eq!(newest.max(NEWEST_FIELDS), crate::fork_format::LEGACY_FORK_MAX, "the newest official-numbered op or field");
     assert_eq!(NEWEST_FORK_FIELDS, VERSION, "the newest fork op's or fields' version must be the current format version");

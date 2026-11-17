@@ -154,17 +154,20 @@ impl Field {
             shape,
             ev: if ev.is_finite() { ev.clamp(-10.0, 10.0) as f32 } else { 0.0 },
         };
-        // the most lit point, on a grid of the photo
-        let (gw, gh) = (64usize, 48usize);
-        let peak = (0..gw * gh)
-            .into_par_iter()
-            .map(|i| {
-                let (u, v) = (((i % gw) as f32 + 0.5) / gw as f32, ((i / gw) as f32 + 0.5) / gh as f32);
-                let (lz, n, _) = self.at(u, v);
-                self.light_at(&rig, u, v, lz, n)
-            })
-            .reduce(|| 0.0, f32::max);
-        rig.peak = if rig.shape.fixed_peak() { 1.0 } else { peak.max(1e-6) };
+        // the most lit point, on a grid of the photo (a shape with a fixed peak has no use for it: asking would make a Rim's
+        // map for nothing)
+        if !rig.shape.fixed_peak() {
+            let (gw, gh) = (64usize, 48usize);
+            let peak = (0..gw * gh)
+                .into_par_iter()
+                .map(|i| {
+                    let (u, v) = (((i % gw) as f32 + 0.5) / gw as f32, ((i / gw) as f32 + 0.5) / gh as f32);
+                    let (lz, n, _) = self.at(u, v);
+                    self.light_at(&rig, u, v, lz, n)
+                })
+                .reduce(|| 0.0, f32::max);
+            rig.peak = peak.max(1e-6);
+        }
         rig
     }
 
@@ -339,6 +342,7 @@ impl Field {
     /// The lobe of `rig`'s light over the field.
     pub fn lobe(&self, rig: &Rig) -> Lobe {
         let (w, h) = (self.width, self.height);
+        rig.shape.prepare(self);
         let mut m = vec![0f32; w * h];
         m.par_chunks_mut(w.max(1)).enumerate().for_each(|(y, row)| {
             let v = (y as f32 + 0.5) / h as f32;

@@ -6,13 +6,13 @@ const W: usize = 480;
 const H: usize = 360;
 
 /// A near disc (log depth −0.5, radius 22 % of the width) in front of a far wall (0.3), centred; no noise inside it but a
-/// bump of the kind a depth model gives a face (a nose-sized step of 8 %).
+/// bump of the kind a depth model gives a face (a nose-sized step of 20 %).
 fn disc() -> Field {
     let lz: Vec<f32> = (0..W * H)
         .map(|i| {
             let (x, y) = ((i % W) as f32 / W as f32 - 0.5, ((i / W) as f32 / H as f32 - 0.5) * H as f32 / W as f32);
             let r = (x * x + y * y).sqrt();
-            let bump = if (x - 0.05).abs() < 0.04 && (y + 0.02).abs() < 0.05 { -0.08 } else { 0.0 };
+            let bump = if (x - 0.05).abs() < 0.04 && (y + 0.02).abs() < 0.05 { -0.2 } else { 0.0 };
             if r < 0.22 { -0.5 + bump } else { 0.3 }
         })
         .collect();
@@ -34,8 +34,13 @@ fn a_rim_lights_a_ring_along_the_edge_of_a_near_disc_and_nothing_else() {
     let ring = [edge(1.0, 0.0), edge(-1.0, 0.0), edge(0.0, 1.0), edge(0.0, -1.0), edge(0.7, 0.7), edge(-0.7, -0.7)];
     assert!(ring.iter().all(|v| *v > 1.2), "ring {ring:?}");
     // the middle (with the bump) and the far wall, next to the edge and away from it
-    let (middle, bump, beside, wall) = (at(0.5, 0.5), at(0.55, 0.48), at(0.5 + 0.22 + 2.5 * px, 0.5), at(0.95, 0.5));
-    assert!(middle < 0.05 && bump < 0.05 && beside < 0.05 && wall < 0.05, "middle {middle} bump {bump} beside {beside} wall {wall}");
+    // (the bump's pixels, its own edges included: a step of 20 % inside a surface is no outline)
+    let bump = (0..=8)
+        .flat_map(|i| (0..=8).map(move |j| (0.512 + 0.076 * i as f32 / 8.0, 0.41 + 0.126 * j as f32 / 8.0)))
+        .map(|(x, y)| at(x, y))
+        .fold(0.0, f32::max);
+    let (middle, beside, wall) = (at(0.5, 0.5), at(0.5 + 0.22 + 2.5 * px, 0.5), at(0.95, 0.5));
+    assert!(middle < 0.05 && bump < 0.01 && beside < 0.05 && wall < 0.05, "middle {middle} bump {bump} beside {beside} wall {wall}");
     // it fades smoothly inward: no step in the gain between neighbouring pixels, and less every pixel in
     let row: Vec<f32> = (0..30).map(|i| at(0.5 + 0.22 - (2.5 + i as f32) * px, 0.5)).collect();
     assert!(row.windows(2).all(|p| p[1] <= p[0] + 0.02 && p[0] - p[1] < 0.5), "fade {row:?}");

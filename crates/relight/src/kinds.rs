@@ -136,8 +136,8 @@ pub(crate) enum Shape {
         eps2: f32,
     },
     Rim {
-        /// The rim over the field, made once for the light ([`crate::rim`]).
-        map: crate::rim::RimMap,
+        /// The rim over the field, made when a pixel first asks for it ([`crate::rim`]).
+        rim: std::sync::Arc<crate::rim::RimShape>,
     },
     Fill {
         near: f32,
@@ -222,7 +222,7 @@ impl Shape {
                     from: [angle.sin() as f32, -(angle.cos()) as f32],
                     one_sided: finite(r.one_sided, 0.0, 1.0, 0.0) as f32,
                 };
-                Shape::Rim { map: crate::rim::build(field, &setup) }
+                Shape::Rim { rim: std::sync::Arc::new(crate::rim::RimShape::new(setup)) }
             }
             LightKind::Fill(f) => Shape::Fill { near: finite(f.near, 0.0, 1.0, 0.5) as f32, top: 0.5 + 2.0 * softness },
         }
@@ -242,6 +242,16 @@ impl Shape {
     /// photo's best would light everything alike when nothing faces them well.
     pub(crate) fn fixed_peak(&self) -> bool {
         matches!(self, Shape::Sun { .. } | Shape::Rim { .. } | Shape::Fill { .. })
+    }
+}
+
+impl Shape {
+    /// Make what a light of this shape needs before its pixels are asked for in parallel (a Rim's map: built once here, with
+    /// all the threads, not by whichever pixel asks first).
+    pub(crate) fn prepare(&self, field: &Field) {
+        if let Shape::Rim { rim } = self {
+            rim.map(field);
+        }
     }
 }
 
@@ -277,7 +287,7 @@ pub(crate) fn light_at(field: &Field, rig: &Rig, (u, v): (f32, f32), lz: f32, n:
             sum / (BOX_GRID * BOX_GRID) as f32
         }
         // (the map holds all of it: the depth edge, how the surface turns, which side)
-        Shape::Rim { map } => map.at(u, v),
+        Shape::Rim { rim } => rim.map(field).at(u, v),
         Shape::Fill { near, top } => {
             let (_, _, lum) = field.at(u, v);
             // (the pixel's luminance as the photo shows it: the guide's plus the photo's exposure, as the grade reads it)
