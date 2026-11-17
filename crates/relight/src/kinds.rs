@@ -193,7 +193,14 @@ impl Shape {
                 let hw = 0.5 * w as f32 * field.width as f32 / long * LENS * z;
                 let hh = 0.5 * h as f32 * field.height as f32 / long * LENS * z;
                 let cell = |half: f32| half / BOX_GRID as f32;
-                Shape::Box { c: pos, tx: [cos, sin, 0.0], ty: [-sin, cos, 0.0], hw, hh, eps2: 1.5 * (cell(hw) * cell(hw) + cell(hh) * cell(hh)) + 1e-6 }
+                Shape::Box {
+                    c: pos,
+                    tx: [cos, sin, 0.0],
+                    ty: [-sin, cos, 0.0],
+                    hw,
+                    hh,
+                    eps2: 1.5 * (cell(hw) * cell(hw) + cell(hh) * cell(hh)) + 1e-6,
+                }
             }
             LightKind::Rim(r) => {
                 let w = finite(r.width, 0.0, 1.0, 0.5) as f32;

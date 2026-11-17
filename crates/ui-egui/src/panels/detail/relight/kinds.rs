@@ -181,7 +181,12 @@ fn paint(p: &egui::Painter, map: &CanvasMap, l: &LightSettings, c: Pos2, hot: Op
             p.rect_filled(Rect::from_center_size(g, vec2(11.0, 11.0)), 2.0, Color32::from_black_alpha(140));
             p.rect_filled(Rect::from_center_size(g, vec2(8.0, 8.0)), 1.5, tint);
             if on(Handle::BoxSize) {
-                p.rect_stroke(Rect::from_center_size(g, vec2(17.0, 17.0)), 3.0, Stroke::new(1.0, Color32::from_white_alpha(160)), egui::StrokeKind::Outside);
+                p.rect_stroke(
+                    Rect::from_center_size(g, vec2(17.0, 17.0)),
+                    3.0,
+                    Stroke::new(1.0, Color32::from_white_alpha(160)),
+                    egui::StrokeKind::Outside,
+                );
             }
         }
         _ => {}
@@ -251,7 +256,15 @@ fn label_of(h: Handle) -> &'static str {
 /// Draw the selected light's handles for its type and drag them. True while the pointer belongs to them (a press or a
 /// drag on one): the light's own handle and the loupe wait. `map` is the photo's mask-coordinate mapping, `c` the
 /// light's place on the screen.
-pub(super) fn overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, map: &CanvasMap, l: &LightSettings, c: Pos2, clip: Rect) -> bool {
+pub(super) fn overlay(
+    app: &mut LightcraftApp,
+    ui: &mut egui::Ui,
+    resp: &egui::Response,
+    map: &CanvasMap,
+    l: &LightSettings,
+    c: Pos2,
+    clip: Rect,
+) -> bool {
     let found = handles(map, l, c);
     if found.is_empty() || !clip.contains(c) {
         // (a drag that began on a handle ends where its light's handles stop)
@@ -259,7 +272,13 @@ pub(super) fn overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::R
     }
     let grab = ui.ctx().data(|m| m.get_temp::<Handle>(grab_id()));
     let hover = resp.hover_pos();
-    let near = |q: Pos2| found.iter().filter(|(_, at)| at.distance(q) <= HIT && at.distance(q) < c.distance(q)).min_by(|a, b| a.1.distance(q).total_cmp(&b.1.distance(q))).map(|(h, _)| *h);
+    let near = |q: Pos2| {
+        found
+            .iter()
+            .filter(|(_, at)| at.distance(q) <= HIT && at.distance(q) < c.distance(q))
+            .min_by(|a, b| a.1.distance(q).total_cmp(&b.1.distance(q)))
+            .map(|(h, _)| *h)
+    };
     paint(&ui.painter_at(clip), map, l, c, grab.or_else(|| hover.and_then(near)));
     for (h, at) in &found {
         register(ui, format!("relight:kind:{}", control_of(*h).trim_start_matches("relight.")), Rect::from_center_size(*at, vec2(16.0, 16.0)));

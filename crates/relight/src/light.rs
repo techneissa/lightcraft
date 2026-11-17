@@ -667,8 +667,11 @@ mod tests {
     #[test]
     fn hostile_numbers_give_finite_planes() {
         let f = two_planes(0.5);
-        let rig =
-            f.rig(&Light { x: f64::NAN, y: f64::INFINITY, depth: -5.0, amount: 1e9, softness: f64::NAN, warmth: 9.0, wrap: 7.0, kind: LightKind::Point }, -3.0, f64::NAN);
+        let rig = f.rig(
+            &Light { x: f64::NAN, y: f64::INFINITY, depth: -5.0, amount: 1e9, softness: f64::NAN, warmth: 9.0, wrap: 7.0, kind: LightKind::Point },
+            -3.0,
+            f64::NAN,
+        );
         let sh = f.shading(&rig);
         let p = sh.planes(7, 5, &|x, y| (x / 7.0, y / 5.0));
         assert!(p.stops.iter().chain(&p.share).all(|v| v.is_finite()));

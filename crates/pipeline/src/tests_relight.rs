@@ -146,7 +146,8 @@ fn a_warm_light_warms_a_neutral_wall_and_a_cool_one_cools_it() {
     };
     for warmth in [-100.0, -67.0, 67.0, 100.0] {
         let mut s = DevelopSettings::default();
-        s.relight.lights[0] = LightSettings { amount: 48.0, softness: 84.0, wrap: 28.0, x: 0.5, y: 0.5, depth: 10.0, warmth, ..LightSettings::default() };
+        s.relight.lights[0] =
+            LightSettings { amount: 48.0, softness: 84.0, wrap: 28.0, x: 0.5, y: 0.5, depth: 10.0, warmth, ..LightSettings::default() };
         let img = render(&src, &wall, &s, &RenderRequest::fit(W, H)).image;
         for (name, b) in [("left", (0.1, 0.4, 0.2, 0.6)), ("middle", (0.45, 0.4, 0.55, 0.6)), ("right", (0.8, 0.4, 0.9, 0.6))] {
             let [r, g, b] = mean_rgb(&img, b);
@@ -164,8 +165,10 @@ fn a_warm_light_warms_a_neutral_wall_and_a_cool_one_cools_it() {
 /// A flat grey wall field, lit by `lights` (place; Warmth), each at Amount 60.
 fn wall_with(lights: &[(f64, f64)]) -> DevelopSettings {
     let mut s = DevelopSettings::default();
-    s.relight.lights =
-        lights.iter().map(|&(x, warmth)| LightSettings { amount: 60.0, softness: 30.0, wrap: 28.0, x, y: 0.5, depth: 10.0, warmth, ..LightSettings::default() }).collect();
+    s.relight.lights = lights
+        .iter()
+        .map(|&(x, warmth)| LightSettings { amount: 60.0, softness: 30.0, wrap: 28.0, x, y: 0.5, depth: 10.0, warmth, ..LightSettings::default() })
+        .collect();
     s
 }
 
@@ -183,7 +186,8 @@ fn a_block_saved_with_one_light_renders_as_that_light() {
     let old = serde_json::json!({"fork_relight": {"amount": 70.0, "softness": 35.0, "warmth": 40.0, "x": 0.3, "y": 0.45, "depth": 10.0, "darken": 25.0, "wrap": 30.0}});
     let read = DevelopSettings { relight: DevelopSettings::from_json(&old).unwrap().relight, ..DevelopSettings::default() };
     let mut built = DevelopSettings::default();
-    built.relight.lights[0] = LightSettings { amount: 70.0, softness: 35.0, warmth: 40.0, x: 0.3, y: 0.45, depth: 10.0, wrap: 30.0, ..LightSettings::default() };
+    built.relight.lights[0] =
+        LightSettings { amount: 70.0, softness: 35.0, warmth: 40.0, x: 0.3, y: 0.45, depth: 10.0, wrap: 30.0, ..LightSettings::default() };
     built.relight.darken = 25.0;
     let req = RenderRequest::fit(W, H);
     let (a, b) = (render(&src, &info, &read, &req).image, render(&src, &info, &built, &req).image);

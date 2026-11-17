@@ -196,7 +196,10 @@ mod tests {
         assert!(light.get("spotEdge").is_none() && light.get("sunAzimuth").is_none());
         let back = DevelopSettings::from_json(&v).unwrap();
         assert_eq!(back.relight, s.relight);
-        assert_eq!((get(&back, "relight.kind"), get(&back, "relight.spotAngle"), get(&back, "relight.spotEdge")), (Some(1.0), Some(12.0), Some(40.0)));
+        assert_eq!(
+            (get(&back, "relight.kind"), get(&back, "relight.spotAngle"), get(&back, "relight.spotEdge")),
+            (Some(1.0), Some(12.0), Some(40.0))
+        );
     }
 
     #[test]
@@ -209,7 +212,8 @@ mod tests {
             assert!(point || l.kind.index() == 5, "{l:?}");
             assert_eq!(l.amount, 40.0);
         }
-        let v = json!({"fork_relight": {"lights": [{"kind": "Softbox", "boxWidth": 9.0, "boxHeight": "tall", "boxRotation": 1e9, "spotAngle": -1.0}]}});
+        let v =
+            json!({"fork_relight": {"lights": [{"kind": "Softbox", "boxWidth": 9.0, "boxHeight": "tall", "boxRotation": 1e9, "spotAngle": -1.0}]}});
         let l = DevelopSettings::from_json(&v).unwrap().relight.lights[0].clone();
         assert_eq!((l.kind.name(), l.kind.box_width, l.kind.box_height, l.kind.box_rotation, l.kind.spot_angle), ("softbox", 1.5, 0.2, 180.0, 5.0));
         assert!(l.kind.has_place());
