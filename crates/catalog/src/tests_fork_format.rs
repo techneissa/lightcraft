@@ -525,3 +525,87 @@ fn a_fork_11_log_patch_of_relight_lands_on_the_first_light() {
     // and a fork 11 snapshot read without a log is one light, as it was
     assert_eq!(r.upgraded_from, Some(11));
 }
+
+/// A store whose snapshot file can't be written while `full` is set (the log's small lines still fit).
+#[derive(Clone, Default)]
+struct FullForSnapshots {
+    files: MemStore,
+    full: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Store for FullForSnapshots {
+    fn read(&mut self, name: &str) -> std::io::Result<Option<Vec<u8>>> {
+        self.files.read(name)
+    }
+    fn write_atomic(&mut self, name: &str, data: &[u8]) -> std::io::Result<()> {
+        if name == SNAPSHOT && self.full.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(std::io::Error::other("disk full"));
+        }
+        self.files.write_atomic(name, data)
+    }
+    fn append(&mut self, name: &str, data: &[u8]) -> std::io::Result<()> {
+        self.files.append(name, data)
+    }
+    fn truncate(&mut self, name: &str, len: u64) -> std::io::Result<()> {
+        self.files.truncate(name, len)
+    }
+    fn describe(&self) -> String {
+        "full for snapshots".into()
+    }
+}
+
+/// An upgrade that can't write its snapshot (a nearly full disk) leaves the old files as they are and takes no record
+/// under them: a log of two formats can't be replayed. The edit stays with the caller; once a snapshot can be written it
+/// carries the edit, and every edit that was saved is there on the next open.
+#[test]
+fn a_failed_upgrade_snapshot_leaves_no_log_of_two_formats() {
+    let mut c = Catalog::new();
+    let mut d = DevelopSettings::default();
+    d.relight.lights[0].amount = 60.0;
+    let id = photo(&mut c, d, None);
+    let mut body: serde_json::Value = serde_json::from_str(&c.to_snapshot()).unwrap();
+    fn flat(v: &mut serde_json::Value) {
+        match v {
+            serde_json::Value::Object(o) => {
+                if let Some(f) = o.get("fork_relight").and_then(lightcraft_develop::relight::first_form) {
+                    o.insert("fork_relight".into(), f);
+                }
+                o.values_mut().for_each(flat);
+            }
+            serde_json::Value::Array(a) => a.iter_mut().for_each(flat),
+            _ => {}
+        }
+    }
+    flat(&mut body);
+    let store = FullForSnapshots::default();
+    store.files.set(SNAPSHOT, snapshot(FORK_FORMAT, 11, 1, &body.to_string()));
+    store.full.store(true, std::sync::atomic::Ordering::SeqCst);
+    let (mut j, mut live, r) = Journal::open(Box::new(store.clone())).unwrap();
+    assert_eq!(r.upgraded_from, Some(11));
+    assert!(j.upgrade_pending());
+    // an edit made now is refused by the journal, and nothing of it is in the files
+    let mut edited = (*live.photo(id).unwrap().develop).clone();
+    edited.relight.lights[0].amount = 80.0;
+    let op = Op::SetDevelop { id, settings: Arc::new(edited), label: "Relight".into(), edited: None };
+    live.apply(op.clone()).unwrap();
+    assert!(j.append(std::slice::from_ref(&op)).is_err());
+    assert!(store.files.get(LOG).is_none_or(|l| l.is_empty()), "nothing is appended under the older snapshot");
+    assert_eq!(header(&store.files).1, 11);
+    // (closed here, the library opens as it was: the edit was never saved)
+    let (_, back, r) = Journal::open(Box::new(store.clone())).unwrap();
+    assert_eq!((r.failed, back.photo(id).unwrap().develop.relight.lights[0].amount), (0, 60.0));
+    // the disk has room again: a snapshot of what is in memory carries the queued edit and the library is current
+    store.full.store(false, std::sync::atomic::Ordering::SeqCst);
+    j.snapshot_with_unlogged(&live, 1).unwrap();
+    assert!(!j.upgrade_pending());
+    assert_eq!(header(&store.files), (FORK_FORMAT.to_string(), u64::from(VERSION)));
+    // later edits are appended as patches of this format, and everything saved is there on the next open
+    let mut later = (*live.photo(id).unwrap().develop).clone();
+    later.relight.lights[0].amount = 90.0;
+    let op = Op::SetDevelop { id, settings: Arc::new(later), label: "Relight".into(), edited: None };
+    live.apply(op.clone()).unwrap();
+    j.append(&[op]).unwrap();
+    let (_, again, r) = Journal::open(Box::new(store.clone())).unwrap();
+    assert_eq!((r.failed, r.upgraded_from), (0, None));
+    assert_eq!(again.photo(id).unwrap().develop.relight.lights[0].amount, 90.0);
+}

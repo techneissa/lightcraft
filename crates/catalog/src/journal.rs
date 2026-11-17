@@ -237,6 +237,9 @@ pub struct Journal {
     /// handed over before, which it holds and retries): the next chance writes a snapshot, a fresh
     /// file holding everything, in case only the log's file is broken.
     snapshot_due: bool,
+    /// The snapshot on disk is of an older format and rewriting it failed: nothing is appended under it (a log of two
+    /// formats can't be replayed), until a snapshot lands ([`Journal::upgrade_pending`]).
+    upgrade_pending: bool,
     /// The photos as replaying the log leaves them: what records are patched against.
     shadow: Shadow,
 }
@@ -534,6 +537,7 @@ impl Journal {
             retry_at_records: 0,
             tail_dirty: false,
             snapshot_due: false,
+            upgrade_pending: false,
             shadow: Shadow::default(),
         };
         let log = log.unwrap_or_default();
@@ -656,6 +660,7 @@ impl Journal {
                 // nothing lost: the old files are intact and still load; retried on next open
                 Err(e) => {
                     upgrade_failed = true;
+                    j.upgrade_pending = true;
                     log::warn!("catalog: can't write the format v{VERSION} snapshot: {e}");
                 }
             }
@@ -713,10 +718,24 @@ impl Journal {
         Ok(())
     }
 
-    /// Append ops (already applied to the live catalog) durably, in order.
+    /// Whether the snapshot on disk is still of an older format because rewriting it failed when the library
+    /// opened. [`Journal::append`] then refuses (a log under it would mix two formats); the caller writes a snapshot
+    /// ([`Journal::snapshot_with_unlogged`]) to carry on, which also saves the ops it holds back.
+    pub fn upgrade_pending(&self) -> bool {
+        self.upgrade_pending
+    }
+
+    /// Append ops (already applied to the live catalog) durably, in order. Refused while [`Journal::upgrade_pending`]:
+    /// a record of this format under an older snapshot would be replayed as the older format's and lost, and an
+    /// older build would misread it. The ops stay with the caller (applied in memory, not saved).
     pub fn append(&mut self, ops: &[Op]) -> Result<()> {
         if ops.is_empty() {
             return Ok(());
+        }
+        if self.upgrade_pending {
+            return Err(CatalogError::Io(format!(
+                "the library's files are still in an older format and can't be rewritten now (is the drive full?); changes are kept in memory until they can be (format v{VERSION})"
+            )));
         }
         let t0 = web_time::Instant::now();
         let mut buf = String::new();
@@ -901,6 +920,7 @@ impl Journal {
 
     fn record_snapshot(&mut self, t: SnapshotTiming) {
         self.snapshot_due = false;
+        self.upgrade_pending = false;
         self.stats.snapshots += 1;
         self.stats.last_snapshot = t;
         self.stats.max_snapshot_ms = self.stats.max_snapshot_ms.max(t.total_ms);
