@@ -73,6 +73,9 @@ pub struct LightEffects {
     /// Distance Fade (issue #331): how much far things fade into the haze and mist, 0..100.
     #[serde(skip_serializing_if = "zero")]
     pub fade: f64,
+    /// How bright and big the light's own source shows as a point when it is inside the photo (issue #334), 0..100.
+    #[serde(skip_serializing_if = "zero")]
+    pub source: f64,
 }
 
 impl Default for LightEffects {
@@ -92,6 +95,7 @@ impl Default for LightEffects {
             mist: 0.0,
             mist_height: 30.0,
             fade: 0.0,
+            source: 0.0,
         }
     }
 }
@@ -115,6 +119,7 @@ impl LightEffects {
             "mist" => &mut self.mist,
             "mistHeight" => &mut self.mist_height,
             "fade" => &mut self.fade,
+            "source" => &mut self.source,
             _ => return None,
         })
     }
@@ -130,7 +135,7 @@ impl LightEffects {
         serde_json::json!({
             "gelHue": self.gel_hue, "gelStrength": self.gel_strength, "pattern": self.pattern, "patternScale": self.pattern_scale,
             "patternRotation": self.pattern_rotation, "patternSoftness": self.pattern_softness, "patternOpen": self.pattern_open, "haze": self.haze,
-            "scatter": self.scatter, "dust": self.dust, "shadows": self.shadows, "mist": self.mist, "mistHeight": self.mist_height, "fade": self.fade,
+            "scatter": self.scatter, "dust": self.dust, "shadows": self.shadows, "mist": self.mist, "mistHeight": self.mist_height, "fade": self.fade, "source": self.source,
         })
     }
 }

@@ -29,6 +29,7 @@ pub mod probe;
 mod projector;
 mod rim;
 pub mod shadow;
+pub mod source;
 #[cfg(test)]
 mod tests_aim;
 #[cfg(test)]
@@ -45,11 +46,13 @@ mod tests_pattern;
 mod tests_rim;
 #[cfg(test)]
 mod tests_shadow;
+#[cfg(test)]
+mod tests_stage;
 
 pub use beam::{Beam, Shafts};
 pub use effects::{Effects, Pattern, PatternPlanes};
 pub use field::{DepthMap, Field, Kind};
-pub use kinds::{Fill, LightKind, Rim, Softbox, Spot, Sun};
+pub use kinds::{Fill, LightKind, MIN_ANGLE, Rim, Softbox, Spot, Sun};
 pub use light::{Light, Lobe, MAX_LIGHTS, Part, Planes, Rig, Shade, Shading, Split, ambient, warmth_tilt};
 pub use mist::{Ground, Medium};
 pub use shadow::Visibility;

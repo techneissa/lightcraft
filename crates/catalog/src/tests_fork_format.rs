@@ -704,6 +704,40 @@ fn a_fork_18_log_patch_of_a_softbox_is_applied_and_an_aim_reads_back() {
     assert_eq!((k.box_aim_h, k.box_aim_v), (35.0, -20.0));
 }
 
+/// Fork 21 (#334) made a fork 18 library an older one: fork 18 wrote spots and hazy lights, none with a sharp cone or a visible
+/// source. A fork 18 snapshot with a spot at Cone Angle 12 and a log patch on its haze opens with the patch applied, the angle
+/// kept, Sharp Cone and Visible Source at their defaults, and nothing set aside.
+#[test]
+fn a_fork_18_log_patch_of_a_spot_light_is_applied_and_the_new_numbers_default() {
+    let mut c = Catalog::new();
+    let mut d = DevelopSettings::default();
+    d.relight.lights[0].amount = 60.0;
+    (d.relight.lights[0].kind.which, d.relight.lights[0].kind.spot_angle) = (1.0, 12.0);
+    d.relight.lights[0].effects.haze = 30.0;
+    let id = photo(&mut c, d.clone(), None);
+    let m = MemStore::new();
+    let (mut j, _, _) = Journal::open(Box::new(m.clone())).unwrap();
+    j.snapshot(&c).unwrap();
+    d.relight.lights[0].effects.haze = 55.0;
+    j.append(&[Op::SetDevelop { id, settings: Arc::new(d), label: "Relight".into(), edited: None }]).unwrap();
+    drop(j);
+    let snap = String::from_utf8(m.get(SNAPSHOT).unwrap()).unwrap();
+    let now = format!("\"version\":{}", crate::fork_format::VERSION);
+    assert!(snap.contains(&now), "{}", &snap[..snap.len().min(120)]);
+    m.set(SNAPSHOT, snap.replacen(&now, "\"version\":18", 1).into_bytes());
+    let (_, loaded, r) = Journal::open(Box::new(m.clone())).unwrap();
+    assert_eq!((r.replayed, r.failed), (1, 0), "{r:?}");
+    assert_eq!(r.upgraded_from, Some(18));
+    let l = loaded.photo(id).unwrap().develop.relight.lights[0].clone();
+    assert_eq!((l.effects.haze, l.kind.spot_angle), (55.0, 12.0), "the patch on the haze was lost");
+    assert_eq!((l.kind.spot_sharp, l.effects.source), (0.0, 0.0));
+    assert!(
+        !m.files.lock().unwrap().keys().any(|k| k.contains("damaged")),
+        "a log was set aside: {:?}",
+        m.files.lock().unwrap().keys().collect::<Vec<_>>()
+    );
+}
+
 /// A store whose snapshot file can't be written while `full` is set (the log's small lines still fit).
 #[derive(Clone, Default)]
 struct FullForSnapshots {

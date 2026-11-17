@@ -37,6 +37,7 @@ fn kind_from_env() -> LightKind {
             aim_y: n("LC_SPOT", 1, 0.6),
             angle: n("LC_SPOT", 2, 25.0),
             edge: n("LC_SPOT", 3, 0.4),
+            sharp: n("LC_SPOT", 4, 0.0) > 0.5,
         }),
         Ok("softbox") => LightKind::Softbox(Softbox {
             width: n("LC_BOX", 0, 0.3),

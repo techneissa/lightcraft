@@ -308,6 +308,8 @@ pub static SPECS: &[ControlSpec] = &[
     spec("relight.mist", "Low Mist", (0.0, 100.0, 0.0), (1.0, 0), Track::Plain),
     spec("relight.mistHeight", "Mist Height", (0.0, 100.0, 30.0), (1.0, 0), Track::Plain),
     spec("relight.fade", "Distance Fade", (0.0, 100.0, 0.0), (1.0, 0), Track::Plain),
+    // (issue #334: the light's own source as a bright point when it is inside the photo)
+    spec("relight.source", "Visible Source", (0.0, 100.0, 0.0), (1.0, 0), Track::Plain),
     // (issue #315: how much the photo's own things block the light)
     spec("relight.shadows", "Cast Shadows", (0.0, 100.0, 0.0), (1.0, 0), Track::Plain),
 ];
@@ -465,7 +467,7 @@ mod tests {
         assert_eq!((get(&s, "relight.0.warmth"), get(&s, "relight.1.warmth")), (Some(-50.0), Some(0.0)));
         assert_eq!(for_light("relight.amount", 2).as_deref(), Some("relight.2.amount"));
         assert_eq!((for_light("relight.darken", 2), for_light("relight.1.amount", 2)), (None, None));
-        assert_eq!(light_instances(&s).len(), 74);
+        assert_eq!(light_instances(&s).len(), 78);
         assert_eq!(crate::controls::find("relight.1.wrap").map(|c| c.id), Some("relight.wrap"));
         assert!(crate::controls::find("relight.x.wrap").is_none() && crate::controls::find("relight.0.darken").is_none());
         // a section reset puts all the lights back

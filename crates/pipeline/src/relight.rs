@@ -59,6 +59,9 @@ pub struct Lit {
 pub struct Beamed {
     pub plane: Arc<Lobe>,
     pub colour: [f32; 3],
+    /// Which of the beams' mask ids it takes (below [`BEAM_IDS`]): the light's index, or [`MAX_LIGHTS`] more for a light's
+    /// source seen as a bright point (issue #334), which is a plane of its own so a beam's detail keeps its scale.
+    pub slot: u32,
 }
 
 /// The photo's Distance Fade (issue #331): the air's optical depth in front of each pixel of the field ([`Field::fade`]), and the
@@ -222,13 +225,20 @@ fn effects_of(e: &lightcraft_develop::relight_effects::LightEffects) -> Effects 
         mist: e.mist / 100.0,
         mist_height: e.mist_height / 100.0,
         fade: e.fade / 100.0,
+        source: e.source / 100.0,
     }
 }
 
 /// The type of light `k` names, with its numbers in the units the relight crate takes (issue #300).
 fn kind_of(k: &KindSettings) -> LightKind {
     match k.index() {
-        1 => LightKind::Spot(Spot { aim_x: k.spot_aim_x, aim_y: k.spot_aim_y, angle: k.spot_angle, edge: k.spot_edge / 100.0 }),
+        1 => LightKind::Spot(Spot {
+            aim_x: k.spot_aim_x,
+            aim_y: k.spot_aim_y,
+            angle: k.spot_angle,
+            edge: k.spot_edge / 100.0,
+            sharp: k.spot_sharp >= 0.5,
+        }),
         2 => LightKind::Sun(Sun { azimuth: k.sun_azimuth, elevation: k.sun_elevation }),
         3 => {
             LightKind::Softbox(Softbox { width: k.box_width, height: k.box_height, rotation: k.box_rotation, aim_h: k.box_aim_h, aim_v: k.box_aim_v })
@@ -310,8 +320,8 @@ pub fn shading_key(input: &Input, scene: &Scene, ev: f64, draft: bool) -> u64 {
         if draft && scene.drafts_differ() {
             std::hash::Hash::hash(&b'd', h);
         }
-        // (not the air's numbers: the beams and the fade are not in the shading, issues #317 and #331)
-        let shaded = |e: &Effects| Effects { haze: 0.0, scatter: 0.5, dust: 0.0, mist: 0.0, mist_height: 0.3, fade: 0.0, ..*e };
+        // (not the air's numbers: the beams and the fade are not in the shading, issues #317 and #331; nor the source's, issue #334: a point of light added on top)
+        let shaded = |e: &Effects| Effects { haze: 0.0, scatter: 0.5, dust: 0.0, mist: 0.0, mist_height: 0.3, fade: 0.0, source: 0.0, ..*e };
         for (i, e) in scene.effects.iter().map(shaded).enumerate().filter(|(_, e)| *e != Effects::default()) {
             std::hash::Hash::hash(&(i, e.gel_hue.to_bits(), e.gel_strength.to_bits(), e.pattern, e.scale.to_bits()), h);
             std::hash::Hash::hash(&(e.rotation.to_bits(), e.softness.to_bits(), e.haze.to_bits(), e.shadows.to_bits(), e.open.to_bits()), h);
@@ -466,31 +476,59 @@ fn beam_for(input: &Input, light: &Light, effects: &Effects, rig: &Rig, draft: b
     Some(plane)
 }
 
+/// The key naming `light`'s source glow on `input`'s field (issue #334): the place it is drawn at (x, y and depth: the depth
+/// hides it behind nearer things) and its strength. Not Amount, Warmth or a gel (the colour is added later), nor the
+/// light's type numbers, Softness or the haze's.
+fn source_key(input: &Input, light: &Light, effects: &Effects) -> u64 {
+    hashed(|h| {
+        std::hash::Hash::hash(&(7u8, input.key, effects.source.to_bits()), h);
+        for v in [light.x, light.y, light.depth] {
+            std::hash::Hash::hash(&v.to_bits(), h);
+        }
+    })
+}
+
+/// `light`'s source seen as a bright point (issue #334; `None`: it shows none), made once per place and strength and kept.
+fn source_for(input: &Input, light: &Light, effects: &Effects, rig: &Rig) -> Option<Arc<Lobe>> {
+    if !light.kind.shows_source() || !(effects.source.is_finite() && effects.source > 0.0) {
+        return None;
+    }
+    let key = source_key(input, light, effects);
+    if let Some(l) = BEAM_LOBES.get(key) {
+        return Some(l);
+    }
+    let plane = Arc::new(input.field.source(light, rig, effects.source)?);
+    BEAM_LOBES.put(key, plane.clone());
+    Some(plane)
+}
+
 /// The scene's beams (issue #317): each light with haze, its plane and the light it adds per unit of it, in its own colour
-/// (Warmth and gel, as the finish stage's temperature and tint colour a grey of the same luminance) and strength.
+/// (Warmth and gel, as the finish stage's temperature and tint colour a grey of the same luminance) and strength; and (issue
+/// #334) each light whose source shows as a point, as a plane of its own.
 pub fn beams_of(input: &Input, scene: &Scene, draft: bool) -> Vec<Beamed> {
     let none = Effects::default();
-    scene
-        .lights
-        .iter()
-        .take(MAX_LIGHTS)
-        .enumerate()
-        .filter_map(|(i, l)| {
-            let e = scene.effects.get(i).unwrap_or(&none);
-            if !has_beam(l, e) {
-                return None;
-            }
-            // (the rig's place and peak don't depend on Darken Surroundings or the exposure: a light with a place is no fill)
-            let rig = input.field.rig(l, 0.0, 0.0);
-            let plane = beam_for(input, l, e, &rig, draft)?;
-            let (t, s) = e.light_colour(l.warmth);
-            let c = [1.0 + 0.3 * t, 1.0 - 0.22 * s, (1.0 - 0.3 * t).max(0.0)];
-            let lum = (0.2627 * c[0] + 0.678 * c[1] + 0.0593 * c[2]).max(1e-6);
-            let k = rig.gain() * crate::tone::GREY / lum;
-            let colour = c.map(|v| if (v * k).is_finite() { (v * k).max(0.0) } else { 0.0 });
-            Some(Beamed { plane, colour })
-        })
-        .collect()
+    let mut out = Vec::new();
+    for (i, l) in scene.lights.iter().take(MAX_LIGHTS).enumerate() {
+        let e = scene.effects.get(i).unwrap_or(&none);
+        let shows_source = l.kind.shows_source() && e.source.is_finite() && e.source > 0.0;
+        if !has_beam(l, e) && !shows_source {
+            continue;
+        }
+        // (the rig's place and peak don't depend on Darken Surroundings or the exposure: a light with a place is no fill)
+        let rig = input.field.rig(l, 0.0, 0.0);
+        let (t, s) = e.light_colour(l.warmth);
+        let c = [1.0 + 0.3 * t, 1.0 - 0.22 * s, (1.0 - 0.3 * t).max(0.0)];
+        let lum = (0.2627 * c[0] + 0.678 * c[1] + 0.0593 * c[2]).max(1e-6);
+        let k = rig.gain() * crate::tone::GREY / lum;
+        let colour = c.map(|v| if (v * k).is_finite() { (v * k).max(0.0) } else { 0.0 });
+        if let Some(plane) = beam_for(input, l, e, &rig, draft) {
+            out.push(Beamed { plane, colour, slot: i as u32 });
+        }
+        if let Some(plane) = source_for(input, l, e, &rig) {
+            out.push(Beamed { plane, colour, slot: (MAX_LIGHTS + i) as u32 });
+        }
+    }
+    out
 }
 
 /// The key naming a Distance Fade on `input`'s field: the air's numbers it reads (Haze, Mist, Mist Height, Distance Fade).
@@ -647,8 +685,8 @@ pub fn masks(plan: &Plan<'_>) -> Vec<Evaluated> {
         out.push(evaluated(IDS[5], w, h, green, LocalAdjustments { tint: -100.0 * f64::from(sh.tint_down), ..LocalAdjustments::default() }));
     }
     // (issue #317: each light's beam, light added on top in its own colour)
-    for (k, b) in lit.beams.iter().enumerate() {
-        let plane = lit.field.plane_at(&b.plane, w, h, &|x, y| {
+    for b in &lit.beams {
+        let mut plane = lit.field.plane_at(&b.plane, w, h, &|x, y| {
             let q = map.apply(Point::new(x, y));
             (q.x, q.y)
         });
@@ -656,9 +694,12 @@ pub fn masks(plan: &Plan<'_>) -> Vec<Evaluated> {
         if top <= 1e-6 || !top.is_finite() {
             continue;
         }
-        let alpha = plane.iter().map(|v| (v / top).clamp(0.0, 1.0)).collect();
+        // (in place: a second full-size plane per beam is 96 MB more at 24 MP; the mask keeps only the non-zero part of it, so a
+        // source's small glow stays small)
+        plane.iter_mut().for_each(|v| *v = (*v / top).clamp(0.0, 1.0));
+        let alpha = plane;
         let added = b.colour.map(|c| f64::from(c * top));
-        out.push(evaluated(BEAM_IDS - k as u32, w, h, alpha, LocalAdjustments { fork_added: added, ..LocalAdjustments::default() }));
+        out.push(evaluated(BEAM_IDS - b.slot, w, h, alpha, LocalAdjustments { fork_added: added, ..LocalAdjustments::default() }));
     }
     // (issue #331: the photo's Distance Fade: the photo's light dimmed by the air in front of it, an exposure, and the air's own
     // glow in its colour, light added on top; so a pixel becomes `c · T + air · (1 − T)`, the beams on top of that)

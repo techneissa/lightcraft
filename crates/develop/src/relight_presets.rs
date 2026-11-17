@@ -273,10 +273,10 @@ fn fill(amount: f64, warmth: f64, near: f64) -> LightSettings {
     })
 }
 
+/// A built-in preset as written: not clamped here, so a test can tell a number out of its control's range from one that is
+/// not ([`built_in`] clamps them when it makes the list).
 fn preset(id: &str, name: &str, darken: f64, lights: Vec<LightSettings>) -> LightPreset {
-    let mut r = Relight { lights, darken };
-    r.sanitize();
-    LightPreset { id: id.into(), name: name.into(), lights: r, builtin: true }
+    LightPreset { id: id.into(), name: name.into(), lights: Relight { lights, darken }, builtin: true }
 }
 
 /// A spot aimed at the face (a little below its centre), `angle` degrees wide with edge `edge`.
@@ -288,6 +288,26 @@ fn spot(l: LightSettings, angle: f64, edge: f64) -> LightSettings {
         k.spot_angle = angle;
         k.spot_edge = edge;
     })
+}
+
+/// A stage fixture (issue #334): a cone `angle` degrees wide with edge softness `edge` (0..100), aimed at `aim` (`(dx, dy)`
+/// from the face, in the preset frame) from where the light stands. A soft edge: a real fixture's pool on a person is soft and
+/// wraps the form; the hard edge is for a pool on a flat floor or wall, which the Sharp Cone control gives.
+fn stage_spot(l: LightSettings, (dx, dy): (f64, f64), angle: f64, edge: f64) -> LightSettings {
+    with_kind(l, |k| {
+        k.which = 1.0;
+        k.spot_aim_x = 0.5 + dx;
+        k.spot_aim_y = 0.5 + dy;
+        k.spot_angle = angle;
+        k.spot_edge = edge;
+    })
+}
+
+/// The haze the light's beam shows in: its amount, Forward Scatter and Dust, and how much of the fixture itself shows as a
+/// bright point.
+fn hazy(mut l: LightSettings, haze: f64, scatter: f64, dust: f64, source: f64) -> LightSettings {
+    (l.effects.haze, l.effects.scatter, l.effects.dust, l.effects.source) = (haze, scatter, dust, source);
+    l
 }
 
 fn shadows(mut l: LightSettings, amount: f64) -> LightSettings {
@@ -313,72 +333,155 @@ fn gel(mut l: LightSettings, hue: f64, strength: f64) -> LightSettings {
 pub fn built_in() -> &'static [LightPreset] {
     static LIST: OnceLock<Vec<LightPreset>> = OnceLock::new();
     LIST.get_or_init(|| {
-        vec![
-            // A key about 45° to one side and 45° above the face, close to it: the near cheek bright, the far cheek in
-            // shadow with the nose's shadow reaching towards it; a weak fill, so the key is several times the shadow side.
-            preset(
-                "rembrandt",
-                "Rembrandt",
-                75.0,
-                vec![shadows(wrap(spot(light(100.0, (-0.34, -0.34), 0.15, 40.0, 6.0), 30.0, 60.0), 15.0), 100.0), fill(4.0, 0.0, 45.0)],
-            ),
-            // The key straight in front and high: a small shadow under the nose and chin, a soft fill from below.
-            preset(
-                "butterfly",
-                "Butterfly",
-                65.0,
-                vec![shadows(wrap(spot(light(100.0, (0.0, -0.42), 0.15, 40.0, 0.0), 30.0, 60.0), 15.0), 100.0), fill(15.0, 0.0, 55.0)],
-            ),
-            // One light exactly from the side, level with the face: half of it lit, half in shadow.
-            preset("split", "Split", 70.0, vec![shadows(wrap(spot(light(100.0, (-0.5, 0.0), 0.1, 40.0, 0.0), 30.0, 50.0), 0.0), 100.0)]),
-            // The subject's whole outline lit from behind, the face evenly and softly lit from the front by a broad light (a
-            // Fill alone lifts only what is dark, and left a dark stripe between the rim and the lit part of the face).
-            preset(
-                "rim-fill",
-                "Rim + Fill",
-                30.0,
-                vec![rim(85.0, 0.0, (45.0, 0.0, 0.0)), wrap(light(40.0, (0.0, -0.05), 0.3, 100.0, 4.0), 100.0), fill(20.0, 4.0, 60.0)],
-            ),
-            // A low warm light raking across the face and body from the left, the shadow side and the wall away from it
-            // cooler and darker.
-            preset(
-                "golden-hour-window",
-                "Golden-Hour Window",
-                60.0,
-                vec![
-                    gel(shadows(wrap(spot(light(100.0, (-0.6, 0.0), 0.1, 40.0, 100.0), 44.0, 80.0), 20.0), 100.0), 38.0, 45.0),
-                    wrap(light(10.0, (0.5, 0.1), 0.1, 80.0, -45.0), 40.0),
-                ],
-            ),
-            // A magenta light from the left and a teal one from the right, the room dark so the colours show.
-            preset(
-                "neon-two-tone",
-                "Neon Two-Tone",
-                75.0,
-                vec![
-                    gel(shadows(spot(light(50.0, (-0.5, 0.05), 0.2, 40.0, 0.0), 32.0, 70.0), 60.0), 305.0, 85.0),
-                    gel(shadows(spot(light(50.0, (0.5, 0.05), 0.2, 40.0, 0.0), 32.0, 70.0), 60.0), 178.0, 85.0),
-                ],
-            ),
-            // One small, warm flame held in front of the person at chin height, close: it lights the face from below (chin, under
-            // the nose, cheeks) and falls off fast down the body, the rest of the room dark. Not too small a source, or a hot spot
-            // forms on the nearest surface.
-            preset(
-                "candle",
-                "Candle",
-                70.0,
-                vec![wrap(
-                    with_effects(light(60.0, (0.04, 0.17), 0.07, 28.0, 100.0), |e| {
-                        e.gel_hue = 38.0;
-                        e.gel_strength = 30.0;
-                        e.haze = 10.0;
-                        e.shadows = 25.0;
-                    }),
-                    75.0,
-                )],
-            ),
-        ]
+        written()
+            .into_iter()
+            .map(|mut p| {
+                p.lights.sanitize();
+                p
+            })
+            .collect()
     })
+}
+
+/// The built-in presets as written (see [`built_in`]).
+fn written() -> Vec<LightPreset> {
+    vec![
+        // A key about 45° to one side and 45° above the face, close to it: the near cheek bright, the far cheek in
+        // shadow with the nose's shadow reaching towards it; a weak fill, so the key is several times the shadow side.
+        preset(
+            "rembrandt",
+            "Rembrandt",
+            75.0,
+            vec![shadows(wrap(spot(light(100.0, (-0.34, -0.34), 0.15, 40.0, 6.0), 30.0, 60.0), 15.0), 100.0), fill(4.0, 0.0, 45.0)],
+        ),
+        // The key straight in front and high: a small shadow under the nose and chin, a soft fill from below.
+        preset(
+            "butterfly",
+            "Butterfly",
+            65.0,
+            vec![shadows(wrap(spot(light(100.0, (0.0, -0.42), 0.15, 40.0, 0.0), 30.0, 60.0), 15.0), 100.0), fill(15.0, 0.0, 55.0)],
+        ),
+        // One light exactly from the side, level with the face: half of it lit, half in shadow.
+        preset("split", "Split", 70.0, vec![shadows(wrap(spot(light(100.0, (-0.5, 0.0), 0.1, 40.0, 0.0), 30.0, 50.0), 0.0), 100.0)]),
+        // The subject's whole outline lit from behind, the face evenly and softly lit from the front by a broad light (a
+        // Fill alone lifts only what is dark, and left a dark stripe between the rim and the lit part of the face).
+        preset(
+            "rim-fill",
+            "Rim + Fill",
+            30.0,
+            vec![rim(85.0, 0.0, (45.0, 0.0, 0.0)), wrap(light(40.0, (0.0, -0.05), 0.3, 100.0, 4.0), 100.0), fill(20.0, 4.0, 60.0)],
+        ),
+        // A low warm light raking across the face and body from the left, the shadow side and the wall away from it
+        // cooler and darker.
+        preset(
+            "golden-hour-window",
+            "Golden-Hour Window",
+            60.0,
+            vec![
+                gel(shadows(wrap(spot(light(100.0, (-0.6, 0.0), 0.1, 40.0, 100.0), 44.0, 80.0), 20.0), 100.0), 38.0, 45.0),
+                wrap(light(10.0, (0.5, 0.1), 0.1, 80.0, -45.0), 40.0),
+            ],
+        ),
+        // A magenta light from the left and a teal one from the right, the room dark so the colours show.
+        preset(
+            "neon-two-tone",
+            "Neon Two-Tone",
+            75.0,
+            vec![
+                gel(shadows(spot(light(50.0, (-0.5, 0.05), 0.2, 40.0, 0.0), 32.0, 70.0), 60.0), 305.0, 85.0),
+                gel(shadows(spot(light(50.0, (0.5, 0.05), 0.2, 40.0, 0.0), 32.0, 70.0), 60.0), 178.0, 85.0),
+            ],
+        ),
+        // One small, warm flame held in front of the person at chin height, close: it lights the face from below (chin, under
+        // the nose, cheeks) and falls off fast down the body, the rest of the room dark. Not too small a source, or a hot spot
+        // forms on the nearest surface.
+        preset(
+            "candle",
+            "Candle",
+            70.0,
+            vec![wrap(
+                with_effects(light(60.0, (0.04, 0.17), 0.07, 28.0, 100.0), |e| {
+                    e.gel_hue = 38.0;
+                    e.gel_strength = 30.0;
+                    e.haze = 10.0;
+                    e.shadows = 25.0;
+                }),
+                75.0,
+            )],
+        ),
+        // Stage lights hung behind and above the performer, their narrow beams streaming down and towards the camera through
+        // haze, the subject dark against them and caught only along the outline; the fixtures themselves show as bright
+        // points when they hang inside the frame. Wrap 0: lights behind a person don't light the front of them. The beams
+        // aim beside the person, onto the floor or wall, and are thin and faint enough that a dark photo isn't flooded.
+        preset(
+            "concert-backlight",
+            "Concert Backlight",
+            85.0,
+            vec![
+                hazy(
+                    wrap(gel(stage_spot(light(35.0, (-0.45, -0.42), -0.55, 45.0, 0.0), (0.2, 0.85), 6.0, 40.0), 36.0, 60.0), 0.0),
+                    45.0,
+                    35.0,
+                    25.0,
+                    70.0,
+                ),
+                hazy(
+                    wrap(gel(stage_spot(light(35.0, (0.45, -0.42), -0.55, 45.0, 0.0), (-0.2, 0.85), 6.0, 40.0), 36.0, 60.0), 0.0),
+                    45.0,
+                    35.0,
+                    25.0,
+                    70.0,
+                ),
+                hazy(
+                    wrap(gel(stage_spot(light(40.0, (0.0, -0.5), -0.7, 45.0, 0.0), (0.0, 0.9), 5.0, 40.0), 215.0, 35.0), 0.0),
+                    45.0,
+                    35.0,
+                    25.0,
+                    70.0,
+                ),
+                gel(rim(45.0, 0.0, (30.0, 0.0, 0.0)), 36.0, 50.0),
+            ],
+        ),
+        // Two wide washes from the upper left and the upper right, a little behind the performer, red-orange on one side and blue
+        // (a little stronger: blue lights a dark shirt poorly) on the other, both aimed at the person so they meet on them, each colouring its own side; thin haze shows the cones,
+        // and the fixtures show as bright points when they hang inside the frame. Soft cones, high Wrap and no cast shadows:
+        // the light follows the face's form.
+        preset(
+            "two-colour-stage",
+            "Two-Colour Stage",
+            80.0,
+            vec![
+                hazy(
+                    wrap(gel(stage_spot(light(22.0, (-0.5, -0.4), -0.2, 45.0, 0.0), (0.0, 0.25), 15.0, 75.0), 8.0, 85.0), 65.0),
+                    50.0,
+                    35.0,
+                    20.0,
+                    60.0,
+                ),
+                hazy(
+                    wrap(gel(stage_spot(light(32.0, (0.5, -0.4), -0.2, 45.0, 0.0), (0.0, 0.25), 15.0, 75.0), 228.0, 85.0), 65.0),
+                    50.0,
+                    35.0,
+                    20.0,
+                    60.0,
+                ),
+            ],
+        ),
+        // One spotlight from above and to one side, a soft pool that wraps the performer's face and shoulders and the rest of the
+        // stage dark, the haze showing the cone across the picture.
+        preset(
+            "single-spotlight",
+            "Single Spotlight",
+            92.0,
+            vec![hazy(
+                wrap(gel(stage_spot(light(55.0, (-0.32, -0.5), 0.0, 30.0, 25.0), (0.0, 0.1), 13.0, 70.0), 40.0, 15.0), 60.0),
+                70.0,
+                70.0,
+                15.0,
+                40.0,
+            )],
+        ),
+    ]
 }
 
 #[cfg(test)]
@@ -449,13 +552,16 @@ mod tests {
     #[test]
     fn built_in_presets_are_whole_distinct_and_within_range() {
         let list = built_in();
-        assert_eq!(list.len(), 7);
+        assert_eq!(list.len(), 10);
         for (i, p) in list.iter().enumerate() {
             assert!(p.builtin && !p.id.is_empty() && list[..i].iter().all(|q| q.id != p.id && q.name != p.name), "{}", p.id);
+            assert!(p.lights.is_on() && !p.lights.lights.is_empty());
+        }
+        // (the numbers as written, before `built_in` clamps them: one outside its control's range would be silently changed)
+        for p in written() {
             let mut r = p.lights.clone();
             r.sanitize();
-            assert_eq!(r, p.lights, "{} holds a number out of range", p.id);
-            assert!(p.lights.is_on() && !p.lights.lights.is_empty());
+            assert_eq!(r, p.lights, "{} holds a number out of its control's range", p.id);
         }
     }
 

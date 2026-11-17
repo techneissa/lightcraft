@@ -20,7 +20,7 @@ fn stops(f: &Field, l: &Light, u: f32, v: f32) -> f32 {
 #[test]
 fn a_spot_lights_inside_its_cone_and_not_outside() {
     let f = wall(0.0);
-    let spot = |angle: f64, edge: f64| light(LightKind::Spot(Spot { aim_x: 0.9, aim_y: 0.5, angle, edge }));
+    let spot = |angle: f64, edge: f64| light(LightKind::Spot(Spot { aim_x: 0.9, aim_y: 0.5, angle, edge, sharp: false }));
     let l = spot(15.0, 0.2);
     let (inside, outside) = (stops(&f, &l, 0.9, 0.5), stops(&f, &l, 0.2, 0.5));
     assert!(inside > 1.0 && outside < 0.05, "inside {inside} outside {outside}");
@@ -105,7 +105,7 @@ fn hostile_numbers_give_finite_planes_for_every_type() {
     let f = wall(0.5);
     let bad = f64::NAN;
     let kinds = [
-        LightKind::Spot(Spot { aim_x: bad, aim_y: f64::INFINITY, angle: -9.0, edge: 1e9 }),
+        LightKind::Spot(Spot { aim_x: bad, aim_y: f64::INFINITY, angle: -9.0, edge: 1e9, sharp: false }),
         LightKind::Sun(Sun { azimuth: f64::NEG_INFINITY, elevation: bad }),
         LightKind::Softbox(Softbox { width: bad, height: -3.0, rotation: f64::INFINITY, aim_h: 0.0, aim_v: 0.0 }),
         LightKind::Softbox(Softbox { width: 1e300, height: 1e300, rotation: 1e300, aim_h: 0.0, aim_v: 0.0 }),

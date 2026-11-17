@@ -15,7 +15,7 @@ pub(super) const NAMES: [&str; 6] = ["Point", "Spot", "Sun / Window", "Softbox",
 /// sun's, a softbox's and a point's places are dragged on the photo; they are controls too, for agents and presets.)
 pub(super) fn fields(kind: usize) -> &'static [&'static str] {
     match kind {
-        1 => &["amount", "softness", "warmth", "spotAngle", "spotEdge"],
+        1 => &["amount", "softness", "warmth", "spotAngle", "spotSharp", "spotEdge"],
         2 => &["amount", "softness", "warmth", "sunAzimuth", "sunElevation"],
         3 => &["amount", "warmth", "boxWidth", "boxHeight", "boxRotation", "boxAimH", "boxAimV"],
         4 => &["amount", "warmth", "rimWidth", "rimAngle", "rimSide"],

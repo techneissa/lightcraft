@@ -137,7 +137,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Light Presets",
             [],
             None,
-            "{id?: photo, find?: bool} → {finding, presets: [{id, name, builtin, lights, kinds, darken}], subject: {x, y, w, h, source: face|mask|centre, depth?: {own, span}}} — the light presets (the built-in ones Rembrandt, Butterfly, Split, Rim + Fill, Golden-Hour Window, Neon Two-Tone and Candle, then your own) and where the photo's subject is: the face the preset's lights are placed round (the photo's face, else one worked out from a person or subject mask, else one at the centre) and, once the photo's depth is found, its depth (`own`: the subject's depth as a light's depth value 0..100; `span`: the log depth 100 of them cover). `find: true` starts finding the depth (on the worker, as the Relight section does; never waited for); `finding` says it is being found",
+            "{id?: photo, find?: bool} → {finding, presets: [{id, name, builtin, lights, kinds, darken}], subject: {x, y, w, h, source: face|mask|centre, depth?: {own, span}}} — the light presets (the built-in ones Rembrandt, Butterfly, Split, Rim + Fill, Golden-Hour Window, Neon Two-Tone, Candle, Concert Backlight, Two-Colour Stage and Single Spotlight, then your own) and where the photo's subject is: the face the preset's lights are placed round (the photo's face, else one worked out from a person or subject mask, else one at the centre) and, once the photo's depth is found, its depth (`own`: the subject's depth as a light's depth value 0..100; `span`: the log depth 100 of them cover). `find: true` starts finding the depth (on the worker, as the Relight section does; never waited for); `finding` says it is being found",
             always,
             presets
         ),
