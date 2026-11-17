@@ -360,17 +360,22 @@ pub fn built_in() -> &'static [LightPreset] {
                     gel(shadows(spot(light(50.0, (0.5, 0.05), 0.2, 40.0, 0.0), 32.0, 70.0), 60.0), 178.0, 85.0),
                 ],
             ),
-            // One small, warm flame close and low in front: it falls off fast, the rest of the room is dark.
+            // One small, warm flame held in front of the person at chin height, close: it lights the face from below (chin, under
+            // the nose, cheeks) and falls off fast down the body, the rest of the room dark. Not too small a source, or a hot spot
+            // forms on the nearest surface.
             preset(
                 "candle",
                 "Candle",
-                65.0,
-                vec![with_effects(light(75.0, (0.08, 0.38), 0.25, 18.0, 100.0), |e| {
-                    e.gel_hue = 38.0;
-                    e.gel_strength = 30.0;
-                    e.haze = 18.0;
-                    e.shadows = 40.0;
-                })],
+                70.0,
+                vec![wrap(
+                    with_effects(light(60.0, (0.04, 0.17), 0.07, 28.0, 100.0), |e| {
+                        e.gel_hue = 38.0;
+                        e.gel_strength = 30.0;
+                        e.haze = 10.0;
+                        e.shadows = 25.0;
+                    }),
+                    75.0,
+                )],
             ),
         ]
     })
