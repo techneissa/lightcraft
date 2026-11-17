@@ -4,7 +4,9 @@
 //! FNV-1a sensor hashes and camera-image comparisons measured on main 25ef65c8.
 //! Sensor hashes pin LightCraft's own output, not an independent decoder's output.
 //! Hash input is every row-major sample in little-endian order, including masked borders.
-//! A record whose sensor-hash column says `rejected` is a file both `decode` and `probe_info` must refuse as corrupt.
+//! A record whose sensor-hash column says `rejected` is a file both `decode` and `probe_info` must refuse as
+//! corrupt: a regression of the craft-raw cutover tracked in #306, not a correct rejection. Replace the marker with
+//! the sensor hash when #306 is fixed.
 //! Fetch the CC0 files with `cargo xtask corpus --download`. Missing files are reported.
 
 use lightcraft_raw::{RawData, RawError, decode, probe_info};
@@ -33,8 +35,9 @@ fn coverage_sweep_sensor_decodes_are_pinned() {
         };
         assert_eq!(format!("{:x}", Sha256::digest(&bytes)), columns[5], "{name}: file SHA-256");
         if columns[10] == "rejected" {
-            // The file's headers contradict its data (see `KNOWN_CORRUPT` in corpus.rs): both entry points refuse it
-            // with the same reason, and there are no samples to hash.
+            // A regression tracked in #306 (see `KNOWN_REGRESSIONS` in corpus.rs): the file decoded before the craft-raw
+            // cutover and both entry points now refuse it with the same reason, so there are no samples to hash.
+            // Remove when #306 is fixed.
             match (decode(&bytes), probe_info(&bytes)) {
                 (Err(RawError::Corrupt(decoded)), Err(RawError::Corrupt(probed))) => assert_eq!(decoded, probed, "{name}: why rejected"),
                 (decoded, probed) => panic!("{name}: expected both to reject the file as corrupt, got {:?} and {:?}", decoded.err(), probed.err()),

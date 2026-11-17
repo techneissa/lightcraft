@@ -25,12 +25,13 @@ const KNOWN_UNSUPPORTED: &[&str] = &[
     "crw-canon-powershot-g5.crw", // Canon PowerShot G5 CRW: entropy coding anomaly (craft-libs crates/crw/clean-room/02-crw-format.md §4)
 ];
 
-/// Files whose own headers contradict their data, so decoding rightly stops with `Corrupt` instead of guessing a
-/// stride and filling the rest with black: matched against the lower-case file name.
-const KNOWN_CORRUPT: &[&str] = &[
-    // The DJI Mavic 3 sample (raw.pixls.us 5140) declares ImageWidth 5376 but stores 5280-wide rows (its ActiveArea):
-    // the strip is 41775360 bytes, 759552 short of 5376 x 3956 x 2. The decoder before the craft-raw cutover accepted
-    // it, and the sweep pinned that output; craft-raw refuses missing rows rather than zero-fill them.
+/// Files that decoded before the craft-raw cutover and are now refused as `Corrupt`: a regression, not a correct
+/// rejection. Each is tracked in an issue; remove its line when that issue is fixed. Matched against the lower-case
+/// file name.
+const KNOWN_REGRESSIONS: &[&str] = &[
+    // #306: the DJI Mavic 3 sample (raw.pixls.us 5140) declares ImageWidth 5376 but stores 5280-wide rows (its
+    // ActiveArea); the strip is 41775360 bytes, 759552 short of 5376 x 3956 x 2. The decoder before the cutover read
+    // it (the sweep pinned that output); craft-raw refuses it. Remove when #306 is fixed.
     "coverage-5140.dng",
 ];
 
@@ -85,8 +86,8 @@ fn corpus_raw_decodes() {
                 assert_eq!(crate::probe_comparable(img.info()), crate::probe_comparable(info.clone()), "{name}: probe_info differs from decode")
             }
             (Err(RawError::Unsupported(_)), Err(RawError::Unsupported(_))) => {}
-            (Err(RawError::Corrupt(d)), Err(RawError::Corrupt(i))) if KNOWN_CORRUPT.contains(&name.as_str()) => {
-                assert_eq!(d, i, "{name}: decode and probe_info disagree on why the file is corrupt");
+            (Err(RawError::Corrupt(d)), Err(RawError::Corrupt(i))) if KNOWN_REGRESSIONS.contains(&name.as_str()) => {
+                assert_eq!(d, i, "{name}: decode and probe_info disagree on why the file is refused");
             }
             (d, i) => panic!("{name}: decode {:?} but probe_info {:?}", d.as_ref().err(), i.as_ref().err()),
         }
@@ -112,8 +113,8 @@ fn corpus_raw_decodes() {
                 eprintln!("{name:44} {fmt:?} unsupported ({why}); preview {preview_kb} KB in {tp:.1} ms");
                 unsupported += 1;
             }
-            Err(RawError::Corrupt(why)) if KNOWN_CORRUPT.contains(&name.as_str()) => {
-                eprintln!("{name:44} {fmt:?} known corrupt ({why}); preview {preview_kb} KB in {tp:.1} ms");
+            Err(RawError::Corrupt(why)) if KNOWN_REGRESSIONS.contains(&name.as_str()) => {
+                eprintln!("{name:44} {fmt:?} known regression, refused ({why}); preview {preview_kb} KB in {tp:.1} ms");
             }
             Err(e) => panic!("{name}: {e}"),
         }
