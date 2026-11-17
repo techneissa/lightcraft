@@ -1,7 +1,8 @@
 //! Shadows (issue #315, `fork/relight.md`): a light is blocked by what the photo shows. For each pixel's surface point
 //! the light's rays are walked through the depth map towards the light (a ray towards the light's place for a point, a
 //! spot and a softbox, parallel rays along the direction for a sun); a ray is blocked where it runs behind a nearer
-//! surface of the photo, within the thickness a thing is taken to have ([`THICK`]), as in a screen-space shadow march.
+//! surface of the photo that stands out of its surroundings ([`STAND`]), within the thickness a thing is taken to have ([`THICK`]), as in a
+//! screen-space shadow march.
 //! The light's size is spread over several rays aimed across it (a disc for a point, a spot and a sun, the rectangle for
 //! a softbox), so a small light gives a hard shadow and a big one a soft shadow whose penumbra grows with the distance
 //! from the blocker, as it does in the world. A Rim and a Fill take no shadow.
@@ -35,19 +36,29 @@ const FIRST: usize = 4;
 const MORE: usize = 12;
 /// A ray point is behind a surface when its depth is more than this ratio of the surface's (a little over: the
 /// surface it starts on, and the depth model's small ripples, don't shadow it) ...
-const BIAS: f32 = 1.05;
+const BIAS: f32 = 1.08;
 /// ... and a thing blocks the light only so far behind its visible surface: this ratio of the surface's depth is the
-/// thickness a thing is taken to have (about 0.47 in log depth), since the photo shows nothing behind a thing's front.
-const THICK: f32 = 1.6;
+/// thickness a thing is taken to have (about 0.4 in log depth), since the photo shows nothing behind a thing's front.
+const THICK: f32 = 1.5;
+/// Only a thing that stands out of its surroundings blocks: its log depth is this much nearer than the farthest of the pixels
+/// within [`STAND_REACH`] of the picture's width to its left or right ([`Reduced::stand`]). A receding floor, a staircase's treads and the depth model's ripples and
+/// terraces (a few to 20 % of depth) stand out of nothing, so rays grazing along them are not blocked and no speckle shows; a
+/// person in front of a wall, a box, a cat on a ledge do.
+const STAND: f32 = 0.2;
+const STAND_REACH: f32 = 0.1;
 /// How much of the light's own radius (the sphere its fall-off comes from) a point or a spot's shadow uses.
 const POINT_SHARE: f32 = 0.5;
 /// The sun's angular radius (radians) at Softness 0 and the most it adds at Softness 1.
 const SUN_MIN: f32 = 0.012;
 const SUN_SPREAD: f32 = 0.26;
 /// Where the weights of the upsampling fall to 1/e: the photo's brightness (cube root of linear light) and log depth.
-const SIGMA_LUM: f32 = 0.1;
+const SIGMA_LUM: f32 = 0.15;
+/// (differences under these count for nothing: the photo's texture, the depth model's ripples and a floor's own slope between two samples
+/// are no edge, and the shadow's edge is then not blocky)
+const DEAD_LUM: f32 = 0.08;
+const DEAD_DEPTH: f32 = 0.05;
 /// (the depth's is narrow: a step of 5–10 % of depth, a near thing's outline, must not let its shadow leak across)
-const SIGMA_DEPTH: f32 = 0.04;
+const SIGMA_DEPTH: f32 = 0.05;
 
 impl LightKind {
     /// Whether a light of this type casts shadows: a point, a spot, a sun and a softbox do, a rim and a fill have no
@@ -67,6 +78,8 @@ pub(crate) struct Reduced {
     z: Vec<f32>,
     lz: Vec<f32>,
     gi: Vec<f32>,
+    /// How far each pixel's log depth is nearer than the farthest pixel to its left or right within [`STAND_REACH`] (a thing standing out of its surroundings; see [`STAND`]).
+    stand: Vec<f32>,
 }
 
 impl Reduced {
@@ -85,12 +98,21 @@ impl Reduced {
                 gi.push(field.gi.get(i).copied().unwrap_or(0.0));
             }
         }
-        Reduced { f, w, h, z, lz, gi }
+        // (along each row: a floor, a staircase and a wall are alike across it, a person or a box is nearer than what lies to its sides)
+        let r = ((STAND_REACH * w as f32).round() as usize).max(2);
+        let mut stand = vec![0f32; w * h];
+        stand.par_chunks_mut(w.max(1)).zip(lz.par_chunks(w.max(1))).for_each(|(out, row)| {
+            for (x, o) in out.iter_mut().enumerate() {
+                let far = row.get(x.saturating_sub(r)..(x + r + 1).min(row.len())).map_or(0.0, |win| win.iter().copied().fold(f32::MIN, f32::max));
+                *o = far - row.get(x).copied().unwrap_or(0.0);
+            }
+        });
+        Reduced { f, w, h, z, lz, gi, stand }
     }
 
     /// Memory held (bytes).
     pub(crate) fn bytes(&self) -> usize {
-        (self.z.len() + self.lz.len() + self.gi.len()) * 4
+        (self.z.len() + self.lz.len() + self.gi.len() + self.stand.len()) * 4
     }
 }
 
@@ -240,6 +262,9 @@ impl March<'_> {
             let (u, v) = (q[0] * iz / self.kx + 0.5, q[1] * iz / self.ky + 0.5);
             let (ix, iy) = (((u * lw).max(0.0) as usize).min(r.w - 1), ((v * lh).max(0.0) as usize).min(r.h - 1));
             let Some(zs) = r.z.get(iy * r.w + ix) else { continue };
+            if r.stand.get(iy * r.w + ix).is_none_or(|s| *s < STAND) {
+                continue;
+            }
             if q[2] > zs * BIAS && q[2] < zs * THICK && !self.light_inside(*zs) {
                 return false;
             }
@@ -298,12 +323,15 @@ fn smoothed(r: &Reduced, v: &[f32]) -> Vec<f32> {
     out.par_chunks_mut(r.w.max(1)).enumerate().for_each(|(y, row)| {
         for (x, o) in row.iter_mut().enumerate() {
             let own = r.lz.get(y * r.w + x).copied().unwrap_or(0.0);
+            let mine = v.get(y * r.w + x).copied().unwrap_or(1.0);
             let (mut sum, mut n) = (0f32, 0f32);
             for yy in y.saturating_sub(1)..(y + 2).min(r.h) {
                 for xx in x.saturating_sub(1)..(x + 2).min(r.w) {
                     let q = yy * r.w + xx;
-                    if (r.lz.get(q).copied().unwrap_or(f32::MAX) - own).abs() < SAME {
-                        sum += v.get(q).copied().unwrap_or(1.0);
+                    let theirs = v.get(q).copied().unwrap_or(1.0);
+                    // (a neighbour far from this one in value is the other side of a hard edge: kept apart, so an edge near its object stays sharp)
+                    if (r.lz.get(q).copied().unwrap_or(f32::MAX) - own).abs() < SAME && (theirs - mine).abs() < EDGE {
+                        sum += theirs;
                         n += 1.0;
                     }
                 }
@@ -316,6 +344,8 @@ fn smoothed(r: &Reduced, v: &[f32]) -> Vec<f32> {
 
 /// How far apart (log depth) two neighbouring pixels may be and still be the same surface to the smoothing of the visibility.
 const SAME: f32 = 0.08;
+/// How far apart the values of two neighbours may be for the smoothing to average them (more is an edge of the shadow).
+const EDGE: f32 = 2.0;
 
 impl Field {
     /// The reduced field the march runs on (made once).
@@ -369,6 +399,11 @@ impl Field {
         Some(Visibility { w: r.w, h: r.h, v: smoothed(r, &v), draft })
     }
 
+    /// The visibility `vis` at the field's size, 0..1 per field pixel (pictures and tests; the render multiplies it into a lobe).
+    pub fn visibility_plane(&self, vis: &Visibility) -> Vec<f32> {
+        self.shadowed(Lobe { m: vec![1.0; self.width * self.height] }, vis, 1.0).m
+    }
+
     /// `lobe` with the shadows `vis` cast, `amount` of them (0 none, 1 all): each pixel's light is multiplied by
     /// `1 − amount · (1 − visibility)`, the visibility brought to the field's size edge-aware (see the module docs).
     /// A visibility of another size, or no amount, leaves the lobe as it is.
@@ -408,7 +443,8 @@ impl Field {
                     for (qx, wx) in [(x0, 1.0 - tx), (x1, tx)] {
                         let q = qy * r.w + qx;
                         let (Some(v), Some(g), Some(l)) = (vis.v.get(q), r.gi.get(q), r.lz.get(q)) else { continue };
-                        let d = (gi - g) * (gi - g) * is_lum + (lz - l) * (lz - l) * is_depth;
+                        let (dg, dl) = (((gi - g).abs() - DEAD_LUM).max(0.0), ((lz - l).abs() - DEAD_DEPTH).max(0.0));
+                        let d = dg * dg * is_lum + dl * dl * is_depth;
                         let wt = wx * wy * (-d).exp();
                         sum += v * wt;
                         weights += wt;
