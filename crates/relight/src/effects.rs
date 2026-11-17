@@ -66,11 +66,14 @@ pub struct Effects {
     pub softness: f64,
     /// The haze's amount, 0 .. 1.
     pub haze: f64,
+    /// How much of the light the photo's own things block (issue #315, [`Field::shadowed`]), 0 (none: the light as the
+    /// lobe made it) .. 1 (a surface behind something nearer gets none of it).
+    pub shadows: f64,
 }
 
 impl Default for Effects {
     fn default() -> Self {
-        Self { gel_hue: 0.0, gel_strength: 0.0, pattern: Pattern::None, scale: 0.5, rotation: 0.0, softness: 0.3, haze: 0.0 }
+        Self { gel_hue: 0.0, gel_strength: 0.0, pattern: Pattern::None, scale: 0.5, rotation: 0.0, softness: 0.3, haze: 0.0, shadows: 0.0 }
     }
 }
 
@@ -449,6 +452,7 @@ mod tests {
             rotation: f64::NAN,
             softness: -4.0,
             haze: f64::NAN,
+            shadows: f64::NAN,
         };
         for w in [f64::NAN, 9.0, -9.0] {
             let (t, s) = bad.light_colour(w);

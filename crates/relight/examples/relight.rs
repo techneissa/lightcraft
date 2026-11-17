@@ -2,11 +2,13 @@
 //! with a soft shoulder, not the app's tone curve), and pictures of the field.
 //!
 //! `cargo run --release -p lightcraft-relight --example relight -- photo.jpg <depth dump dir> out-prefix
-//! [x y depth amount softness warmth darken wrap]` (the dump dir is `lightcraft-depth`'s example `--dump`: `depth.f32`
+//! [x y depth amount softness warmth darken wrap]` with, from the environment, `LC_KIND=sun|softbox` (a spot or others: not here),
+//! `LC_SUN=azimuth,elevation`, `LC_BOX=width,height,rotation` and `LC_SHADOWS=0..1` (issue #315: how much the photo's own things
+//! block the light; the time of each stage of one drag step is printed) (the dump dir is `lightcraft-depth`'s example `--dump`: `depth.f32`
 //! and `size.txt`). Writes `<prefix>-before.png`, `<prefix>-after.png`, `<prefix>-gain.png`, `<prefix>-normals.png`, `<prefix>-depth.png` (the field's depth, near light).
 
 use lightcraft_raster::Rgb32f;
-use lightcraft_relight::{DepthMap, Field, Kind, Light, warmth_tilt};
+use lightcraft_relight::{DepthMap, Field, Kind, Light, LightKind, Part, Softbox, Sun, warmth_tilt};
 
 fn srgb_to_linear(v: f32) -> f32 {
     if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
@@ -18,6 +20,19 @@ fn display(v: f32) -> u8 {
     let v = if v > 0.8 { 0.8 + 0.2 * (1.0 - (-(v - 0.8) / 0.2).exp()) } else { v };
     let e = if v <= 0.003_130_8 { v * 12.92 } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 };
     (e.clamp(0.0, 1.0) * 255.0).round() as u8
+}
+
+fn env_numbers(name: &str) -> Vec<f64> {
+    std::env::var(name).map(|s| s.split(',').filter_map(|v| v.trim().parse().ok()).collect()).unwrap_or_default()
+}
+
+fn kind_from_env() -> LightKind {
+    let n = |name: &str, i: usize, d: f64| env_numbers(name).get(i).copied().unwrap_or(d);
+    match std::env::var("LC_KIND").as_deref() {
+        Ok("sun") => LightKind::Sun(Sun { azimuth: n("LC_SUN", 0, 40.0), elevation: n("LC_SUN", 1, 35.0) }),
+        Ok("softbox") => LightKind::Softbox(Softbox { width: n("LC_BOX", 0, 0.3), height: n("LC_BOX", 1, 0.2), rotation: n("LC_BOX", 2, 0.0) }),
+        _ => LightKind::Point,
+    }
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -34,8 +49,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         softness: num(4, 0.5),
         warmth: num(5, 0.0),
         wrap: num(7, 0.4),
-        kind: lightcraft_relight::LightKind::Point,
+        kind: kind_from_env(),
     };
+    let shadows: f64 = std::env::var("LC_SHADOWS").ok().and_then(|s| s.parse().ok()).unwrap_or(0.0);
     let darken = num(6, 0.0);
     let img = image::open(photo)?.to_rgb8();
     let long = 1600u32;
@@ -57,7 +73,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let rig = field.rig(&light, darken, 0.0);
     let probe = |u: f32, v: f32| field.depth_plane().data.get((v * h as f32) as usize * w + (u * w as f32) as usize).copied().unwrap_or(0.0);
     eprintln!("near {:.2} far {:.2}; under the light {:.2}", field.near, field.far, probe(light.x as f32, light.y as f32));
-    let shading = field.shading(&rig);
+    let lobe = field.lobe(&rig);
+    let t_lobe = t.elapsed().as_secs_f64() * 1e3;
+    let lobe = if shadows > 0.0 && light.kind.takes_shadows() {
+        let vis = field.visibility(&rig, &light).ok_or("no shadow for this light")?;
+        let t_vis = t.elapsed().as_secs_f64() * 1e3;
+        let lobe = field.shadowed(lobe, &vis, shadows);
+        eprintln!("lobe {t_lobe:.1} ms, march {:.1} ms, upsample {:.1} ms", t_vis - t_lobe, t.elapsed().as_secs_f64() * 1e3 - t_vis);
+        lobe
+    } else {
+        lobe
+    };
+    let shading = field.shading_of(&[Part { lobe: &lobe, gain: rig.gain(), tilt: 1.0, tint: 0.0 }], lightcraft_relight::ambient(darken), 0.0);
     let t1 = t.elapsed().as_secs_f64() * 1e3;
     let planes = shading.planes(w, h, &|x, y| (x / w as f64, y / h as f64));
     eprintln!("shading {t1:.1} ms, planes {:.1} ms", t.elapsed().as_secs_f64() * 1e3 - t1);

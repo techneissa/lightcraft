@@ -133,6 +133,10 @@ pub(super) fn relight(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSet
     for field in kinds::fields(kind) {
         control(app, ui, d, &format!("relight.{sel}.{field}"), true);
     }
+    // (issue #315: a light with a place the light comes from casts shadows: a point, a spot, a sun and a softbox; a rim and a fill don't)
+    if matches!(kind, 0..=3) {
+        control(app, ui, d, &format!("relight.{sel}.shadows"), true);
+    }
     ui.add_space(4.0);
     let open = app.ui.flyout_open("relightAdvanced");
     if crate::widgets::flyout_row(ui, "relightAdvanced", "Advanced", Icon::Sliders, open).clicked() {

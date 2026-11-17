@@ -78,9 +78,19 @@ fn relight_matches_cpu() {
         let e = &mut effects.relight.lights[2].effects;
         (e.gel_hue, e.gel_strength, e.pattern) = (305.0, 80.0, 4.0);
     }
+    // (issue #315) the shadows a near thing casts: a light to the left of the box, shadowed in full, and a sun with half
+    let mut shadowed = lit(0.0, 0.0);
+    shadowed.relight.lights[0].x = 0.05;
+    shadowed.relight.lights[0].effects.shadows = 100.0;
+    let mut sun = lit(20.0, 0.0);
+    for (field, v) in [("kind", 2.0), ("sunAzimuth", -60.0), ("sunElevation", 25.0), ("shadows", 50.0)] {
+        assert!(lightcraft_develop::relight::set(&mut sun, &format!("relight.{field}"), v));
+    }
     let req = RenderRequest::fit(720, 720);
     for (name, s) in [
         ("white light", lit(0.0, 0.0)),
+        ("shadows", shadowed),
+        ("a sun's shadows", sun),
         ("warm, darkened", warm),
         ("cool, cropped", cropped),
         ("after a mask", masked),

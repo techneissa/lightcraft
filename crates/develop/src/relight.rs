@@ -299,6 +299,8 @@ pub static SPECS: &[ControlSpec] = &[
     spec("relight.patternRotation", "Pattern Rotation", (-180.0, 180.0, 0.0), (1.0, 0), Track::Centered),
     spec("relight.patternSoftness", "Pattern Softness", (0.0, 100.0, 30.0), (1.0, 0), Track::Plain),
     spec("relight.haze", "Haze", (0.0, 100.0, 0.0), (1.0, 0), Track::Plain),
+    // (issue #315: how much the photo's own things block the light)
+    spec("relight.shadows", "Shadows", (0.0, 100.0, 0.0), (1.0, 0), Track::Plain),
 ];
 
 /// Relight's control specs: the per-light ones (`relight.amount` …, templates of `relight.<n>.amount` …) and
@@ -454,7 +456,7 @@ mod tests {
         assert_eq!((get(&s, "relight.0.warmth"), get(&s, "relight.1.warmth")), (Some(-50.0), Some(0.0)));
         assert_eq!(for_light("relight.amount", 2).as_deref(), Some("relight.2.amount"));
         assert_eq!((for_light("relight.darken", 2), for_light("relight.1.amount", 2)), (None, None));
-        assert_eq!(light_instances(&s).len(), 52);
+        assert_eq!(light_instances(&s).len(), 54);
         assert_eq!(crate::controls::find("relight.1.wrap").map(|c| c.id), Some("relight.wrap"));
         assert!(crate::controls::find("relight.x.wrap").is_none() && crate::controls::find("relight.0.darken").is_none());
         // a section reset puts all the lights back
@@ -470,9 +472,8 @@ mod tests {
         let v = s.to_json();
         let keys: Vec<&String> = v[KEY]["lights"][0].as_object().unwrap().keys().collect();
         assert!(
-            !keys
-                .iter()
-                .any(|k| ["gelHue", "gelStrength", "pattern", "patternScale", "patternRotation", "patternSoftness", "haze"].contains(&k.as_str())),
+            !keys.iter().any(|k| ["gelHue", "gelStrength", "pattern", "patternScale", "patternRotation", "patternSoftness", "haze", "shadows"]
+                .contains(&k.as_str())),
             "{keys:?}"
         );
         // set ones are saved by id, only those, and read back
@@ -482,20 +483,25 @@ mod tests {
             ("relight.pattern", 3.0),
             ("relight.patternScale", 20.0),
             ("relight.haze", 35.0),
+            ("relight.0.shadows", 60.0),
         ] {
             assert!(set(&mut s, id, v), "{id}");
         }
         let v = s.to_json();
         assert_eq!(v[KEY]["lights"][0]["gelHue"], json!(200.0));
         assert!(v[KEY]["lights"][0].get("patternSoftness").is_none());
+        assert_eq!(v[KEY]["lights"][0]["shadows"], json!(60.0));
         let back = DevelopSettings::from_json(&v).unwrap();
         assert_eq!(back.relight, s.relight);
         assert_eq!((get(&back, "relight.0.pattern"), get(&back, "relight.patternSoftness")), (Some(3.0), Some(30.0)));
         // out of range numbers are clamped; wrong-typed ones read the light as a default one; an older block has defaults
-        let r = DevelopSettings::from_json(&json!({"fork_relight": {"lights": [{"amount": 50.0, "gelHue": 9e9, "pattern": 77.0, "haze": -4.0}]}}))
-            .unwrap()
-            .relight;
+        let r = DevelopSettings::from_json(
+            &json!({"fork_relight": {"lights": [{"amount": 50.0, "gelHue": 9e9, "pattern": 77.0, "haze": -4.0, "shadows": 900.0}]}}),
+        )
+        .unwrap()
+        .relight;
         assert_eq!((r.lights[0].effects.gel_hue, r.lights[0].effects.pattern, r.lights[0].effects.haze), (360.0, 4.0, 0.0));
+        assert_eq!(r.lights[0].effects.shadows, 100.0);
         let r = DevelopSettings::from_json(&json!({"fork_relight": {"lights": [{"amount": 50.0, "gelHue": "teal"}]}})).unwrap().relight;
         assert_eq!(r.lights[0], LightSettings::default());
         assert!(DevelopSettings::from_json(&json!({"fork_relight": {"amount": 50.0}})).unwrap().relight.lights[0].effects == LightEffects::default());

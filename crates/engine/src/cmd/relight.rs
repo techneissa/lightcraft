@@ -2,7 +2,7 @@
 //! depth model's download; and (issue #299) adding, duplicating, deleting and selecting lights. A photo holds up to
 //! eight lights. Each light's numbers are develop controls, `relight.<n>.amount`, `.softness`, `.warmth`, `.x`, `.y`,
 //! `.depth`, `.wrap`, (issue #302) `.gelHue`, `.gelStrength`, `.pattern`, `.patternScale`, `.patternRotation`,
-//! `.patternSoftness` and `.haze` and (issue #300) `.kind` (0 point, 1 spot, 2 sun / window, 3 softbox, 4 rim, 5 fill) and the
+//! `.patternSoftness`, `.haze` and (issue #315) `.shadows` and (issue #300) `.kind` (0 point, 1 spot, 2 sun / window, 3 softbox, 4 rim, 5 fill) and the
 //! numbers of each type (`.spotAimX` …; `lightcraft_develop::relight_kinds`) (`n` from 0), and `relight.darken` is the photo's; `relight.amount` and the other shorthands act
 //! on the selected light (see [`Session::relight_selected`]). They are set like every slider (`develop.set`,
 //! `develop.merge`), so undo, presets, copy settings and sync reach them.
@@ -223,7 +223,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Relight Status",
             [],
             None,
-            "{id?} → {id, on, lights: [{amount, softness, warmth, x, y, depth, wrap, gelHue, gelStrength, pattern, patternScale, patternRotation, patternSoftness, haze}], darken, selected: index of the selected light, ready, finding, cancelled, source?: file|model, error?, model: {installed, bytes, downloading, done, total, error?, available}} — whether the photo's depth is found (from its own depth map, an iPhone Portrait photo's, or the depth model's), being found, or why it can't be. The lights are develop controls (relight.<n>.amount, .softness, .warmth, .x, .y, .depth, .wrap, .gelHue, .gelStrength, .pattern (0 none, 1 blinds, 2 window panes, 3 leaves, 4 dapple), .patternScale, .patternRotation, .patternSoftness and .haze for light n from 0, and relight.darken; relight.amount … act on the selected light): set them with develop.set or develop.merge",
+            "{id?} → {id, on, lights: [{amount, softness, warmth, x, y, depth, wrap, gelHue, gelStrength, pattern, patternScale, patternRotation, patternSoftness, haze, shadows}], darken, selected: index of the selected light, ready, finding, cancelled, source?: file|model, error?, model: {installed, bytes, downloading, done, total, error?, available}} — whether the photo's depth is found (from its own depth map, an iPhone Portrait photo's, or the depth model's), being found, or why it can't be. The lights are develop controls (relight.<n>.amount, .softness, .warmth, .x, .y, .depth, .wrap, .gelHue, .gelStrength, .pattern (0 none, 1 blinds, 2 window panes, 3 leaves, 4 dapple), .patternScale, .patternRotation, .patternSoftness, .haze and .shadows (how much the photo's own things block the light, 0..100) for light n from 0, and relight.darken; relight.amount … act on the selected light): set them with develop.set or develop.merge",
             always,
             status
         ),
@@ -422,8 +422,13 @@ mod tests {
         assert!(s.execute("relight.setGel", &json!({"gel": "chartreuse"})).is_err());
         assert!(s.execute("relight.setGel", &json!({"gel": "red", "index": 7})).is_err());
         // the pattern, scale and haze are controls by id (the shorthand acts on the selected light) and the status shows them all
-        s.execute("develop.set", &json!({"values": {"relight.0.pattern": 3, "relight.0.patternScale": 20, "relight.haze": 40}})).unwrap();
+        s.execute(
+            "develop.set",
+            &json!({"values": {"relight.0.pattern": 3, "relight.0.patternScale": 20, "relight.haze": 40, "relight.0.shadows": 55}}),
+        )
+        .unwrap();
         assert_eq!((effects(&s, 0).pattern, effects(&s, 0).pattern_scale, effects(&s, 1).haze), (3.0, 20.0, 40.0));
+        assert_eq!(effects(&s, 0).shadows, 55.0);
         let st = s.execute("relight.status", &json!({})).unwrap();
         assert_eq!((st["lights"][0]["pattern"].as_f64(), st["lights"][1]["patternSoftness"].as_f64()), (Some(3.0), Some(30.0)));
     }

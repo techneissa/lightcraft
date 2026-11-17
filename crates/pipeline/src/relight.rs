@@ -15,7 +15,9 @@ use lightcraft_develop::relight::KindSettings;
 use lightcraft_develop::{DevelopSettings, LocalAdjustments};
 use lightcraft_geom::Point;
 use lightcraft_raster::Plane;
-use lightcraft_relight::{Effects, Field, Fill, HAZE_GAIN, Light, LightKind, Lobe, MAX_LIGHTS, Part, Pattern, Rig, Rim, Shading, Softbox, Spot, Sun};
+use lightcraft_relight::{
+    Effects, Field, Fill, HAZE_GAIN, Light, LightKind, Lobe, MAX_LIGHTS, Part, Pattern, Rig, Rim, Shading, Softbox, Spot, Sun, Visibility,
+};
 
 use crate::masks::{Evaluated, MaskAlpha};
 use crate::{Plan, SourceInfo};
@@ -93,12 +95,16 @@ impl<T> Memo<T> {
 
 static MEMO: Memo<Shading> = Memo::new(KEEP);
 static LOBES: Memo<Lobe> = Memo::new(KEEP_LOBES);
+/// Shadow visibilities kept (issue #315): one per light, at a sixteenth of the field's size, so the Shadows slider and
+/// the light's other numbers don't march again; only a move of the light, its size or its type's numbers do.
+static SHADOWS: Memo<Visibility> = Memo::new(KEEP_LOBES);
 
 /// Let go of every kept lobe and shading (the engine drops a photo's field: what was made from it goes too; they are
 /// made again by the next render). They are keyed by the field, so one photo's go with another's.
 pub fn forget() {
     MEMO.clear();
     LOBES.clear();
+    SHADOWS.clear();
 }
 
 // (the settings and the light's numbers keep to the same cap)
@@ -148,6 +154,7 @@ fn effects_of(e: &lightcraft_develop::relight_effects::LightEffects) -> Effects 
         rotation: e.pattern_rotation,
         softness: e.pattern_softness / 100.0,
         haze: e.haze / 100.0,
+        shadows: e.shadows / 100.0,
     }
 }
 
@@ -193,6 +200,10 @@ fn lobe_key(input: &Input, light: &Light, effects: &Effects, ev: f64) -> u64 {
         if matches!(light.kind, LightKind::Fill(_)) {
             std::hash::Hash::hash(&ev.to_bits(), h);
         }
+        // (a light without shadows hashes as it did before them: the same key, the same kept lobe)
+        if shadow_amount(light, effects).is_some() {
+            std::hash::Hash::hash(&(b's', effects.shadows.to_bits()), h);
+        }
         // (a light without a pattern hashes as it did before patterns: the same key, the same kept lobe)
         if effects.pattern != Pattern::None {
             std::hash::Hash::hash(&effects.pattern, h);
@@ -221,19 +232,63 @@ pub fn shading_key(input: &Input, scene: &Scene, ev: f64) -> u64 {
         // them; the same effect on another light is another scene)
         for (i, e) in scene.effects.iter().enumerate().filter(|(_, e)| **e != Effects::default()) {
             std::hash::Hash::hash(&(i, e.gel_hue.to_bits(), e.gel_strength.to_bits(), e.pattern, e.scale.to_bits()), h);
-            std::hash::Hash::hash(&(e.rotation.to_bits(), e.softness.to_bits(), e.haze.to_bits()), h);
+            std::hash::Hash::hash(&(e.rotation.to_bits(), e.softness.to_bits(), e.haze.to_bits(), e.shadows.to_bits()), h);
         }
     })
 }
 
-/// `light`'s lobe on `input`'s field (`rig`: the light set up on it), seen through its pattern; made once and kept.
+/// The shadow amount (0..1) `light` casts with `effects`: `None` for a light with none, or of a type that takes none (a rim,
+/// a fill), which keeps its lobe as it was before shadows.
+fn shadow_amount(light: &Light, effects: &Effects) -> Option<f64> {
+    (light.kind.takes_shadows() && effects.shadows.is_finite() && effects.shadows > 0.0).then(|| effects.shadows.min(1.0))
+}
+
+/// The key naming `light`'s shadow visibility on `input`'s field: what the march depends on (the light's place, depth and
+/// size, a sun's direction, a softbox's rectangle), not its Amount, a spot's cone or the shadow amount.
+fn shadow_key(input: &Input, light: &Light) -> u64 {
+    hashed(|h| {
+        std::hash::Hash::hash(&(2u8, input.key), h);
+        for v in [light.x, light.y, light.depth, light.softness] {
+            std::hash::Hash::hash(&v.to_bits(), h);
+        }
+        match light.kind {
+            LightKind::Sun(_) | LightKind::Softbox(_) => std::hash::Hash::hash(&light.kind.key_bits(), h),
+            _ => std::hash::Hash::hash(&0u8, h),
+        }
+    })
+}
+
+/// `light`'s shadow visibility on `input`'s field; made once and kept.
+fn shadows_for(input: &Input, light: &Light, rig: &Rig) -> Option<Arc<Visibility>> {
+    let key = shadow_key(input, light);
+    if let Some(v) = SHADOWS.get(key) {
+        return Some(v);
+    }
+    let t = crate::profiling().then(std::time::Instant::now);
+    let vis = Arc::new(input.field.visibility(rig, light)?);
+    if let Some(t) = t {
+        eprintln!("    relight shadows ({} × {}): {:.1} ms", input.field.width, input.field.height, t.elapsed().as_secs_f64() * 1e3);
+    }
+    SHADOWS.put(key, vis.clone());
+    Some(vis)
+}
+
+/// `light`'s lobe on `input`'s field (`rig`: the light set up on it), seen through its pattern and with the shadows it
+/// casts; made once and kept.
 fn lobe_for(input: &Input, light: &Light, effects: &Effects, rig: &Rig, ev: f64) -> Arc<Lobe> {
     let key = lobe_key(input, light, effects, ev);
     if let Some(l) = LOBES.get(key) {
         return l;
     }
     let t = crate::profiling().then(std::time::Instant::now);
-    let lobe = Arc::new(input.field.patterned(rig, input.field.lobe(rig), effects));
+    let mut lobe = input.field.patterned(rig, input.field.lobe(rig), effects);
+    // (the shadows multiply the lobe before the lights add up)
+    if let Some(amount) = shadow_amount(light, effects)
+        && let Some(vis) = shadows_for(input, light, rig)
+    {
+        lobe = input.field.shadowed(lobe, &vis, amount);
+    }
+    let lobe = Arc::new(lobe);
     if let Some(t) = t {
         eprintln!("    relight lobe ({} × {}): {:.1} ms", input.field.width, input.field.height, t.elapsed().as_secs_f64() * 1e3);
     }
