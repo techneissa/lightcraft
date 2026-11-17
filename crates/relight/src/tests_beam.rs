@@ -338,8 +338,7 @@ fn a_patterned_softboxs_beam_is_about_as_bright_as_the_plain_ones_where_the_wind
     let panes = Effects { pattern: crate::Pattern::Panes, scale: 0.5, softness: 0.1, ..haze(0.5) };
     for (aim_h, aim_v) in [(0.0, 0.0), (30.0, 15.0)] {
         let l = boxed(aim_h, aim_v);
-        let (through, plain, n) = medians(&l, &panes);
-
+        let (through, plain, _) = medians(&l, &panes);
         assert!(plain > 0.0 && through >= 0.5 * plain, "aim {aim_h}, {aim_v}: through panes {through}, plain {plain}");
     }
 }
