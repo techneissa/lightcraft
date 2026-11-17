@@ -197,7 +197,7 @@ impl Shape {
             }
             LightKind::Rim(r) => {
                 let w = finite(r.width, 0.0, 1.0, 0.5) as f32;
-                Shape::Rim { turned: 0.3 + 0.5 * w, reach: 0.012 + 0.07 * w }
+                Shape::Rim { turned: 0.15 + 0.35 * w, reach: 0.005 + 0.03 * w }
             }
             LightKind::Fill(f) => Shape::Fill { near: finite(f.near, 0.0, 1.0, 0.5) as f32, top: -1.0 + 3.5 * softness },
         }
@@ -207,18 +207,21 @@ impl Shape {
 /// Points across a softbox on a side (`BOX_GRID²` samples per pixel).
 const BOX_GRID: usize = 4;
 
-/// The edge directions the Rim light looks for a farther surface along (eight, with a ring of two radii each).
+/// The directions the Rim light looks for a farther surface along (eight), turned by half a step on every other ring so
+/// the rings don't line up into rays.
 const H: f32 = std::f32::consts::FRAC_1_SQRT_2;
-const RING: [(f32, f32); 8] = [
-    (1.0, 0.0),
-    (H, H),
-    (0.0, 1.0),
-    (-H, H),
-    (-1.0, 0.0),
-    (-H, -H),
-    (0.0, -1.0),
-    (H, -H),
-];
+const RING: [(f32, f32); 8] = [(1.0, 0.0), (H, H), (0.0, 1.0), (-H, H), (-1.0, 0.0), (-H, -H), (0.0, -1.0), (H, -H)];
+/// The rings' radii as shares of the reach.
+const RINGS: [f32; 3] = [0.34, 0.67, 1.0];
+
+impl Shape {
+    /// Whether the shape is made for a fixed peak (1: a fully lit point) and not the photo's most lit point: a sun, a
+    /// rim and a fill have no distance, so the Amount is what a surface that fully faces them gets; normalizing to the
+    /// photo's best would light everything alike when nothing faces them well.
+    pub(crate) fn fixed_peak(&self) -> bool {
+        matches!(self, Shape::Sun { .. } | Shape::Rim { .. } | Shape::Fill { .. })
+    }
+}
 
 /// `falloff · facing` at `(u, v)` (log depth `lz`, normal `n`) for a light that isn't a point. Always finite.
 pub(crate) fn light_at(field: &Field, rig: &Rig, (u, v): (f32, f32), lz: f32, n: [f32; 3]) -> f32 {
@@ -258,15 +261,17 @@ pub(crate) fn light_at(field: &Field, rig: &Rig, (u, v): (f32, f32), lz: f32, n:
             // whether it is the near side of a step in depth: the largest rise in log depth within the reach
             let long = field.width.max(field.height).max(1) as f32;
             let (ru, rv) = (reach / (field.width.max(1) as f32 / long), reach / (field.height.max(1) as f32 / long));
-            let mut rise = 0.0f32;
-            for (dx, dy) in RING {
-                for k in [0.5f32, 1.0] {
-                    let (slz, _, _) = field.at((u + dx * ru * k).clamp(0.0, 1.0), (v + dy * rv * k).clamp(0.0, 1.0));
-                    rise = rise.max(slz - lz);
+            // (a step counts for more the nearer it is)
+            let mut edge = 0.0f32;
+            for (k, r) in RINGS.iter().enumerate() {
+                let (sin, cos) = if k % 2 == 1 { (0.382_683_43f32, 0.923_879_5f32) } else { (0.0, 1.0) };
+                for (dx, dy) in RING {
+                    let (dx, dy) = (dx * cos - dy * sin, dx * sin + dy * cos);
+                    let (slz, _, _) = field.at((u + dx * ru * r).clamp(0.0, 1.0), (v + dy * rv * r).clamp(0.0, 1.0));
+                    edge = edge.max(smooth(0.12, 0.45, slz - lz) * (1.0 - 0.7 * r));
                 }
             }
-            let edge = smooth(0.04, 0.25, rise);
-            (0.08 + 0.92 * edge) * (0.3 + 0.7 * away)
+            edge * (0.1 + 0.9 * away)
         }
         Shape::Fill { near, top } => {
             let (_, _, lum) = field.at(u, v);

@@ -172,9 +172,9 @@ pub static SPECS: &[ControlSpec] = &[
     spec("relight.sunElevation", "Sun Height", (0.0, 90.0, 35.0), (1.0, 0)),
     spec("relight.boxWidth", "Box Width", (0.02, 1.5, 0.3), (0.001, 3)),
     spec("relight.boxHeight", "Box Height", (0.02, 1.5, 0.2), (0.001, 3)),
-    spec("relight.boxRotation", "Box Rotation", (-180.0, 180.0, 0.0), (1.0, 0)),
+    spec("relight.boxRotation", "Box Angle", (-180.0, 180.0, 0.0), (1.0, 0)),
     spec("relight.rimWidth", "Rim Width", (0.0, 100.0, 50.0), (1.0, 0)),
-    spec("relight.fillNear", "Favor Near Things", (0.0, 100.0, 50.0), (1.0, 0)),
+    spec("relight.fillNear", "Near Bias", (0.0, 100.0, 50.0), (1.0, 0)),
 ];
 
 #[cfg(test)]

@@ -57,8 +57,10 @@ fn a_rim_lights_the_edges_that_turn_away_and_not_the_middle_or_the_background() 
     let l = light(LightKind::Rim(Rim { width: 0.6 }));
     let rig = f.rig(&l, 0.0, 0.0);
     let at = |dx: f32| f.shade(&rig, 0.5 + dx, 0.5).stops;
-    let (middle, edge, background) = (at(0.0), at(0.23), at(0.42));
-    assert!(edge > middle + 0.8 && edge > background + 0.8, "middle {middle} edge {edge} background {background}");
+    // (the brightest of the dome's last few pixels: the rim is a thin line)
+    let edge = (0..=10).map(|i| at(0.2 + 0.005 * i as f32)).fold(0.0, f32::max);
+    let (middle, background) = (at(0.0), at(0.42));
+    assert!(edge > 0.5 && middle < 0.05 && background < 0.05, "middle {middle} edge {edge} background {background}");
 }
 
 #[test]

@@ -164,7 +164,7 @@ impl Field {
                 self.light_at(&rig, u, v, lz, n)
             })
             .reduce(|| 0.0, f32::max);
-        rig.peak = peak.max(1e-6);
+        rig.peak = if rig.shape.fixed_peak() { 1.0 } else { peak.max(1e-6) };
         rig
     }
 
