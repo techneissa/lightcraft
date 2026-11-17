@@ -131,7 +131,8 @@ fn add(s: &mut Session, p: &Value) -> Result<Value> {
         let at = |k: &str, v: f64| p.get(k).and_then(Value::as_f64).unwrap_or(v);
         let mut l = LightSettings { amount: at("amount", 50.0), x: at("x", x), y: at("y", y), ..LightSettings::default() };
         if let Some(k) = p.get("kind").filter(|k| !k.is_null()) {
-            l.kind.which = KindSettings::kind_of(k).ok_or_else(|| bad(c, format!("no light type {k}: point, spot, sun, softbox, rim or fill (or 0..5)")))?;
+            l.kind.which =
+                KindSettings::kind_of(k).ok_or_else(|| bad(c, format!("no light type {k}: point, spot, sun, softbox, rim or fill (or 0..5)")))?;
         }
         l.kind_changed(0);
         l.sanitize();

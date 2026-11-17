@@ -221,10 +221,10 @@ const H: f32 = std::f32::consts::FRAC_1_SQRT_2;
 const RING: [(f32, f32); 8] = [(1.0, 0.0), (H, H), (0.0, 1.0), (-H, H), (-1.0, 0.0), (-H, -H), (0.0, -1.0), (H, -H)];
 /// The most an edge's weight can be: a step at the nearest ring ([`RINGS`] first radius, `1 − 0.7 r`).
 const RIM_EDGE_MAX: f32 = 0.76;
-/// How much of a pixel's light a fill gives at full Amount: under half the point light's (a third), so the Amount reads about as
-/// strongly as the other types' (a fill spreads over the whole shadow, a point over a pool: at full Amount about 1.4 stops
+/// How much of a pixel's light a fill gives at full Amount: under half the point light's, so the Amount reads about as
+/// strongly as the other types' (a fill spreads over the whole shadow, a point over a pool: at full Amount about 1.5 stops
 /// in the deepest shadows of a flat, face-on wall).
-const FILL_GAIN: f32 = 0.32;
+const FILL_GAIN: f32 = 0.4;
 /// The rings' radii as shares of the reach.
 const RINGS: [f32; 3] = [0.34, 0.67, 1.0];
 

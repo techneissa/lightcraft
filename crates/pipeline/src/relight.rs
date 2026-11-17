@@ -255,7 +255,8 @@ pub fn shading_for(input: &Input, scene: &Scene, ev: f64) -> (u64, Arc<Shading>)
     let effects = |i: usize| scene.effects.get(i).unwrap_or(&none);
     let lobes: Vec<Arc<Lobe>> = scene.lights.iter().zip(&rigs).enumerate().map(|(i, (l, r))| lobe_for(input, l, effects(i), r, ev)).collect();
     // (a light's haze is one more lobe of the same light, in the same colour; made here, not kept: it is one pass)
-    let hazes: Vec<Option<Lobe>> = scene.lights.iter().enumerate().map(|(i, l)| (effects(i).haze > 0.0 && l.kind.has_place()).then(|| input.field.haze_lobe(l))).collect();
+    let hazes: Vec<Option<Lobe>> =
+        scene.lights.iter().enumerate().map(|(i, l)| (effects(i).haze > 0.0 && l.kind.has_place()).then(|| input.field.haze_lobe(l))).collect();
     let mut parts: Vec<Part<'_>> = Vec::with_capacity(2 * rigs.len());
     for (i, ((l, r), lobe)) in scene.lights.iter().zip(&rigs).zip(&lobes).enumerate() {
         let (tilt, tint) = effects(i).light_colour(l.warmth);
