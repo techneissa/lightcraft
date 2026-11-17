@@ -101,6 +101,8 @@ pub(crate) mod read_file;
 pub mod reflections;
 /// Fork (issue #288, `fork/relight.md`): each photo's Relight field.
 pub mod relight;
+/// Fork (issue #301, `fork/relight.md`): light presets placed round the subject.
+pub mod relight_presets;
 pub mod rename;
 pub mod rename_job;
 pub mod retouch_background;
@@ -515,6 +517,9 @@ pub struct Session {
     /// Fork (issue #299): the photo whose light is selected and its index (UI state, not saved in the edit; see
     /// [`Session::relight_selected`]).
     pub(crate) relight_selection: (Option<PhotoId>, usize),
+    /// Fork (issue #301): the user's own light presets, saved in the library's presets file (the built-in ones are
+    /// `lightcraft_develop::relight_presets::built_in`).
+    pub relight_presets: Vec<lightcraft_develop::relight_presets::LightPreset>,
     /// Portrait presets: the library's named people for matching, and Apply to Every Photo running (fork,
     /// `fork/portrait-presets.md`).
     pub(crate) portrait_presets: portrait_presets::matching::State,
@@ -643,6 +648,7 @@ impl Session {
             portrait_presets: Default::default(),
             relight: Default::default(),
             relight_selection: (None, 0),
+            relight_presets: Vec::new(),
             face_shared_dir: None,
             face_downloads: Default::default(),
             lensfun: Default::default(),

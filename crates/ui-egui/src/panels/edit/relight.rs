@@ -15,6 +15,7 @@ use super::{Icon, LightcraftApp, Tokens, control, register};
 
 mod effects;
 mod kinds;
+mod presets;
 
 /// How near a press must be to a handle to take it (points).
 const HIT: f32 = 12.0;
@@ -123,6 +124,8 @@ pub(super) fn relight(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSet
         app.session.relight_prepare(id);
     }
     let sel = app.session.relight_selected(id);
+    // (issue #301: one click sets up several lights round the subject)
+    presets::presets(app, ui, d, id);
     egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 6, bottom: 4 }).show(ui, |ui| {
         lights_list(app, ui, d, sel);
         ui.add_space(8.0);

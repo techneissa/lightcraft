@@ -208,6 +208,8 @@ struct PresetsFile {
     /// Favourite profiles, and the recently applied ones (newest first).
     profile_favorites: Vec<String>,
     profile_recent: Vec<String>,
+    /// The user's light presets (fork, issue #301).
+    relight_presets: Vec<lightcraft_develop::relight_presets::LightPreset>,
 }
 
 /// The state presets.json was last written (or read) from. Saving checks the preset list's
@@ -219,6 +221,7 @@ struct PresetsSaved {
     generation: u64,
     profile_favorites: Vec<String>,
     profile_recent: Vec<String>,
+    relight_presets: Vec<lightcraft_develop::relight_presets::LightPreset>,
     /// Hash of the bytes written: a list borrowed mutably but left as it was isn't rewritten.
     hash: u64,
 }
@@ -229,13 +232,17 @@ impl PresetsSaved {
             generation: s.presets.generation(),
             profile_favorites: s.profile_favorites.clone(),
             profile_recent: s.profile_recent.clone(),
+            relight_presets: s.relight_presets.clone(),
             hash: 0,
         }
     }
 
     /// `s` changed its presets or profile lists since this state.
     fn differs(&self, s: &Session) -> bool {
-        self.generation != s.presets.generation() || self.profile_favorites != s.profile_favorites || self.profile_recent != s.profile_recent
+        self.generation != s.presets.generation()
+            || self.profile_favorites != s.profile_favorites
+            || self.profile_recent != s.profile_recent
+            || self.relight_presets != s.relight_presets
     }
 }
 
@@ -382,6 +389,7 @@ fn presets_json(s: &Session) -> String {
         favorites: presets.iter().filter(|p| p.builtin && p.favorite).map(|p| p.id.clone()).collect(),
         profile_favorites: s.profile_favorites.clone(),
         profile_recent: s.profile_recent.clone(),
+        relight_presets: s.relight_presets.clone(),
     };
     serde_json::to_string_pretty(&f).unwrap_or_default()
 }
@@ -763,6 +771,7 @@ impl Session {
             };
             self.profile_favorites = f.profile_favorites.into_iter().filter(known).collect();
             self.profile_recent = f.profile_recent.into_iter().filter(known).take(crate::presets::RECENT_PROFILES).collect();
+            self.relight_presets = crate::relight_presets::read_user(f.relight_presets);
         }
         // view state
         if let Some(v) = settings.read::<ViewFile>(files.as_mut(), "view.json") {
