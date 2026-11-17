@@ -16,7 +16,8 @@ use lightcraft_develop::{DevelopSettings, LocalAdjustments};
 use lightcraft_geom::Point;
 use lightcraft_raster::Plane;
 use lightcraft_relight::{
-    Beam, Effects, Field, Fill, Light, LightKind, Lobe, MAX_LIGHTS, Part, Pattern, Rig, Rim, Shading, Shafts, Softbox, Spot, Sun, Visibility,
+    Beam, Effects, Field, Fill, Light, LightKind, Lobe, MAX_LIGHTS, Part, Pattern, Rig, Rim, Shading, Shafts, Softbox, Spot, Sun, Visibility, Water,
+    WaterPlanes,
 };
 
 use crate::masks::{Evaluated, MaskAlpha};
@@ -51,6 +52,8 @@ pub struct Lit {
     pub fades: Vec<Faded>,
     /// The field the beams' planes are on.
     pub field: Arc<Field>,
+    /// The underwater look's colour planes (issue #333); `None` while it has no water.
+    pub water: Option<Arc<WaterPlanes>>,
 }
 
 /// One light's beam: its plane over the field ([`Field::beam_plane`], in units of 18 % grey per unit of the light's strength)
@@ -62,6 +65,8 @@ pub struct Beamed {
     /// Which of the beams' mask ids it takes (below [`BEAM_IDS`]): the light's index, or [`MAX_LIGHTS`] more for a light's
     /// source seen as a bright point (issue #334), which is a plane of its own so a beam's detail keeps its scale.
     pub slot: u32,
+    /// The water's shafts (issue #333), not a light's own beam: they take [`SHAFT_ID`].
+    pub shafts: bool,
 }
 
 /// The photo's Distance Fade (issue #331): the air's optical depth in front of each pixel of the field ([`Field::fade`]), and the
@@ -72,10 +77,21 @@ pub struct Faded {
     pub colour: [f32; 3],
 }
 
-/// The ids the beams' planes take among the masks (after [`IDS`]), one per light.
+/// The ids the beams' planes take among the masks (after [`IDS`]): `BEAM_IDS` minus the beam's slot, `u32::MAX - 6` down to
+/// `u32::MAX - 21` (a light's beam, then its source's bright point, issue #334, `MAX_LIGHTS` slots on).
 const BEAM_IDS: u32 = u32::MAX - 6;
 /// The ids the fade's planes take (after the beams'): the dimming and the air's glow.
 const FADE_IDS: u32 = BEAM_IDS - lightcraft_relight::MAX_LIGHTS as u32;
+
+/// The ids the water's planes take (issue #333): exposure, temperature (cool, warm), tint (green, magenta), the veil's red,
+/// green and blue, `u32::MAX - 101` up to `u32::MAX - 94`, and the shafts' beam `u32::MAX - 120`. Ranges among the masks: the
+/// light's planes `u32::MAX - 5` up, the beams' and the sources' `u32::MAX - 21` to `u32::MAX - 6`, Distance Fade's (issue
+/// #331) from `u32::MAX - 14` down by two for each fade (one, today), the water's far below all of those.
+const WATER_IDS: u32 = u32::MAX - 93;
+const SHAFT_ID: u32 = u32::MAX - 120;
+
+/// The lights a scene holds: the photo's own and the water's sun of the caustics (issue #333).
+const MAX_SCENE: usize = MAX_LIGHTS + 1;
 
 /// The ids the light's planes take among the masks: brightening, darkening, warm colour, cool colour, and for a gel
 /// magenta and green (those two after the others, so a light without a gel keeps the ids it had).
@@ -145,6 +161,8 @@ static BEAMS: Memo<Beam> = Memo::new(KEEP_LOBES);
 static BEAM_LOBES: Memo<Lobe> = Memo::new(KEEP_LOBES);
 /// Distance Fades (issue #331), one per light's air: they don't depend on the light's place, so a drag of the light reuses them.
 static FADES: Memo<Lobe> = Memo::new(KEEP_LOBES);
+/// The underwater colour planes (issue #333): one per set of the water's numbers on a field (six planes of 4 bytes a pixel: about 41 MB on a 1600 × 1067 one, two sets kept).
+static WATER: Memo<WaterPlanes> = Memo::new(2);
 
 /// Let go of every kept lobe and shading (the engine drops a photo's field: what was made from it goes too; they are
 /// made again by the next render). They are keyed by the field, so one photo's go with another's.
@@ -156,6 +174,7 @@ pub fn forget() {
     BEAMS.clear();
     BEAM_LOBES.clear();
     FADES.clear();
+    WATER.clear();
 }
 
 // (the settings and the light's numbers keep to the same cap)
@@ -170,6 +189,11 @@ pub struct Scene {
     pub effects: Vec<Effects>,
     /// Darken Surroundings, 0..1.
     pub darken: f64,
+    /// The underwater look's colour (issue #333); off by default.
+    pub water: Water,
+    /// Lights that only show their beam (the water's shafts, issue #333): each with its effects. They add no light to the
+    /// surfaces and take no place among `lights`.
+    pub beams: Vec<(Light, Effects)>,
 }
 
 impl Scene {
@@ -192,7 +216,7 @@ pub fn scene_of(s: &DevelopSettings) -> Option<Scene> {
         return None;
     }
     let on = || r.lights.iter().take(MAX_LIGHTS).filter(|l| l.amount > 0.0);
-    let lights = on()
+    let mut lights: Vec<Light> = on()
         .map(|l| Light {
             x: l.x,
             y: l.y,
@@ -204,9 +228,47 @@ pub fn scene_of(s: &DevelopSettings) -> Option<Scene> {
             kind: kind_of(&l.kind),
         })
         .collect();
-    let effects = on().map(|l| effects_of(&l.effects)).collect();
-    Some(Scene { lights, effects, darken: r.darken / 100.0 })
+    let mut effects: Vec<Effects> = on().map(|l| effects_of(&l.effects)).collect();
+    let (water, beams) = underwater(&r.water, &mut lights, &mut effects);
+    Some(Scene { lights, effects, darken: r.darken / 100.0, water, beams })
 }
+
+/// The underwater look (issue #333) as the scene takes it: the water's colour, the sun of the caustics added to `lights`
+/// and `effects`, and the sun of the shafts. Both suns shine from above and behind the scene, towards the camera
+/// (the shafts fan from above the frame), in the water's own colour; they are the same sun, so the shafts are what the
+/// net's lines are in the air.
+fn underwater(w: &lightcraft_develop::relight::WaterSettings, lights: &mut Vec<Light>, effects: &mut Vec<Effects>) -> (Water, Vec<(Light, Effects)>) {
+    let water = Water { amount: w.amount / 100.0, clarity: w.clarity / 100.0, tint: w.tint / 100.0 };
+    // (the sun's light takes the water's colour: blue ocean 215°, blue-green 190°, green lake 140°, at a gentle strength)
+    let hue = if w.tint < 0.0 { 190.0 + 25.0 * (-w.tint / 100.0) } else { 190.0 - 50.0 * (w.tint / 100.0) };
+    let sun = |amount: f64| Light {
+        x: 0.5,
+        y: 0.5,
+        depth: 0.3,
+        amount,
+        softness: 0.5,
+        warmth: 0.0,
+        wrap: 0.0,
+        kind: LightKind::Sun(Sun { azimuth: SUN.0, elevation: SUN.1 }),
+    };
+    let sky = Effects { gel_hue: hue, gel_strength: 0.25, pattern: Pattern::Caustics, ..Effects::default() };
+    let mut beams = Vec::new();
+    if w.caustics > 0.0 {
+        lights.push(sun(CAUSTICS_AMOUNT * w.caustics / 100.0));
+        effects.push(sky);
+    }
+    if w.shafts > 0.0 {
+        let s = w.shafts / 100.0;
+        beams.push((sun(0.3 + 0.6 * s), Effects { haze: 0.2 + 0.55 * s, scatter: 0.8, dust: 0.2, ..sky }));
+    }
+    (water, beams)
+}
+
+/// The water's sun: from behind the scene (azimuth 180°, so the camera looks towards it and the shafts fan from above the
+/// frame) and this high (degrees).
+const SUN: (f64, f64) = (180.0, 62.0);
+/// The caustics' light at Caustics 100 (the light's Amount, 0..1).
+const CAUSTICS_AMOUNT: f64 = 0.5;
 
 /// A light's effects (gel, pattern, haze) as the light takes them.
 fn effects_of(e: &lightcraft_develop::relight_effects::LightEffects) -> Effects {
@@ -256,7 +318,27 @@ pub fn lit(info: &SourceInfo, s: &DevelopSettings, draft: bool) -> Option<Lit> {
     let input = info.relight.as_ref()?;
     let scene = scene_of(s)?;
     let (_, shading) = shading_for(input, &scene, s.light.exposure, draft);
-    Some(Lit { shading, beams: beams_of(input, &scene, draft), fades: fades_of(input, &scene, s.light.exposure), field: input.field.clone() })
+    let water = water_for(input, &scene.water, s.light.exposure);
+    Some(Lit { shading, beams: beams_of(input, &scene, draft), fades: fades_of(input, &scene, s.light.exposure), field: input.field.clone(), water })
+}
+
+/// The water's colour planes on `input`'s field for a photo at exposure `ev`; made once and kept (`None`: no water).
+fn water_for(input: &Input, water: &Water, ev: f64) -> Option<Arc<WaterPlanes>> {
+    if !water.is_on() {
+        return None;
+    }
+    let key =
+        hashed(|h| std::hash::Hash::hash(&(6u8, input.key, ev.to_bits(), water.amount.to_bits(), water.clarity.to_bits(), water.tint.to_bits()), h));
+    if let Some(p) = WATER.get(key) {
+        return Some(p);
+    }
+    let t = crate::profiling().then(std::time::Instant::now);
+    let planes = Arc::new(input.field.water_planes(water, ev as f32)?);
+    if let Some(t) = t {
+        eprintln!("    relight water ({} × {}): {:.1} ms", input.field.width, input.field.height, t.elapsed().as_secs_f64() * 1e3);
+    }
+    WATER.put(key, planes.clone());
+    Some(planes)
 }
 
 fn hashed(parts: impl FnOnce(&mut std::collections::hash_map::DefaultHasher)) -> u64 {
@@ -522,10 +604,25 @@ pub fn beams_of(input: &Input, scene: &Scene, draft: bool) -> Vec<Beamed> {
         let k = rig.gain() * crate::tone::GREY / lum;
         let colour = c.map(|v| if (v * k).is_finite() { (v * k).max(0.0) } else { 0.0 });
         if let Some(plane) = beam_for(input, l, e, &rig, draft) {
-            out.push(Beamed { plane, colour, slot: i as u32 });
+            out.push(Beamed { plane, colour, slot: i as u32, shafts: false });
         }
         if let Some(plane) = source_for(input, l, e, &rig) {
-            out.push(Beamed { plane, colour, slot: (MAX_LIGHTS + i) as u32 });
+            out.push(Beamed { plane, colour, slot: (MAX_LIGHTS + i) as u32, shafts: false });
+        }
+    }
+    // (issue #333: the water's shafts, a light that only shows its beam; no limit: the water has one)
+    for (l, e) in &scene.beams {
+        if !has_beam(l, e) {
+            continue;
+        }
+        let rig = input.field.rig(l, 0.0, 0.0);
+        let (t, s) = e.light_colour(l.warmth);
+        let c = [1.0 + 0.3 * t, 1.0 - 0.22 * s, (1.0 - 0.3 * t).max(0.0)];
+        let lum = (0.2627 * c[0] + 0.678 * c[1] + 0.0593 * c[2]).max(1e-6);
+        let k = rig.gain() * crate::tone::GREY / lum;
+        let colour = c.map(|v| if (v * k).is_finite() { (v * k).max(0.0) } else { 0.0 });
+        if let Some(plane) = beam_for(input, l, e, &rig, draft) {
+            out.push(Beamed { plane, colour, slot: 0, shafts: true });
         }
     }
     out
@@ -616,7 +713,7 @@ pub fn shading_for(input: &Input, scene: &Scene, ev: f64, draft: bool) -> (u64, 
         return (key, sh);
     }
     let t = crate::profiling().then(std::time::Instant::now);
-    let rigs: Vec<Rig> = scene.lights.iter().take(MAX_LIGHTS).map(|l| input.field.rig(l, scene.darken, ev)).collect();
+    let rigs: Vec<Rig> = scene.lights.iter().take(MAX_SCENE).map(|l| input.field.rig(l, scene.darken, ev)).collect();
     let none = Effects::default();
     let effects = |i: usize| scene.effects.get(i).unwrap_or(&none);
     let lobes: Vec<Arc<Lobes>> = scene.lights.iter().zip(&rigs).enumerate().map(|(i, (l, r))| lobe_for(input, l, effects(i), r, ev, draft)).collect();
@@ -699,7 +796,8 @@ pub fn masks(plan: &Plan<'_>) -> Vec<Evaluated> {
         plane.iter_mut().for_each(|v| *v = (*v / top).clamp(0.0, 1.0));
         let alpha = plane;
         let added = b.colour.map(|c| f64::from(c * top));
-        out.push(evaluated(BEAM_IDS - b.slot, w, h, alpha, LocalAdjustments { fork_added: added, ..LocalAdjustments::default() }));
+        let id = if b.shafts { SHAFT_ID } else { BEAM_IDS - b.slot };
+        out.push(evaluated(id, w, h, alpha, LocalAdjustments { fork_added: added, ..LocalAdjustments::default() }));
     }
     // (issue #331: the photo's Distance Fade: the photo's light dimmed by the air in front of it, an exposure, and the air's own
     // glow in its colour, light added on top; so a pixel becomes `c · T + air · (1 − T)`, the beams on top of that)
@@ -720,8 +818,58 @@ pub fn masks(plan: &Plan<'_>) -> Vec<Evaluated> {
         let added = f.colour.map(|c| f64::from(c * glow_top));
         out.push(evaluated(id - 1, w, h, glow, LocalAdjustments { fork_added: added, ..LocalAdjustments::default() }));
     }
+    // (issue #333: the water's colour by distance)
+    if let Some(water) = &lit.water {
+        out.extend(water_masks(&lit.field, water, w, h, &|x, y| {
+            let q = map.apply(Point::new(x, y));
+            (q.x, q.y)
+        }));
+    }
     if let Some(t) = t {
         eprintln!("    relight planes ({w} × {h}): {:.1} ms", t.elapsed().as_secs_f64() * 1e3);
+    }
+    out
+}
+
+/// A plane's values over the render's pixels as the planes of the finish stage's terms: the strongest value `top` (of the sign
+/// asked for) is the term, the plane is each pixel's share of it. `None` while the plane holds no such value.
+fn share(values: &[f32], sign: f32) -> Option<(Vec<f32>, f64)> {
+    let top = values.iter().map(|v| v * sign).filter(|v| v.is_finite()).fold(0f32, f32::max);
+    if top <= 1e-6 {
+        return None;
+    }
+    Some((values.iter().map(|v| (v * sign / top).clamp(0.0, 1.0)).collect(), f64::from(top)))
+}
+
+/// The water's planes (issue #333) as masks: the exposure and the temperature and tint (the finish stage's own, which together
+/// are one gain per colour), and the veil of the water's light, added on top per colour. See [`lightcraft_relight::water`].
+fn water_masks(field: &Field, p: &WaterPlanes, w: usize, h: usize, to_photo: &(dyn Fn(f64, f64) -> (f64, f64) + Sync)) -> Vec<Evaluated> {
+    let at = |l: &Lobe| field.plane_at(l, w, h, to_photo);
+    let mut out = Vec::new();
+    let mut id = WATER_IDS;
+    let mut push = |plane: Option<(Vec<f32>, f64)>, adjust: &dyn Fn(f64) -> LocalAdjustments| {
+        id -= 1;
+        if let Some((alpha, top)) = plane {
+            out.push(evaluated(id, w, h, alpha, adjust(top)));
+        }
+    };
+    // (a gain below one: the exposure is a stop count under zero)
+    push(share(&at(&p.stops), -1.0), &|top| LocalAdjustments { exposure: -top, ..LocalAdjustments::default() });
+    // (red against blue: the finish stage's temperature, negative towards blue; green against the two: its tint, negative towards green)
+    let temp = at(&p.temp);
+    push(share(&temp, -1.0), &|top| LocalAdjustments { temp: -100.0 * top, ..LocalAdjustments::default() });
+    push(share(&temp, 1.0), &|top| LocalAdjustments { temp: 100.0 * top, ..LocalAdjustments::default() });
+    let tint = at(&p.tint);
+    push(share(&tint, -1.0), &|top| LocalAdjustments { tint: -100.0 * top, ..LocalAdjustments::default() });
+    push(share(&tint, 1.0), &|top| LocalAdjustments { tint: 100.0 * top, ..LocalAdjustments::default() });
+    // (the water's light, one plane per colour: far things take its colour by how far each colour has been absorbed)
+    for c in 0..3 {
+        let veil = at(&p.veil[c]);
+        push(share(&veil, 1.0), &|top| {
+            let mut added = [0.0; 3];
+            added[c] = top;
+            LocalAdjustments { fork_added: added, ..LocalAdjustments::default() }
+        });
     }
     out
 }

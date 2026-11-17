@@ -849,6 +849,15 @@ fn recolor_pixel(
     lab.map_or(d, lightcraft_color::perceptual::oklab_to_2020)
 }
 
+/// The local temperature and tint (`l_temp`, `l_tint`: the masks' terms) on scene-linear `color`, luminance kept. The GPU kernel
+/// (`finish.wgsl`) carries the same constants; Relight's water colour is built from it (fork, issue #333).
+pub(crate) fn local_temp_tint(color: [f32; 3], l_temp: f32, l_tint: f32) -> [f32; 3] {
+    let luminance_before = luminance_2020(color);
+    let tilted = [color[0] * (1.0 + 0.3 * l_temp), color[1] * (1.0 - 0.22 * l_tint), color[2] * (1.0 - 0.3 * l_temp).max(0.0)];
+    let luminance_after = luminance_2020(tilted).max(1e-9);
+    tilted.map(|value| value * luminance_before / luminance_after)
+}
+
 pub(crate) fn adjust_scene_pixel(p: &Prepared, fp: &FinishParams, index: usize, raw: [f32; 3], local: &PixelLocalTerms) -> ([f32; 3], f32) {
     let [l_exp, l_temp, l_tint, _, _, _, _, _, _, _, l_dehaze, _, _, _, l_noise, l_moire, l_defringe, add_r, add_g, add_b] = local.values;
     let mut color = if fp.gain == 1.0 { raw } else { raw.map(|value| value * fp.gain) };
@@ -895,10 +904,7 @@ pub(crate) fn adjust_scene_pixel(p: &Prepared, fp: &FinishParams, index: usize, 
         color = color.map(|value| value * gain);
     }
     if l_temp != 0.0 || l_tint != 0.0 {
-        let luminance_before = luminance_2020(color);
-        color = [color[0] * (1.0 + 0.3 * l_temp), color[1] * (1.0 - 0.22 * l_tint), color[2] * (1.0 - 0.3 * l_temp).max(0.0)];
-        let luminance_after = luminance_2020(color).max(1e-9);
-        color = color.map(|value| value * luminance_before / luminance_after);
+        color = local_temp_tint(color, l_temp, l_tint);
     }
     // (fork, issue #317: Relight's beams, light added on top in the light's own colour, after the light's gain and colour)
     let added = add_r != 0.0 || add_g != 0.0 || add_b != 0.0;

@@ -14,6 +14,7 @@ pub mod relight;
 pub mod relight_effects;
 pub mod relight_kinds;
 pub mod relight_presets;
+pub mod relight_water;
 pub mod residual_look;
 pub mod retouch;
 pub mod segmask;

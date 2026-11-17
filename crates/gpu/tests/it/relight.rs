@@ -169,3 +169,21 @@ fn relight_types_match_cpu() {
         close(&src, &info, &s, &req, name);
     }
 }
+
+/// The underwater look (issue #333): its colour planes, caustics and shafts go up with the other planes and the GPU equals the
+/// CPU, with no light of the photo's own.
+#[test]
+fn relight_water_matches_cpu() {
+    if !gpu() {
+        return;
+    }
+    let (src, info) = source();
+    let req = RenderRequest::fit(720, 720);
+    let mut water = DevelopSettings::default();
+    for (id, v) in [("relight.water", 70.0), ("relight.waterTint", 40.0), ("relight.waterShafts", 50.0), ("relight.waterCaustics", 60.0)] {
+        assert!(lightcraft_develop::relight::set(&mut water, id, v));
+    }
+    let off = render(&src, &SourceInfo { relight: None, ..info.clone() }, &water, &req).image;
+    assert_ne!(render(&src, &info, &water, &req).image.data, off.data, "the water changed nothing");
+    close(&src, &info, &water, &req, "underwater");
+}

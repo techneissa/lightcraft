@@ -35,6 +35,9 @@ pub enum Pattern {
     Leaves,
     /// Dapple: small spots of light in shade.
     Dapple,
+    /// Light through moving water (issue #333): a net of bright lines on what faces up, shafts in the air. Made by the
+    /// water's own sun, never a control's choice ([`Pattern::from_index`] does not give it).
+    Caustics,
 }
 
 impl Pattern {
@@ -176,7 +179,7 @@ impl Effects {
         let (dt, ds) = match self.pattern {
             Pattern::Leaves | Pattern::Dapple => LEAF_TINT,
             Pattern::Blinds | Pattern::Panes => SKY_TINT,
-            Pattern::None => (0.0, 0.0),
+            Pattern::None | Pattern::Caustics => (0.0, 0.0),
         };
         (tilt + dt, tint + ds)
     }
@@ -236,6 +239,9 @@ impl Field {
             return None;
         }
         let (w, h) = (self.width, self.height);
+        if e.pattern == Pattern::Caustics {
+            return self.caustic_planes(rig, e, coarse);
+        }
         let projector = Projector::new(self, rig, e);
         let open = unit(e.open, 0.5);
         // (baked here, before the pixels run in parallel: see `pattern::passed`)
@@ -250,6 +256,24 @@ impl Field {
         Some(PatternPlanes { light, through })
     }
 
+    /// A field pixel's size per unit of depth.
+    pub(crate) fn pixel(&self) -> f32 {
+        crate::field::LENS / self.width.max(self.height).max(1) as f32
+    }
+
+    /// The water's net over the field (issue #333, [`crate::caustics`]) for the sun `rig`: how much of the sun's light each
+    /// pixel gets, 0.5 on average, up to 4 on a line (more than 1: a net gathers light into lines). `None` for a light that is not a sun.
+    fn caustic_planes(&self, rig: &Rig, e: &Effects, coarse: bool) -> Option<PatternPlanes> {
+        let (w, h) = (self.width, self.height);
+        let surface = crate::caustics::Surface::new(rig, e, self.pixel())?;
+        let (light, _) = over_field(w, h, coarse, |x, y| {
+            let (lz, _, _) = self.at_px(y * w + x);
+            let p = self.point((x as f32 + 0.5) / w as f32, (y as f32 + 0.5) / h as f32, lz);
+            (surface.at(p), 0.0)
+        });
+        Some(PatternPlanes { light, through: Vec::new() })
+    }
+
     /// `lobe` seen through the pattern of effects `e` (see [`Field::pattern_planes`]): the light that passes straight
     /// through, and the light the pattern's material passes (`None` without a pattern), which takes
     /// [`Effects::through_colour`].
@@ -258,9 +282,10 @@ impl Field {
             return (lobe, None);
         }
         let Some(planes) = self.pattern_planes(rig, e, coarse) else { return (lobe, None) };
-        let through = Lobe { m: lobe.m.iter().zip(&planes.through).map(|(m, t)| m * t).collect() };
+        // (no material of its own passes any: water's light is the net alone)
+        let through = (!planes.through.is_empty()).then(|| Lobe { m: lobe.m.iter().zip(&planes.through).map(|(m, t)| m * t).collect() });
         let light = Lobe { m: lobe.m.iter().zip(&planes.light).map(|(m, t)| m * t).collect() };
-        (light, Some(through))
+        (light, through)
     }
 
     /// The pattern of effects `e` in the air (issue #317) for light `rig` shining from `from` (`rig` itself, or a patterned
@@ -270,6 +295,7 @@ impl Field {
             return None;
         }
         let projector = Projector::new(self, rig, e);
+        let water = (e.pattern == Pattern::Caustics).then(|| crate::caustics::Surface::new(from, e, self.pixel())).flatten();
         let ray = match from.shape {
             // (a spot throws the pattern from its own place: the projector reads the air as it is)
             Shape::Spot { .. } => Ray::Own,
@@ -277,7 +303,7 @@ impl Field {
             _ => Ray::From(from.position()),
         };
         let leaves = (e.pattern == Pattern::Leaves).then(crate::leaves::Leaves::get);
-        Some(AirPattern { plane: projector.plane_depth(), projector, ray, pattern: e.pattern, open: unit(e.open, 0.5), leaves })
+        Some(AirPattern { plane: projector.plane_depth(), projector, ray, pattern: e.pattern, open: unit(e.open, 0.5), leaves, water })
     }
 }
 
@@ -302,12 +328,17 @@ pub(crate) struct AirPattern {
     pattern: Pattern,
     open: f32,
     leaves: Option<std::sync::Arc<crate::leaves::Leaves>>,
+    /// The water's surface, for Caustics: the point is carried up the sun's ray to it, not along `ray` to the pattern's plane.
+    water: Option<crate::caustics::Surface>,
 }
 
 impl AirPattern {
     /// The share of the light the pattern passes to camera-space point `q` of the air (0 .. 1), straight through and through
     /// its material alike (the beam has one colour), at its widest edges (the haze spreads a shaft's edge).
     pub(crate) fn at(&self, q: [f32; 3]) -> f32 {
+        if let Some(water) = &self.water {
+            return water.column(q);
+        }
         let along = |o: [f32; 3], d: [f32; 3]| -> Option<[f32; 3]> {
             let t = (self.plane - o[2]) / d[2];
             (d[2].abs() > 1e-4 && t.is_finite()).then(|| [o[0] + d[0] * t, o[1] + d[1] * t, self.plane])

@@ -184,7 +184,8 @@ pub(crate) fn passed(pattern: Pattern, s: &Sample, op: &Opening, open: f32, leav
     // (slow changes of brightness over several cells: no two cells alike)
     let slow = |k: f32| 1.0 - k * (0.5 + 0.5 * noise(0.11 * u, 0.11 * v, 17));
     let (light, through) = match pattern {
-        Pattern::None => (1.0, 0.0),
+        // (the water's net is drawn from the scene's points, `crate::caustics`, not from a projector's slide)
+        Pattern::None | Pattern::Caustics => (1.0, 0.0),
         Pattern::Blinds => {
             let (hx, top) = match *op {
                 Opening::Rect { hx, hy } => (hx, hy),

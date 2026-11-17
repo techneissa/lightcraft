@@ -738,6 +738,42 @@ fn a_fork_18_log_patch_of_a_spot_light_is_applied_and_the_new_numbers_default() 
     );
 }
 
+/// Fork 22 (#333) added Relight's underwater look: the `water` object of `fork_relight`, left out while it is at its defaults. A
+/// fork 18 library already holds lights and their log patches: they replay as they are and the photo has no water; a patch that
+/// turns the water on replays on a current library.
+#[test]
+fn a_fork_18_log_patch_replays_with_no_water_and_a_water_patch_replays() {
+    let mut c = Catalog::new();
+    let mut d = DevelopSettings::default();
+    d.relight.lights[0].amount = 60.0;
+    let id = photo(&mut c, d.clone(), None);
+    let m = MemStore::new();
+    let (mut j, _, _) = Journal::open(Box::new(m.clone())).unwrap();
+    j.snapshot(&c).unwrap();
+    d.relight.lights[0].amount = 75.0;
+    j.append(&[Op::SetDevelop { id, settings: Arc::new(d.clone()), label: "Relight".into(), edited: None }]).unwrap();
+    drop(j);
+    let snap = String::from_utf8(m.get(SNAPSHOT).unwrap()).unwrap();
+    let now = format!("\"version\":{}", crate::fork_format::VERSION);
+    assert!(snap.contains(&now), "{}", &snap[..snap.len().min(120)]);
+    m.set(SNAPSHOT, snap.replacen(&now, "\"version\":18", 1).into_bytes());
+    let (mut j, loaded, r) = Journal::open(Box::new(m.clone())).unwrap();
+    assert_eq!((r.replayed, r.failed), (1, 0), "{r:?}");
+    assert_eq!(r.upgraded_from, Some(18));
+    let w = loaded.photo(id).unwrap().develop.relight.clone();
+    assert_eq!((w.lights[0].amount, w.water.is_on()), (75.0, false));
+    // the water turned on is one more patch of the block, and replays
+    d.relight.water.amount = 70.0;
+    d.relight.water.shafts = 40.0;
+    j.append(&[Op::SetDevelop { id, settings: Arc::new(d), label: "Relight".into(), edited: None }]).unwrap();
+    drop(j);
+    let (_, loaded, r) = Journal::open(Box::new(m.clone())).unwrap();
+    assert_eq!((r.replayed, r.failed), (1, 0), "{r:?}");
+    let w = loaded.photo(id).unwrap().develop.relight.water;
+    assert_eq!((w.amount, w.shafts, w.clarity), (70.0, 40.0, 50.0));
+    assert!(!m.files.lock().unwrap().keys().any(|k| k.contains("damaged")));
+}
+
 /// A store whose snapshot file can't be written while `full` is set (the log's small lines still fit).
 #[derive(Clone, Default)]
 struct FullForSnapshots {

@@ -221,13 +221,17 @@ impl LightPreset {
     pub fn onto(&self, d: &DevelopSettings, subject: &Subject) -> DevelopSettings {
         let mut out = d.clone();
         out.relight = self.placed(subject);
+        // (a preset is lights: the photo's water stays as it is)
+        out.relight.water = d.relight.water;
         out.disabled_sections.retain(|s| s != crate::relight::SECTION);
         out
     }
 
     /// A preset of the lights `r` has round `subject`.
     pub fn capture(id: &str, name: &str, r: &Relight, subject: &Subject) -> LightPreset {
-        LightPreset { id: id.into(), name: name.into(), lights: subject.capture(r), builtin: false }
+        let mut lights = subject.capture(r);
+        lights.water = crate::relight_water::WaterSettings::default();
+        LightPreset { id: id.into(), name: name.into(), lights, builtin: false }
     }
 }
 
@@ -276,7 +280,12 @@ fn fill(amount: f64, warmth: f64, near: f64) -> LightSettings {
 /// A built-in preset as written: not clamped here, so a test can tell a number out of its control's range from one that is
 /// not ([`built_in`] clamps them when it makes the list).
 fn preset(id: &str, name: &str, darken: f64, lights: Vec<LightSettings>) -> LightPreset {
-    LightPreset { id: id.into(), name: name.into(), lights: Relight { lights, darken }, builtin: true }
+    LightPreset {
+        id: id.into(),
+        name: name.into(),
+        lights: Relight { lights, darken, water: crate::relight_water::WaterSettings::default() },
+        builtin: true,
+    }
 }
 
 /// A spot aimed at the face (a little below its centre), `angle` degrees wide with edge `edge`.
