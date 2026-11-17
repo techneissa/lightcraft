@@ -14,6 +14,7 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod effects;
 pub mod field;
 pub mod filter;
 pub mod kinds;
@@ -22,6 +23,7 @@ pub mod overlay;
 #[cfg(test)]
 mod tests_kinds;
 
+pub use effects::{Effects, HAZE_GAIN, Pattern};
 pub use field::{DepthMap, Field, Kind};
 pub use kinds::{Fill, LightKind, Rim, Softbox, Spot, Sun};
 pub use light::{Light, Lobe, MAX_LIGHTS, Part, Planes, Rig, Shade, Shading, Split, ambient, warmth_tilt};

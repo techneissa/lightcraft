@@ -1,8 +1,9 @@
 //! `relight.*` (fork, issue #288, `fork/relight.md`): where a photo's Relight field stands, finding it again, and the
 //! depth model's download; and (issue #299) adding, duplicating, deleting and selecting lights. A photo holds up to
 //! eight lights. Each light's numbers are develop controls, `relight.<n>.amount`, `.softness`, `.warmth`, `.x`, `.y`,
-//! `.depth` and `.wrap` (`n` from 0) and, for a light's type (issue #300), `.kind` (0 point, 1 spot, 2 sun / window, 3 softbox,
-//! 4 rim, 5 fill) and the numbers of each type (`.spotAimX` …; `lightcraft_develop::relight_kinds`), and `relight.darken` is the photo's; `relight.amount` and the other shorthands act
+//! `.depth`, `.wrap`, (issue #302) `.gelHue`, `.gelStrength`, `.pattern`, `.patternScale`, `.patternRotation`,
+//! `.patternSoftness` and `.haze` and (issue #300) `.kind` (0 point, 1 spot, 2 sun / window, 3 softbox, 4 rim, 5 fill) and the
+//! numbers of each type (`.spotAimX` …; `lightcraft_develop::relight_kinds`) (`n` from 0), and `relight.darken` is the photo's; `relight.amount` and the other shorthands act
 //! on the selected light (see [`Session::relight_selected`]). They are set like every slider (`develop.set`,
 //! `develop.merge`), so undo, presets, copy settings and sync reach them.
 
@@ -11,6 +12,7 @@ use serde_json::{Value, json};
 use lightcraft_catalog::PhotoId;
 use lightcraft_develop::DevelopSettings;
 use lightcraft_develop::relight::{KindSettings, LightSettings, MAX_LIGHTS};
+use lightcraft_develop::relight_effects::{GELS, LightEffects};
 
 use super::{CommandSpec, always, bad, cmd, has_active, index_req, photo_id};
 use crate::{Result, Session};
@@ -23,7 +25,20 @@ fn status(s: &mut Session, p: &Value) -> Result<Value> {
     let id = photo_id(p, c)?.or_else(|| s.active()).ok_or_else(|| bad(c, "no photo"))?;
     s.catalog.photo(id).ok_or_else(|| bad(c, format!("no photo {}", id.0)))?;
     let d = s.develop_of(id).unwrap_or_default();
-    let mut v = json!({"id": id.0, "on": lightcraft_pipeline::relight::scene_of(&d).is_some(), "lights": d.relight.lights, "darken": d.relight.darken,
+    // (each light with every effect number, also the ones the saved form leaves out at their default)
+    let lights: Vec<Value> = d
+        .relight
+        .lights
+        .iter()
+        .map(|l| {
+            let mut v = serde_json::to_value(l).unwrap_or(Value::Null);
+            if let (Some(o), Value::Object(e)) = (v.as_object_mut(), l.effects.to_full_json()) {
+                o.extend(e);
+            }
+            v
+        })
+        .collect();
+    let mut v = json!({"id": id.0, "on": lightcraft_pipeline::relight::scene_of(&d).is_some(), "lights": lights, "darken": d.relight.darken,
         "selected": s.relight_selected(id)});
     if let (Some(o), Value::Object(st)) = (v.as_object_mut(), s.relight_status(id)) {
         o.extend(st);
@@ -115,8 +130,8 @@ fn add(s: &mut Session, p: &Value) -> Result<Value> {
         let (x, y) = free_spot(&d.relight.lights);
         let at = |k: &str, v: f64| p.get(k).and_then(Value::as_f64).unwrap_or(v);
         let mut l = LightSettings { amount: at("amount", 50.0), x: at("x", x), y: at("y", y), ..LightSettings::default() };
-        if let Some(k) = p.get("kind") {
-            l.kind.which = KindSettings::read(&json!({"kind": k})).which;
+        if let Some(k) = p.get("kind").filter(|k| !k.is_null()) {
+            l.kind.which = KindSettings::kind_of(k).ok_or_else(|| bad(c, format!("no light type {k}: point, spot, sun, softbox, rim or fill (or 0..5)")))?;
         }
         l.sanitize();
         d.relight.lights.push(l);
@@ -155,10 +170,45 @@ fn delete(s: &mut Session, p: &Value) -> Result<Value> {
     })
 }
 
+/// `relight.setGel`: a named gel, or any hue and strength, on a light (one undo step).
+fn set_gel(s: &mut Session, p: &Value) -> Result<Value> {
+    let c = "relight.setGel";
+    let named = p.get("gel").filter(|v| !v.is_null());
+    let num = |k: &str| p.get(k).filter(|v| !v.is_null()).map(|v| v.as_f64().ok_or_else(|| bad(c, format!("{k} is a number")))).transpose();
+    let (hue, strength) = (num("hue")?, num("strength")?);
+    if named.is_some() && hue.is_some() {
+        return Err(bad(c, "give a gel name or a hue, not both (a name sets the hue; `strength` may go with either)"));
+    }
+    // a named gel gives both numbers (`strength` overrides its own); without one a missing number is the light's own
+    let preset = match named {
+        Some(Value::String(name)) => Some(LightEffects::gel(name).ok_or_else(|| {
+            let names: Vec<&str> = GELS.iter().map(|g| g.0).collect();
+            bad(c, format!("no gel named {name:?}: the named gels are {}", names.join(", ")))
+        })?),
+        Some(_) => return Err(bad(c, "gel is a name")),
+        None if hue.is_none() && strength.is_none() => {
+            return Err(bad(c, "give a gel name, or a hue and/or a strength (strength 0 takes the gel off)"));
+        }
+        None => None,
+    };
+    change(s, c, "Set Gel", |d, sel| {
+        let i = light_param(p, c, d, sel)?;
+        let e = &mut d.relight.lights[i].effects;
+        let (h, k) = preset.map_or((hue.unwrap_or(e.gel_hue), strength.unwrap_or(e.gel_strength)), |(h, k)| (h, strength.unwrap_or(k)));
+        (e.gel_hue, e.gel_strength) = (h, k);
+        d.relight.lights[i].sanitize();
+        // (the selection stays where it was)
+        Ok(sel)
+    })
+}
+
 fn select(s: &mut Session, p: &Value) -> Result<Value> {
     let c = "relight.selectLight";
     let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
     let d = s.develop_of(id).ok_or_else(|| bad(c, "no photo"))?;
+    if p.get("index").is_none_or(Value::is_null) {
+        return Err(bad(c, "missing `index`"));
+    }
     let i = light_param(p, c, &d, 0)?;
     s.relight_select(id, i);
     Ok(json!({"index": i, "count": d.relight.lights.len()}))
@@ -171,7 +221,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Relight Status",
             [],
             None,
-            "{id?} → {id, on, lights: [{amount, softness, warmth, x, y, depth, wrap}], darken, selected: index of the selected light, ready, finding, cancelled, source?: file|model, error?, model: {installed, bytes, downloading, done, total, error?, available}} — whether the photo's depth is found (from its own depth map, an iPhone Portrait photo's, or the depth model's), being found, or why it can't be. The lights are develop controls (relight.<n>.amount, .softness, .warmth, .x, .y, .depth, .wrap for light n from 0, and relight.darken; relight.amount … act on the selected light): set them with develop.set or develop.merge",
+            "{id?} → {id, on, lights: [{amount, softness, warmth, x, y, depth, wrap, gelHue, gelStrength, pattern, patternScale, patternRotation, patternSoftness, haze}], darken, selected: index of the selected light, ready, finding, cancelled, source?: file|model, error?, model: {installed, bytes, downloading, done, total, error?, available}} — whether the photo's depth is found (from its own depth map, an iPhone Portrait photo's, or the depth model's), being found, or why it can't be. The lights are develop controls (relight.<n>.amount, .softness, .warmth, .x, .y, .depth, .wrap, .gelHue, .gelStrength, .pattern (0 none, 1 blinds, 2 window panes, 3 leaves, 4 dapple), .patternScale, .patternRotation, .patternSoftness and .haze for light n from 0, and relight.darken; relight.amount … act on the selected light): set them with develop.set or develop.merge",
             always,
             status
         ),
@@ -216,16 +266,25 @@ pub fn specs() -> Vec<CommandSpec> {
             "Delete Light",
             [],
             None,
-            "{index?: light (default the selected one)} → {index, count} — remove a light and select the one before it; a photo's only light goes back to its defaults (off) instead; one undo step",
+            "{index?: light (default the selected one)} → {index, count} — remove a light and select the one before it (deleting the first selects the one that follows); a photo's only light goes back to its defaults (off) instead; one undo step",
             has_active,
             delete
+        ),
+        cmd!(
+            "relight.setGel",
+            "Set Gel",
+            [],
+            None,
+            "{gel?: Warm Amber|Teal|Magenta|Deep Blue|Red, hue?: 0..360 degrees, strength?: 0..100, index?: light (default the selected one)} → {index, count} — put a gel on a light: a named one (hue and strength set together; strength overrides its own), or any hue (0 red, 120 green, 240 blue) and/or strength (one alone keeps the light's other); strength 0 takes the gel off. Warmth stays. The gel is also the controls relight.<n>.gelHue and .gelStrength; one undo step",
+            has_active,
+            set_gel
         ),
         cmd!(
             query "relight.selectLight",
             "Select Light",
             [],
             None,
-            "{index: light, from 0} → {index, count} — select a light: relight.amount, .softness, .warmth, .x, .y, .depth and .wrap act on it, and its handle is the one marked on the photo. Not part of the edit: no undo step",
+            "{index: light, from 0; required} → {index, count} — select a light: relight.amount, .softness, .warmth, .x, .y, .depth and .wrap act on it, and its handle is the one marked on the photo. Not part of the edit: no undo step",
             has_active,
             select
         ),
@@ -286,6 +345,18 @@ mod tests {
         assert_eq!((lights(&s, id).len(), s.relight_selected(id)), (1, 0));
         // errors, not panics: no such light, past the cap, the only light
         assert!(s.execute("relight.selectLight", &json!({"index": 5})).is_err());
+        assert!(s.execute("relight.selectLight", &json!({})).is_err(), "no index is an error, not light 0");
+        // a control of a light the photo doesn't have is an error and makes no undo step
+        let before = s.develop_of(id).unwrap();
+        assert!(s.execute("develop.set", &json!({"control": "relight.6.amount", "value": 5})).is_err());
+        assert!(s.execute("develop.adjust", &json!({"control": "relight.6.amount", "delta": 5})).is_err());
+        assert!(std::sync::Arc::ptr_eq(&before, &s.develop_of(id).unwrap()));
+        // Quick Develop's shorthand acts on the selected light
+        s.execute("relight.addLight", &json!({})).unwrap();
+        s.execute("develop.quickAdjust", &json!({"control": "relight.softness", "delta": 10})).unwrap();
+        assert_eq!((lights(&s, id)[0].softness, lights(&s, id)[1].softness), (50.0, 60.0));
+        s.execute("edit.undo", &json!({})).unwrap();
+        s.execute("edit.undo", &json!({})).unwrap();
         assert!(s.execute("relight.deleteLight", &json!({"index": 9})).is_err());
         for _ in 0..7 {
             s.execute("relight.addLight", &json!({})).unwrap();
@@ -302,7 +373,10 @@ mod tests {
     fn a_light_has_a_type_by_name_and_by_control() {
         let (mut s, id) = session();
         s.execute("relight.addLight", &json!({"kind": "spot"})).unwrap();
-        s.execute("relight.addLight", &json!({"kind": "teapot"})).unwrap();
+        // a kind that is not one is an error, and adds nothing
+        assert!(s.execute("relight.addLight", &json!({"kind": "teapot"})).is_err());
+        assert!(s.execute("relight.addLight", &json!({"kind": 9})).is_err());
+        s.execute("relight.addLight", &json!({})).unwrap();
         let names: Vec<_> = lights(&s, id).iter().map(|l| l.kind.name()).collect();
         assert_eq!(names, ["point", "spot", "point"]);
         s.execute("develop.set", &json!({"values": {"relight.1.spotAngle": 20, "relight.2.kind": 3, "relight.2.boxWidth": 0.5}})).unwrap();
@@ -314,5 +388,41 @@ mod tests {
         assert_eq!((l[1].kind.spot_angle, l[2].kind.name(), l[2].kind.box_width), (20.0, "softbox", 0.5));
         let status = s.execute("relight.status", &json!({})).unwrap();
         assert_eq!(status["lights"][1]["kind"], json!("spot"));
+    }
+
+    #[test]
+    fn a_gel_is_set_by_name_or_by_hue_and_one_undo_step_each_and_the_controls_reach_the_effects() {
+        let (mut s, id) = session();
+        s.execute("relight.addLight", &json!({})).unwrap();
+        let effects = |s: &Session, i: usize| lights(s, id)[i].effects;
+        // a named gel on the selected light (the new one), its own strength overridden by `strength`
+        s.execute("relight.setGel", &json!({"gel": "teal"})).unwrap();
+        assert_eq!((effects(&s, 1).gel_hue, effects(&s, 1).gel_strength, effects(&s, 0).gel_strength), (178.0, 65.0, 0.0));
+        s.execute("relight.setGel", &json!({"gel": "Deep Blue", "strength": 40, "index": 0})).unwrap();
+        assert_eq!((effects(&s, 0).gel_hue, effects(&s, 0).gel_strength), (232.0, 40.0));
+        // any hue, and strength 0 takes it off; each is one undo step
+        s.execute("relight.setGel", &json!({"hue": 90, "strength": 55})).unwrap();
+        assert_eq!((effects(&s, 1).gel_hue, effects(&s, 1).gel_strength), (90.0, 55.0));
+        s.execute("relight.setGel", &json!({"hue": 90, "strength": 0})).unwrap();
+        assert_eq!(effects(&s, 1).gel_strength, 0.0);
+        s.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(effects(&s, 1).gel_strength, 55.0);
+        // a hue alone keeps the strength, a strength alone keeps the hue
+        s.execute("relight.setGel", &json!({"hue": 300})).unwrap();
+        assert_eq!((effects(&s, 1).gel_hue, effects(&s, 1).gel_strength), (300.0, 55.0));
+        s.execute("relight.setGel", &json!({"strength": 20})).unwrap();
+        assert_eq!((effects(&s, 1).gel_hue, effects(&s, 1).gel_strength), (300.0, 20.0));
+        s.execute("relight.setGel", &json!({"hue": 90, "strength": 55})).unwrap();
+        // a name and a hue together: an error
+        assert!(s.execute("relight.setGel", &json!({"gel": "teal", "hue": 20})).is_err());
+        // nothing named, a gel that does not exist, a light that is not there: errors
+        assert!(s.execute("relight.setGel", &json!({})).is_err());
+        assert!(s.execute("relight.setGel", &json!({"gel": "chartreuse"})).is_err());
+        assert!(s.execute("relight.setGel", &json!({"gel": "red", "index": 7})).is_err());
+        // the pattern, scale and haze are controls by id (the shorthand acts on the selected light) and the status shows them all
+        s.execute("develop.set", &json!({"values": {"relight.0.pattern": 3, "relight.0.patternScale": 20, "relight.haze": 40}})).unwrap();
+        assert_eq!((effects(&s, 0).pattern, effects(&s, 0).pattern_scale, effects(&s, 1).haze), (3.0, 20.0, 40.0));
+        let st = s.execute("relight.status", &json!({})).unwrap();
+        assert_eq!((st["lights"][0]["pattern"].as_f64(), st["lights"][1]["patternSoftness"].as_f64()), (Some(3.0), Some(30.0)));
     }
 }

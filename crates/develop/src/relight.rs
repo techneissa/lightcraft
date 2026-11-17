@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::controls::{ControlSpec, Section, Track};
+use crate::relight_effects::LightEffects;
 pub use crate::relight_kinds::KindSettings;
 
 /// The settings' JSON key (a namespace of this fork's own: a build without it ignores it).
@@ -42,11 +43,24 @@ pub struct LightSettings {
     /// What the light is and the numbers of its type (issue #300; a Point, as before, by default).
     #[serde(flatten)]
     pub kind: KindSettings,
+    /// Its gel, pattern and haze (issue #302); written only where one differs from its default.
+    #[serde(flatten)]
+    pub effects: LightEffects,
 }
 
 impl Default for LightSettings {
     fn default() -> Self {
-        Self { amount: 0.0, softness: 50.0, warmth: 0.0, x: 0.35, y: 0.3, depth: 30.0, wrap: 40.0, kind: KindSettings::default() }
+        Self {
+            amount: 0.0,
+            softness: 50.0,
+            warmth: 0.0,
+            x: 0.35,
+            y: 0.3,
+            depth: 30.0,
+            wrap: 40.0,
+            kind: KindSettings::default(),
+            effects: LightEffects::default(),
+        }
     }
 }
 
@@ -79,12 +93,24 @@ struct Stored {
     depth: f64,
     darken: f64,
     wrap: f64,
+    #[serde(flatten)]
+    effects: LightEffects,
 }
 
 impl Default for Stored {
     fn default() -> Self {
         let d = LightSettings::default();
-        Self { amount: d.amount, softness: d.softness, warmth: d.warmth, x: d.x, y: d.y, depth: d.depth, darken: 0.0, wrap: d.wrap }
+        Self {
+            amount: d.amount,
+            softness: d.softness,
+            warmth: d.warmth,
+            x: d.x,
+            y: d.y,
+            depth: d.depth,
+            darken: 0.0,
+            wrap: d.wrap,
+            effects: d.effects,
+        }
     }
 }
 
@@ -100,6 +126,7 @@ impl Stored {
             depth: self.depth,
             wrap: self.wrap,
             kind: KindSettings::read(stored),
+            effects: self.effects,
         };
         l.sanitize();
         l
@@ -163,7 +190,7 @@ impl LightSettings {
             "y" => &mut self.y,
             "depth" => &mut self.depth,
             "wrap" => &mut self.wrap,
-            _ => return self.kind.field(field),
+            _ => return self.effects.field(field).or_else(|| self.kind.field(field)),
         })
     }
 }
@@ -199,6 +226,37 @@ impl Relight {
     }
 }
 
+/// A stored block in its first form (issue #288: one light's numbers and `darken` in one object), for replaying a log
+/// written before several lights: its patches name those flat keys. `None` when the block isn't of the new form.
+pub fn first_form(block: &Value) -> Option<Value> {
+    let o = block.as_object()?;
+    let mut flat = o.get("lights")?.as_array()?.first()?.as_object()?.clone();
+    if let Some(d) = o.get("darken") {
+        flat.insert("darken".into(), d.clone());
+    }
+    Some(Value::Object(flat))
+}
+
+/// A partial block of the first form (no `lights`: an older preset, a pasted setting) as a whole block that merges onto
+/// `current`: the first light takes the numbers it names and Darken Surroundings its own. `None` when `partial` isn't
+/// of the first form.
+pub fn merge_first_form(current: &Relight, partial: &Value) -> Option<Value> {
+    let o = partial.as_object().filter(|o| !o.contains_key("lights"))?;
+    let mut r = current.clone();
+    for (k, v) in o {
+        let Some(n) = v.as_f64() else { continue };
+        match k.as_str() {
+            "darken" => r.darken = n,
+            f => {
+                if let Some(slot) = r.lights.first_mut().and_then(|l| l.field(f)) {
+                    *slot = n;
+                }
+            }
+        }
+    }
+    serde_json::to_value(r).ok()
+}
+
 /// `relight.amount` → `(None, "amount")`, `relight.2.amount` → `(Some(2), "amount")`.
 fn split(id: &str) -> Option<(Option<usize>, &str)> {
     let rest = id.strip_prefix("relight.")?;
@@ -224,6 +282,14 @@ pub static SPECS: &[ControlSpec] = &[
     spec("relight.depth", "Light Depth", (0.0, 100.0, 30.0), (1.0, 0), Track::Plain),
     spec("relight.darken", "Darken Surroundings", (0.0, 100.0, 0.0), (1.0, 0), Track::Plain),
     spec("relight.wrap", "Wrap", (0.0, 100.0, 40.0), (1.0, 0), Track::Plain),
+    // (issue #302: a light's gel, pattern and haze)
+    spec("relight.gelHue", "Gel Hue", (0.0, 360.0, 0.0), (1.0, 0), Track::Rainbow),
+    spec("relight.gelStrength", "Gel Strength", (0.0, 100.0, 0.0), (1.0, 0), Track::Plain),
+    spec("relight.pattern", "Pattern", (0.0, 4.0, 0.0), (1.0, 0), Track::Plain),
+    spec("relight.patternScale", "Pattern Scale", (0.0, 100.0, 50.0), (1.0, 0), Track::Plain),
+    spec("relight.patternRotation", "Pattern Rotation", (-180.0, 180.0, 0.0), (1.0, 0), Track::Centered),
+    spec("relight.patternSoftness", "Pattern Softness", (0.0, 100.0, 30.0), (1.0, 0), Track::Plain),
+    spec("relight.haze", "Haze", (0.0, 100.0, 0.0), (1.0, 0), Track::Plain),
 ];
 
 /// Relight's control specs: the per-light ones (`relight.amount` …, templates of `relight.<n>.amount` …) and
@@ -371,11 +437,69 @@ mod tests {
         assert_eq!((get(&s, "relight.0.warmth"), get(&s, "relight.1.warmth")), (Some(-50.0), Some(0.0)));
         assert_eq!(for_light("relight.amount", 2).as_deref(), Some("relight.2.amount"));
         assert_eq!((for_light("relight.darken", 2), for_light("relight.1.amount", 2)), (None, None));
-        assert_eq!(light_instances(&s).len(), 38);
+        assert_eq!(light_instances(&s).len(), 52);
         assert_eq!(crate::controls::find("relight.1.wrap").map(|c| c.id), Some("relight.wrap"));
         assert!(crate::controls::find("relight.x.wrap").is_none() && crate::controls::find("relight.0.darken").is_none());
         // a section reset puts all the lights back
         s.reset_section(crate::Section::Relight);
         assert!(s.relight.is_default());
+    }
+
+    #[test]
+    fn effects_are_left_out_while_default_read_back_when_set_and_read_leniently() {
+        // a light without them saves exactly as before: not one of the new keys
+        let mut s = DevelopSettings::default();
+        assert!(set(&mut s, "relight.amount", 60.0));
+        let v = s.to_json();
+        let keys: Vec<&String> = v[KEY]["lights"][0].as_object().unwrap().keys().collect();
+        assert!(
+            !keys
+                .iter()
+                .any(|k| ["gelHue", "gelStrength", "pattern", "patternScale", "patternRotation", "patternSoftness", "haze"].contains(&k.as_str())),
+            "{keys:?}"
+        );
+        // set ones are saved by id, only those, and read back
+        for (id, v) in [
+            ("relight.0.gelHue", 200.0),
+            ("relight.gelStrength", 70.0),
+            ("relight.pattern", 3.0),
+            ("relight.patternScale", 20.0),
+            ("relight.haze", 35.0),
+        ] {
+            assert!(set(&mut s, id, v), "{id}");
+        }
+        let v = s.to_json();
+        assert_eq!(v[KEY]["lights"][0]["gelHue"], json!(200.0));
+        assert!(v[KEY]["lights"][0].get("patternSoftness").is_none());
+        let back = DevelopSettings::from_json(&v).unwrap();
+        assert_eq!(back.relight, s.relight);
+        assert_eq!((get(&back, "relight.0.pattern"), get(&back, "relight.patternSoftness")), (Some(3.0), Some(30.0)));
+        // out of range numbers are clamped; wrong-typed ones read the light as a default one; an older block has defaults
+        let r = DevelopSettings::from_json(&json!({"fork_relight": {"lights": [{"amount": 50.0, "gelHue": 9e9, "pattern": 77.0, "haze": -4.0}]}}))
+            .unwrap()
+            .relight;
+        assert_eq!((r.lights[0].effects.gel_hue, r.lights[0].effects.pattern, r.lights[0].effects.haze), (360.0, 4.0, 0.0));
+        let r = DevelopSettings::from_json(&json!({"fork_relight": {"lights": [{"amount": 50.0, "gelHue": "teal"}]}})).unwrap().relight;
+        assert_eq!(r.lights[0], LightSettings::default());
+        assert!(DevelopSettings::from_json(&json!({"fork_relight": {"amount": 50.0}})).unwrap().relight.lights[0].effects == LightEffects::default());
+        assert_eq!(LightEffects::gel("warm amber"), Some((38.0, 70.0)));
+        assert_eq!(LightEffects::gel("nope"), None);
+    }
+
+    #[test]
+    fn a_preset_of_the_first_form_lands_on_the_first_light() {
+        let mut photo = DevelopSettings::default();
+        photo.relight.lights[0] = LightSettings { amount: 40.0, x: 0.6, ..LightSettings::default() };
+        photo.relight.lights.push(LightSettings { amount: 30.0, ..LightSettings::default() });
+        let old = json!({"fork_relight": {"amount": 70.0, "darken": 20.0}});
+        let m = photo.merged(&old).unwrap();
+        assert_eq!((m.relight.lights[0].amount, m.relight.lights[0].x, m.relight.darken), (70.0, 0.6, 20.0));
+        assert_eq!(m.relight.lights[1].amount, 30.0, "the other lights stay");
+        // a block of the new shape merges as it always did
+        let new = json!({"fork_relight": {"lights": [{"amount": 10.0}], "darken": 5.0}});
+        assert_eq!(photo.merged(&new).unwrap().relight.lights.len(), 1);
+        // and the first form is what an older log's patches name
+        let flat = first_form(&serde_json::to_value(&photo.relight).unwrap()).unwrap();
+        assert_eq!((flat["amount"].as_f64(), flat["x"].as_f64(), flat.get("lights")), (Some(40.0), Some(0.6), None));
     }
 }

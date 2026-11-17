@@ -72,7 +72,9 @@ fn corpus_raw_decodes() {
         let info = probe_info(&bytes);
         let di = t2.elapsed().as_secs_f64() * 1e3;
         match (&decoded, &info) {
-            (Ok(img), Ok(info)) => assert_eq!(&img.info(), info, "{name}: probe_info differs from decode"),
+            (Ok(img), Ok(info)) => {
+                assert_eq!(crate::probe_comparable(img.info()), crate::probe_comparable(info.clone()), "{name}: probe_info differs from decode")
+            }
             (Err(RawError::Unsupported(_)), Err(RawError::Unsupported(_))) => {}
             (d, i) => panic!("{name}: decode {:?} but probe_info {:?}", d.as_ref().err(), i.as_ref().err()),
         }

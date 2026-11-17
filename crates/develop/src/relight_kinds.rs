@@ -117,6 +117,15 @@ impl KindSettings {
         self.which = self.which.round();
     }
 
+    /// The type a name (`spot`, any case) or an index (0..5) names; `None` for anything else.
+    pub fn kind_of(v: &Value) -> Option<f64> {
+        match v {
+            Value::String(name) => NAMES.iter().position(|n| n.eq_ignore_ascii_case(name.trim())).map(|i| i as f64),
+            Value::Number(n) => n.as_f64().filter(|i| i.fract() == 0.0 && (0.0..NAMES.len() as f64).contains(i)),
+            _ => None,
+        }
+    }
+
     /// Read from a stored light (an object): `kind` as a name (or an index), the numbers as numbers; anything else is
     /// the default, a kind this build doesn't know is a Point.
     pub fn read(light: &Value) -> Self {

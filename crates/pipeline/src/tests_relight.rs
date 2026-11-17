@@ -227,7 +227,7 @@ fn two_lights_add_up_and_a_warm_and_a_cool_one_each_colour_their_side() {
 }
 
 #[test]
-fn each_light_type_goes_through_the_render_and_a_point_stays_what_it_was() {
+fn each_light_type_goes_through_the_render() {
     let (src, info) = (scene(W, H), info());
     let render_of = |s: &DevelopSettings| render(&src, &info, s, &RenderRequest::fit(W, H)).image;
     let point = render_of(&lit(60.0));
@@ -252,4 +252,85 @@ fn each_light_type_goes_through_the_render_and_a_point_stays_what_it_was() {
         let img = render_of(&s);
         assert!(img.data != off.data && img.data != point.data, "kind {kind}");
     }
+}
+
+/// Light 0 of the wall with the effects `f` set on it (Amount 70, in the middle).
+fn effect(f: impl FnOnce(&mut lightcraft_develop::relight_effects::LightEffects)) -> DevelopSettings {
+    let mut s = wall_with(&[(0.5, 0.0)]);
+    s.relight.lights[0].amount = 70.0;
+    f(&mut s.relight.lights[0].effects);
+    s
+}
+
+#[test]
+fn a_red_gel_reddens_a_grey_wall_and_a_wall_without_one_is_as_it_was() {
+    let (src, info) = wall();
+    let req = RenderRequest::fit(W, H);
+    let plain = render(&src, &info, &effect(|_| {}), &req).image;
+    let red = render(&src, &info, &effect(|e| (e.gel_hue, e.gel_strength) = (0.0, 100.0)), &req).image;
+    let [r, g, b] = mean_rgb(&red, (0.4, 0.4, 0.6, 0.6));
+    assert!(red.data.iter().all(|p| p[3] == 255) && r > 2.0 * g.max(b), "{r} {g} {b}");
+    let [pr, pg, pb] = mean_rgb(&plain, (0.4, 0.4, 0.6, 0.6));
+    assert!((pr - pg).abs() < 2.0 && (pg - pb).abs() < 2.0, "{pr} {pg} {pb}");
+    // a gel at no strength is no gel: the same picture, to the byte
+    let none = render(&src, &info, &effect(|e| (e.gel_hue, e.gel_strength) = (200.0, 0.0)), &req).image;
+    assert!(none.data == plain.data);
+    // teal and magenta go to their sides
+    let teal = mean_rgb(&render(&src, &info, &effect(|e| (e.gel_hue, e.gel_strength) = (178.0, 80.0)), &req).image, (0.4, 0.4, 0.6, 0.6));
+    assert!(teal[0] < teal[1] && teal[0] < teal[2], "{teal:?}");
+    let magenta = mean_rgb(&render(&src, &info, &effect(|e| (e.gel_hue, e.gel_strength) = (305.0, 80.0)), &req).image, (0.4, 0.4, 0.6, 0.6));
+    assert!(magenta[1] < magenta[0] && magenta[1] < magenta[2], "{magenta:?}");
+}
+
+#[test]
+fn a_pattern_stripes_the_wall_and_haze_brightens_around_the_light() {
+    let (photo, field) = (scene(W, H), info());
+    let (src, info) = wall();
+    let req = RenderRequest::fit(W, H);
+    let plain = render(&src, &info, &effect(|_| {}), &req).image;
+    let blinds = render(&src, &info, &effect(|e| (e.pattern, e.pattern_scale, e.pattern_softness) = (1.0, 60.0, 10.0)), &req).image;
+    // down a column the light goes on and off (the wall under no light is about 70)
+    let col: Vec<f32> = (0..H).map(|y| luma(blinds.get(W / 2, y))).collect();
+    let flips = col.windows(2).filter(|p| (p[0] > 85.0) != (p[1] > 85.0)).count();
+    assert!(flips >= 4, "{flips} edges");
+    assert!(blinds.data != plain.data);
+    // haze adds light, more over the far wall than over the near square at the same distance from the light (a wall
+    // with no depth to it has no haze: nothing is farther than anything)
+    let (plain, hazy) = (render(&photo, &field, &effect(|_| {}), &req).image, render(&photo, &field, &effect(|e| e.haze = 100.0), &req).image);
+    let (far, near) = ((0.65, 0.4, 0.75, 0.6), (0.25, 0.4, 0.35, 0.6));
+    assert!(mean(&hazy, far) > mean(&plain, far) + 1.0, "{} {}", mean(&hazy, far), mean(&plain, far));
+    assert!(mean(&hazy, far) - mean(&plain, far) > mean(&hazy, near) - mean(&plain, near), "haze is no stronger over what is far");
+}
+
+#[test]
+fn the_same_effect_on_another_light_is_another_scene() {
+    // two lights, a red gel on the first or on the second: the shading key names which, and the render puts the colour
+    // on the right side
+    let (src, info) = wall();
+    let req = RenderRequest::fit(W, H);
+    let with_gel_on = |i: usize| {
+        let mut s = wall_with(&[(0.2, 0.0), (0.8, 0.0)]);
+        (s.relight.lights[i].effects.gel_hue, s.relight.lights[i].effects.gel_strength) = (0.0, 100.0);
+        s
+    };
+    let (first, second) = (with_gel_on(0), with_gel_on(1));
+    let input = info.relight.as_ref().unwrap();
+    let key = |s: &DevelopSettings| relight::shading_key(input, &relight::scene_of(s).unwrap(), 0.0);
+    assert_ne!(key(&first), key(&second), "the key doesn't say which light has the gel");
+    // (and shading_for, asked in turn, gives each its own)
+    for _ in 0..2 {
+        for s in [&first, &second] {
+            let (k, _) = relight::shading_for(input, &relight::scene_of(s).unwrap(), 0.0);
+            assert_eq!(k, key(s));
+        }
+    }
+    let redness = |img: &Rgba8, b: (f32, f32, f32, f32)| {
+        let [r, g, _] = mean_rgb(img, b);
+        r / g.max(1.0)
+    };
+    let (left, right) = ((0.1, 0.4, 0.3, 0.6), (0.7, 0.4, 0.9, 0.6));
+    let a = render(&src, &info, &first, &req).image;
+    assert!(redness(&a, left) > 1.5 * redness(&a, right), "the gel on the first light isn't on the left");
+    let b = render(&src, &info, &second, &req).image;
+    assert!(redness(&b, right) > 1.5 * redness(&b, left), "the gel on the second light isn't on the right");
 }
