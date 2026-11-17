@@ -1,6 +1,6 @@
 //! Fork (issue #302, `fork/relight.md`): the effects of one Relight light: a gel, a pattern and haze. They are part of
 //! the light's settings ([`crate::relight::LightSettings::effects`]); the pipeline turns them into
-//! `lightcraft_relight::Effects`. Issue #315 adds Shadows (how much the photo's own things block the light). A light with none
+//! `lightcraft_relight::Effects`. Issue #315 adds Shadows (how much the photo's own things block the light), issue #316 the pattern's openness (`patternOpen`). A light with none
 //! writes nothing, so an edit made before them reads and saves as it was; a block with some reads leniently like the rest (a number that is not a number takes its default).
 
 use serde::{Deserialize, Serialize};
@@ -51,6 +51,10 @@ pub struct LightEffects {
     /// How much of the light the photo's own things block (issue #315), 0 (none) .. 100.
     #[serde(skip_serializing_if = "zero")]
     pub shadows: f64,
+    /// How open the pattern is (issue #316), 0..100: the blinds' slat tilt, a window's mullions, the leaves' size, the
+    /// canopy's gaps.
+    #[serde(skip_serializing_if = "fifty")]
+    pub pattern_open: f64,
 }
 
 impl Default for LightEffects {
@@ -64,13 +68,14 @@ impl Default for LightEffects {
             pattern_softness: 30.0,
             haze: 0.0,
             shadows: 0.0,
+            pattern_open: 50.0,
         }
     }
 }
 
 impl LightEffects {
     /// The number the control `field` (`gelHue`, `gelStrength`, `pattern`, `patternScale`, `patternRotation`,
-    /// `patternSoftness`, `haze`, `shadows`) names.
+    /// `patternSoftness`, `patternOpen`, `haze`, `shadows`) names.
     pub(crate) fn field(&mut self, field: &str) -> Option<&mut f64> {
         Some(match field {
             "gelHue" => &mut self.gel_hue,
@@ -79,6 +84,7 @@ impl LightEffects {
             "patternScale" => &mut self.pattern_scale,
             "patternRotation" => &mut self.pattern_rotation,
             "patternSoftness" => &mut self.pattern_softness,
+            "patternOpen" => &mut self.pattern_open,
             "haze" => &mut self.haze,
             "shadows" => &mut self.shadows,
             _ => return None,
@@ -95,7 +101,8 @@ impl LightEffects {
     pub fn to_full_json(&self) -> serde_json::Value {
         serde_json::json!({
             "gelHue": self.gel_hue, "gelStrength": self.gel_strength, "pattern": self.pattern, "patternScale": self.pattern_scale,
-            "patternRotation": self.pattern_rotation, "patternSoftness": self.pattern_softness, "haze": self.haze, "shadows": self.shadows,
+            "patternRotation": self.pattern_rotation, "patternSoftness": self.pattern_softness, "patternOpen": self.pattern_open, "haze": self.haze,
+            "shadows": self.shadows,
         })
     }
 }

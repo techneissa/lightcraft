@@ -92,6 +92,8 @@ pub struct Rig {
     peak: f32,
     /// The photo's exposure (stops): the guide's luminance plus this is the pixel's.
     pub(crate) ev: f32,
+    /// The light's Softness, 0..1 (a pattern's edges take the light's size from it).
+    pub(crate) soft: f32,
 }
 
 /// How much of a surface's light its facing decides: `cos` is the cosine between its normal and the direction to the light.
@@ -153,6 +155,7 @@ impl Field {
             peak: 1.0,
             shape,
             ev: if ev.is_finite() { ev.clamp(-10.0, 10.0) as f32 } else { 0.0 },
+            soft,
         };
         // the most lit point, on a grid of the photo (a shape with a fixed peak has no use for it: asking would make a Rim's
         // map for nothing)
@@ -173,7 +176,7 @@ impl Field {
 
     /// `falloff · facing` at `(u, v)` with log depth `lz` and normal `n`, before the peak's normalization.
     #[inline]
-    fn light_at(&self, rig: &Rig, u: f32, v: f32, lz: f32, n: [f32; 3]) -> f32 {
+    pub(crate) fn light_at(&self, rig: &Rig, u: f32, v: f32, lz: f32, n: [f32; 3]) -> f32 {
         if !matches!(rig.shape, Shape::Point) {
             return crate::kinds::light_at(self, rig, (u, v), lz, n);
         }

@@ -382,3 +382,29 @@ fn shadows_darken_what_a_near_thing_hides_from_the_light_and_no_amount_changes_n
         assert_eq!(with(0.0), with(100.0), "kind {kind}");
     }
 }
+
+#[test]
+fn a_near_thing_blocks_a_pattern_even_at_cast_shadows_0() {
+    // a sun through wide-open, soft blinds from above and a little to the left: the wall below the near square is in its
+    // shadow even with Cast Shadows at 0, as a person blocks the light through a window (issue #316); it used to be lit
+    // through the person
+    let (src, info) = (scene(W, H), info());
+    let req = RenderRequest::fit(W, H);
+    let sun = |shadows: f64, pattern: f64| {
+        let mut s = DevelopSettings::default();
+        s.relight.lights[0] = LightSettings { amount: 100.0, softness: 20.0, wrap: 100.0, x: 0.6, y: 0.62, ..LightSettings::default() };
+        let set = [("kind", 2.0), ("sunAzimuth", -25.0), ("sunElevation", 40.0), ("shadows", shadows), ("pattern", pattern), ("patternOpen", 100.0)];
+        for (field, v) in set.into_iter().chain([("patternSoftness", 100.0)]) {
+            assert!(lightcraft_develop::relight::set(&mut s, &format!("relight.{field}"), v), "{field}");
+        }
+        render(&src, &info, &s, &req).image
+    };
+    let (open, blocked) = (sun(0.0, 1.0), sun(100.0, 1.0));
+    assert_eq!(open.data, blocked.data, "Cast Shadows changes a patterned light");
+    // against the same sun with no pattern (and no shadows): the blinds take a little off beside the square, and much more
+    // behind it, where the square blocks them
+    let (behind, beside) = ((0.45, 0.78, 0.6, 0.9), (0.7, 0.4, 0.8, 0.6));
+    let bare = sun(0.0, 0.0);
+    let drop = |b| mean(&bare, b) - mean(&open, b);
+    assert!(drop(behind) > drop(beside) + 3.0, "behind the square {} darker, beside it {}", drop(behind), drop(beside));
+}

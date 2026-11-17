@@ -56,8 +56,16 @@ pub const IDS: [u32; 6] = [u32::MAX - 3, u32::MAX - 2, u32::MAX - 1, u32::MAX, u
 const KEEP: usize = 4;
 
 /// Lobes kept: one per light (a drag makes a new one for each position of the light it moves, and the others'
-/// stay). A field of 1600 × 1067 makes 6.8 MB of them each, so this holds 8 lights and a drag's last positions.
+/// stay). A field of 1600 × 1067 makes 6.8 MB of them each (twice that for a light with a pattern, which keeps the light
+/// its material passes too), so this holds 8 lights and a drag's last positions.
 const KEEP_LOBES: usize = 12;
+
+/// A light's lobes: the light itself (through its pattern's gaps) and, with a pattern, what the pattern's own material
+/// passes (issue #316), which takes its own tint.
+pub struct Lobes {
+    pub light: Lobe,
+    pub through: Option<Lobe>,
+}
 
 /// A few values most recently used first, by key.
 struct Memo<T> {
@@ -94,7 +102,7 @@ impl<T> Memo<T> {
 }
 
 static MEMO: Memo<Shading> = Memo::new(KEEP);
-static LOBES: Memo<Lobe> = Memo::new(KEEP_LOBES);
+static LOBES: Memo<Lobes> = Memo::new(KEEP_LOBES);
 /// Shadow visibilities kept (issue #315): one per light (and one coarse one for a light being dragged), at a sixteenth of the field's size, so the Shadows slider and
 /// the light's other numbers don't march again; only a move of the light, its size or its type's numbers do.
 static SHADOWS: Memo<Visibility> = Memo::new(2 * KEEP_LOBES);
@@ -162,6 +170,7 @@ fn effects_of(e: &lightcraft_develop::relight_effects::LightEffects) -> Effects 
         softness: e.pattern_softness / 100.0,
         haze: e.haze / 100.0,
         shadows: e.shadows / 100.0,
+        open: e.pattern_open / 100.0,
     }
 }
 
@@ -210,17 +219,17 @@ fn lobe_key(input: &Input, light: &Light, effects: &Effects, ev: f64, coarse: bo
             std::hash::Hash::hash(&ev.to_bits(), h);
         }
         // (a light without shadows hashes as it did before them: the same key, the same kept lobe)
+        if let Some(amount) = shadow_amount(light, effects) {
+            std::hash::Hash::hash(&(b's', amount.to_bits()), h);
+        }
         // (a coarse one, made for a drag, is another lobe)
-        if shadow_amount(light, effects).is_some() {
-            std::hash::Hash::hash(&(b's', effects.shadows.to_bits()), h);
-            if coarse {
-                std::hash::Hash::hash(&b'c', h);
-            }
+        if coarse {
+            std::hash::Hash::hash(&b'c', h);
         }
         // (a light without a pattern hashes as it did before patterns: the same key, the same kept lobe)
         if effects.pattern != Pattern::None {
             std::hash::Hash::hash(&effects.pattern, h);
-            for v in [effects.scale, effects.rotation, effects.softness] {
+            for v in [effects.scale, effects.rotation, effects.softness, effects.open] {
                 std::hash::Hash::hash(&v.to_bits(), h);
             }
         }
@@ -249,15 +258,22 @@ pub fn shading_key(input: &Input, scene: &Scene, ev: f64, draft: bool) -> u64 {
         }
         for (i, e) in scene.effects.iter().enumerate().filter(|(_, e)| **e != Effects::default()) {
             std::hash::Hash::hash(&(i, e.gel_hue.to_bits(), e.gel_strength.to_bits(), e.pattern, e.scale.to_bits()), h);
-            std::hash::Hash::hash(&(e.rotation.to_bits(), e.softness.to_bits(), e.haze.to_bits(), e.shadows.to_bits()), h);
+            std::hash::Hash::hash(&(e.rotation.to_bits(), e.softness.to_bits(), e.haze.to_bits(), e.shadows.to_bits(), e.open.to_bits()), h);
         }
     })
 }
 
 /// The shadow amount (0..1) `light` casts with `effects`: `None` for a light with none, or of a type that takes none (a rim,
-/// a fill), which keeps its lobe as it was before shadows.
+/// a fill), which keeps its lobe as it was before shadows. A light with a pattern always casts full shadows (issue #316):
+/// the photo's own things block the pattern the way they block real light through a window or leaves.
 fn shadow_amount(light: &Light, effects: &Effects) -> Option<f64> {
-    (light.kind.takes_shadows() && effects.shadows.is_finite() && effects.shadows > 0.0).then(|| effects.shadows.min(1.0))
+    if !light.kind.takes_shadows() {
+        return None;
+    }
+    if effects.pattern != Pattern::None {
+        return Some(1.0);
+    }
+    (effects.shadows.is_finite() && effects.shadows > 0.0).then(|| effects.shadows.min(1.0))
 }
 
 /// The key naming `light`'s shadow visibility on `input`'s field: only what the march reads. A point and a spot: the
@@ -298,11 +314,11 @@ fn shadows_for(input: &Input, light: &Light, rig: &Rig, draft: bool) -> Option<A
     Some(vis)
 }
 
-/// `light`'s lobe on `input`'s field (`rig`: the light set up on it), seen through its pattern and with the shadows it
-/// casts; made once and kept. A drag (`draft`) takes the full lobe when it is kept and else makes one with coarse shadows
-/// (a light without shadows has one lobe for both).
-fn lobe_for(input: &Input, light: &Light, effects: &Effects, rig: &Rig, ev: f64, draft: bool) -> Arc<Lobe> {
-    let coarse = draft && shadow_amount(light, effects).is_some();
+/// `light`'s lobes on `input`'s field (`rig`: the light set up on it), seen through its pattern and with the shadows it
+/// casts; made once and kept. A drag (`draft`) takes the full lobes when they are kept and else makes them with coarse
+/// shadows and a coarse pattern (a light with neither has one set for both).
+fn lobe_for(input: &Input, light: &Light, effects: &Effects, rig: &Rig, ev: f64, draft: bool) -> Arc<Lobes> {
+    let coarse = draft && (shadow_amount(light, effects).is_some() || effects.pattern != Pattern::None);
     if let Some(l) = LOBES.get(lobe_key(input, light, effects, ev, false)) {
         return l;
     }
@@ -311,14 +327,15 @@ fn lobe_for(input: &Input, light: &Light, effects: &Effects, rig: &Rig, ev: f64,
         return l;
     }
     let t = crate::profiling().then(std::time::Instant::now);
-    let mut lobe = input.field.patterned(rig, input.field.lobe(rig), effects);
-    // (the shadows multiply the lobe before the lights add up)
+    let (mut lobe, mut through) = input.field.patterned(rig, input.field.lobe(rig), effects, coarse);
+    // (the shadows multiply the lobes before the lights add up)
     if let Some(amount) = shadow_amount(light, effects)
         && let Some(vis) = shadows_for(input, light, rig, coarse)
     {
         lobe = input.field.shadowed(lobe, &vis, amount);
+        through = through.map(|t| input.field.shadowed(t, &vis, amount));
     }
-    let lobe = Arc::new(lobe);
+    let lobe = Arc::new(Lobes { light: lobe, through });
     if let Some(t) = t {
         eprintln!("    relight lobe ({} × {}): {:.1} ms", input.field.width, input.field.height, t.elapsed().as_secs_f64() * 1e3);
     }
@@ -341,14 +358,19 @@ pub fn shading_for(input: &Input, scene: &Scene, ev: f64, draft: bool) -> (u64, 
     let rigs: Vec<Rig> = scene.lights.iter().take(MAX_LIGHTS).map(|l| input.field.rig(l, scene.darken, ev)).collect();
     let none = Effects::default();
     let effects = |i: usize| scene.effects.get(i).unwrap_or(&none);
-    let lobes: Vec<Arc<Lobe>> = scene.lights.iter().zip(&rigs).enumerate().map(|(i, (l, r))| lobe_for(input, l, effects(i), r, ev, draft)).collect();
+    let lobes: Vec<Arc<Lobes>> = scene.lights.iter().zip(&rigs).enumerate().map(|(i, (l, r))| lobe_for(input, l, effects(i), r, ev, draft)).collect();
     // (a light's haze is one more lobe of the same light, in the same colour; made here, not kept: it is one pass)
     let hazes: Vec<Option<Lobe>> =
         scene.lights.iter().enumerate().map(|(i, l)| (effects(i).haze > 0.0 && l.kind.has_place()).then(|| input.field.haze_lobe(l))).collect();
-    let mut parts: Vec<Part<'_>> = Vec::with_capacity(2 * rigs.len());
+    let mut parts: Vec<Part<'_>> = Vec::with_capacity(3 * rigs.len());
     for (i, ((l, r), lobe)) in scene.lights.iter().zip(&rigs).zip(&lobes).enumerate() {
         let (tilt, tint) = effects(i).light_colour(l.warmth);
-        parts.push(Part { lobe, gain: r.gain(), tilt, tint });
+        parts.push(Part { lobe: &lobe.light, gain: r.gain(), tilt, tint });
+        // (what a pattern's material passes: the same light, in the pattern's own tint)
+        if let Some(through) = &lobe.through {
+            let (tilt, tint) = effects(i).through_colour(l.warmth);
+            parts.push(Part { lobe: through, gain: r.gain(), tilt, tint });
+        }
         if let Some(Some(haze)) = hazes.get(i) {
             parts.push(Part { lobe: haze, gain: r.gain() * HAZE_GAIN * effects(i).haze.clamp(0.0, 1.0) as f32, tilt, tint });
         }
