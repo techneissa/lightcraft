@@ -218,6 +218,9 @@ fn show_mask_panel(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         }
     });
     divider(ui);
+    // (fork, issue #329: the user's mask presets)
+    super::mask_presets::show(app, ui);
+    divider(ui);
     // mask list
     egui::Frame::NONE.inner_margin(egui::Margin { left: 16, right: 16, top: 8, bottom: 8 }).show(ui, |ui| {
         ui.horizontal(|ui| {

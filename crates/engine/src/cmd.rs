@@ -52,6 +52,7 @@ mod mask_invert;
 pub mod mask_multi;
 pub mod mask_names;
 mod mask_parts;
+mod mask_presets;
 mod mask_recolor;
 mod masks;
 pub mod match_look;
@@ -249,6 +250,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(retouch_background::specs());
         v.extend(relight::specs());
         v.extend(relight_presets::specs());
+        v.extend(mask_presets::specs());
         v.extend(portrait_presets::specs());
         v.extend(map::specs());
         v

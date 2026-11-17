@@ -1,0 +1,4 @@
+# Mask Presets (issue #329)
+cargo test -p lightcraft-develop --lib -- mask_presets
+cargo test -p lightcraft-engine --lib -- mask_presets
+cargo test -p lightcraft-ui-egui --lib -- masking mask_menus mask_parts settings_sync edit_sections

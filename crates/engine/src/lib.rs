@@ -75,6 +75,8 @@ pub mod locations;
 pub mod logging;
 pub mod macos_colour_job;
 pub mod map;
+/// Fork (issue #329, `fork/mask-presets.md`): masks kept as presets.
+pub mod mask_presets;
 pub mod media;
 pub mod memory;
 pub mod merge;
@@ -520,6 +522,8 @@ pub struct Session {
     /// Fork (issue #301): the user's own light presets, saved in the library's presets file (the built-in ones are
     /// `lightcraft_develop::relight_presets::built_in`).
     pub relight_presets: Vec<lightcraft_develop::relight_presets::LightPreset>,
+    /// Fork (issue #329): the user's own mask presets, saved in the library's presets file.
+    pub mask_presets: Vec<lightcraft_develop::mask_presets::MaskPreset>,
     /// Portrait presets: the library's named people for matching, and Apply to Every Photo running (fork,
     /// `fork/portrait-presets.md`).
     pub(crate) portrait_presets: portrait_presets::matching::State,
@@ -649,6 +653,7 @@ impl Session {
             relight: Default::default(),
             relight_selection: (None, 0),
             relight_presets: Vec::new(),
+            mask_presets: Vec::new(),
             face_shared_dir: None,
             face_downloads: Default::default(),
             lensfun: Default::default(),
