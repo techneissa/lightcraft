@@ -3,7 +3,7 @@
 //! Scale, Rotation, Softness and Openness) and Haze. Each is a control by id, `relight.<n>.gelHue`, `.gelStrength`,
 //! `.pattern`, `.patternScale`, `.patternRotation`, `.patternSoftness`, `.patternOpen` (issue #316) and `.haze`, and with
 //! some haze (issue #317) its `.scatter` and `.dust`; then (issue #331) `.mist` with its `.mistHeight`, and with haze or mist
-//! `.fade` (Distance Fade).
+//! `.fade` (Distance Fade). Also (issue #334) `.source`, the light's own source as a bright point.
 
 use egui::{Align2, Color32, Sense, Stroke, vec2};
 use lightcraft_develop::DevelopSettings;
@@ -132,5 +132,11 @@ pub(super) fn effects(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSet
         control(app, ui, d, &format!("relight.{sel}.scatter"), true);
         control(app, ui, d, &format!("relight.{sel}.dust"), true);
         control(app, ui, d, &format!("relight.{sel}.fade"), true);
+    }
+    // (issue #334: the light's own source as a bright point, for a light with a place of its own (not a Sun / Window, which shines
+    // from a direction) that sits inside the photo)
+    if d.relight.lights.get(sel).is_some_and(|l| l.kind.has_place() && l.kind.index() != 2) {
+        heading(ui, "Source");
+        control(app, ui, d, &format!("relight.{sel}.source"), true);
     }
 }

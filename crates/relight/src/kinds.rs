@@ -28,11 +28,18 @@ pub struct Spot {
     /// What it points at, in normalized photo coordinates (the surface there; may lie a little outside the photo).
     pub aim_x: f64,
     pub aim_y: f64,
-    /// The cone's half-angle, in degrees (5..85).
+    /// The cone's half-angle, in degrees ([`MIN_ANGLE`]..85: a stage fixture's narrow beam to a wide flood).
     pub angle: f64,
     /// How soft the cone's edge is, 0 (hard) .. 1 (the whole cone fades).
     pub edge: f64,
+    /// A sharp-edged cone (issue #334, a stage beam): the edge is a thin fixed ramp (a tenth of the half-angle) whatever `edge` says.
+    pub sharp: bool,
 }
+
+/// The narrowest cone a spot makes, its half-angle in degrees (issue #334: a stage beam is a few degrees; it was 5).
+pub const MIN_ANGLE: f64 = 2.0;
+/// How much of a sharp cone's half-angle its edge ramps over (a tenth: the depth map's noise moves where a surface sits by a few pixels, and a thinner ramp turned a pool on a face into a jagged shape).
+const SHARP_RAMP: f64 = 0.1;
 
 /// The direction of a [`LightKind::Sun`].
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -102,12 +109,25 @@ impl LightKind {
         !matches!(self, LightKind::Rim(_) | LightKind::Fill(_))
     }
 
+    /// Whether its source can be seen as a bright point where the light is placed (issue #334): a Sun shines from a direction,
+    /// not from its handle's place, so a glow there would sit where the light doesn't come from.
+    pub fn shows_source(&self) -> bool {
+        self.has_place() && !matches!(self, LightKind::Sun(_))
+    }
+
     /// The numbers the kind's lobe depends on, as bits for a cache key (the tag, then its own numbers).
     pub fn key_bits(&self) -> Vec<u64> {
         let b = f64::to_bits;
         match self {
             LightKind::Point => vec![0],
-            LightKind::Spot(s) => vec![1, b(s.aim_x), b(s.aim_y), b(s.angle), b(s.edge)],
+            LightKind::Spot(s) => {
+                let mut v = vec![1, b(s.aim_x), b(s.aim_y), b(s.angle), b(s.edge)];
+                // (a soft cone hashes as it did before sharp ones)
+                if s.sharp {
+                    v.push(1);
+                }
+                v
+            }
             LightKind::Sun(s) => vec![2, b(s.azimuth), b(s.elevation)],
             LightKind::Softbox(s) if s.aim_h == 0.0 && s.aim_v == 0.0 => vec![3, b(s.width), b(s.height), b(s.rotation)],
             LightKind::Softbox(s) => vec![3, b(s.width), b(s.height), b(s.rotation), b(s.aim_h), b(s.aim_v)],
@@ -223,8 +243,8 @@ impl Shape {
                 let (alz, _, _) = field.at(ax.clamp(0.0, 1.0), ay.clamp(0.0, 1.0));
                 let aim = field.point(ax, ay, alz);
                 let dir = norm([aim[0] - pos[0], aim[1] - pos[1], aim[2] - pos[2]], [0.0, 0.0, 1.0]);
-                let outer = finite(s.angle, 5.0, 85.0, 30.0).to_radians();
-                let inner = outer * (1.0 - 0.95 * finite(s.edge, 0.0, 1.0, 0.4));
+                let outer = finite(s.angle, MIN_ANGLE, 85.0, 30.0).to_radians();
+                let inner = outer * if s.sharp { 1.0 - SHARP_RAMP } else { 1.0 - 0.95 * finite(s.edge, 0.0, 1.0, 0.4) };
                 Shape::Spot { dir, cos_outer: outer.cos() as f32, cos_inner: inner.cos() as f32 }
             }
             LightKind::Sun(s) => {

@@ -559,3 +559,40 @@ fn a_softbox_aim_reaches_the_light_the_shadows_the_pattern_and_the_beam() {
     let back = DevelopSettings::from_json(&boxed(55.0, &|_| {}).to_json()).unwrap();
     assert_eq!(back.relight.lights[0].kind.box_aim_h, 55.0);
 }
+
+#[test]
+fn a_visible_source_is_a_bright_point_in_the_lights_colour_and_the_shading_does_not_know_it() {
+    // (issue #334) a black photo and a warm light inside it with no haze: with Visible Source it shows as a bright point of the
+    // light's warm colour over the black, with none the photo stays black; the source only adds a plane, so the shading's key
+    // is the same
+    let black = Rgb32f::from_fn(W, H, |_, _| [0.0; 3]);
+    let info = info();
+    let req = RenderRequest::fit(W, H);
+    let with = |source: f64, x: f64| {
+        let mut s = DevelopSettings::default();
+        s.relight.lights[0] = LightSettings { amount: 60.0, warmth: 100.0, x, y: 0.35, depth: 70.0, ..LightSettings::default() };
+        assert!(lightcraft_develop::relight::set(&mut s, "relight.source", source));
+        s
+    };
+    let (none, shown) = (render(&black, &info, &with(0.0, 0.75), &req).image, render(&black, &info, &with(70.0, 0.75), &req).image);
+    let point = (0.72, 0.31, 0.78, 0.39);
+    assert!(mean(&none, point) < 3.0, "{}", mean(&none, point));
+    assert!(mean(&shown, point) > mean(&none, point) + 40.0, "{} {}", mean(&shown, point), mean(&none, point));
+    let [r, g, b] = mean_rgb(&shown, point);
+    assert!(r > g && g > b, "not the light's warm colour: {r} {g} {b}");
+    // far from the point it stays dark
+    assert!(mean(&shown, (0.0, 0.7, 0.2, 0.95)) < 3.0);
+    // a Sun shines from a direction, not from its handle's place: it shows no point either
+    let sun = |source: f64| {
+        let mut s = with(source, 0.75);
+        s.relight.lights[0].kind.which = 2.0;
+        render(&black, &info, &s, &req).image
+    };
+    assert!(sun(70.0).data == sun(0.0).data, "a Sun with Visible Source drew a point");
+    // a light outside the photo shows no point
+    let outside = render(&black, &info, &with(70.0, 1.3), &req).image;
+    assert!(outside.data == none.data);
+    let input = info.relight.as_ref().unwrap();
+    let key = |s: &DevelopSettings| relight::shading_key(input, &relight::scene_of(s).unwrap(), 0.0, false);
+    assert_eq!(key(&with(0.0, 0.75)), key(&with(70.0, 0.75)));
+}

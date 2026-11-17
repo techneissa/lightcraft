@@ -20,7 +20,9 @@ History is in the PRs: #288 (the feature), #294 (⌥ overlay), #299 (several lig
   Forward Scatter (`scatter`) and Dust (`dust`) shape it. The beam is added on top in the light's colour as extra mask planes (`LocalAdjustments::fork_added`, never saved), not a gain. Shafts are kept until the light moves. A Rim and a Fill make no beam.
 - **Mist and fog (#331):** Low Mist and Mist Height thicken the haze near a ground plane fitted from up-facing normals (`mist.rs`), not by image row.
   Distance Fade (`c·T + air·(1−T)`) is one per photo: the strongest light's numbers, coloured by the far tenth plus 30 % of the lights with fade on; sent as an exposure plane plus a `fork_added` plane.
-- **Presets (#301):** a Light Presets flyout lists seven built-ins (Rembrandt, Butterfly, Split, Rim + Fill, Golden-Hour Window, Neon Two-Tone, Candle) and your own.
+- **Stage beams (#334):** Cone Angle goes down to 2°. Sharp Cone (`spotSharp`) makes the cone's edge a fixed ramp of a tenth of the angle (a hard pool on a wall; in haze a beam's flank is round whatever the edge). Visible Source (`source`, 0–100) draws a light inside the photo as a bright point (`source.rs`), hidden by nearer things, none for a Sun / Window, as a mask plane of its own (`Beamed::slot`) kept per place and strength, not in the shading key.
+  Concert Backlight, Two-Colour Stage and Single Spotlight are built-in presets with soft cones and high Wrap: a hard edge on a face reads as a sticker, and the depth map's noise makes a near-hard pool jagged there.
+- **Presets (#301):** a Light Presets flyout lists ten built-ins (Rembrandt, Butterfly, Split, Rim + Fill, Golden-Hour Window, Neon Two-Tone, Candle and the three stage ones, #334) and your own.
   Presets are written for a face and placed round the photo's subject (`Subject::place`, depth from `Field::depth_in`). Applying is one undo step. Yours live in the library's `presets.json` (`relightPresets`), read entry by entry.
   `relight.applyPreset` returns `{applied: false, finding: true}` while depth is still found.
 - **⌥ view (#294):** holding ⌥ while dragging a Relight control shows where the light reaches (Crosses or Contours, `UiState::relight_look`, synced as `relightLook`). It is drawn on a worker from the render's shading (`lightcraft_relight::overlay`) and never changes the render.
@@ -45,6 +47,7 @@ History is in the PRs: #288 (the feature), #294 (⌥ overlay), #299 (several lig
 - 18: `scatter`, `dust`.
 - 19: `mist`, `mistHeight`, `fade` (#331).
 - 20: `boxAimH`, `boxAimV` (#335). An aimed patterned softbox's far source sits along −n from its pool's middle, so shaft and shadows follow the aim.
+- 21: `spotSharp`, `source` (#334).
 - If the upgrade snapshot cannot be written, the journal appends nothing (`Journal::upgrade_pending`) and retries before the next append.
 
 ## Own files

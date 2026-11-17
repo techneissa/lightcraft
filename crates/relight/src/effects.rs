@@ -87,6 +87,9 @@ pub struct Effects {
     pub mist_height: f64,
     /// Distance Fade (issue #331): how much far things fade into the air, 0 (none) .. 1 (as the air's density says).
     pub fade: f64,
+    /// How bright and big the light's own source shows as a point when it sits inside the photo (issue #334,
+    /// [`Field::source`]), 0 (not at all) .. 1.
+    pub source: f64,
 }
 
 impl Default for Effects {
@@ -106,6 +109,7 @@ impl Default for Effects {
             mist: 0.0,
             mist_height: 0.3,
             fade: 0.0,
+            source: 0.0,
         }
     }
 }
@@ -387,6 +391,7 @@ mod tests {
             mist: f64::INFINITY,
             mist_height: f64::NAN,
             fade: -3.0,
+            source: f64::NAN,
         };
         for w in [f64::NAN, 9.0, -9.0] {
             let (t, s) = bad.light_colour(w);

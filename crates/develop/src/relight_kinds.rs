@@ -25,6 +25,8 @@ pub struct KindSettings {
     pub spot_aim_y: f64,
     pub spot_angle: f64,
     pub spot_edge: f64,
+    /// Spot (issue #334): a sharp-edged cone, 0 (the Cone Edge sets the edge) or 1 (a thin fixed edge, as a stage beam has).
+    pub spot_sharp: f64,
     /// Sun / Window: where it shines from round the scene's vertical axis (degrees, 0 from the camera's side, 90 from
     /// the right) and its height (degrees, 0 on the horizon, 90 straight above).
     pub sun_azimuth: f64,
@@ -54,6 +56,7 @@ impl Default for KindSettings {
             spot_aim_y: 0.65,
             spot_angle: 30.0,
             spot_edge: 40.0,
+            spot_sharp: 0.0,
             sun_azimuth: 40.0,
             sun_elevation: 35.0,
             box_width: 0.3,
@@ -70,11 +73,12 @@ impl Default for KindSettings {
 }
 
 /// `(json key, control field)` of each number, besides `kind`.
-const NUMBERS: [(&str, &str); 15] = [
+const NUMBERS: [(&str, &str); 16] = [
     ("spotAimX", "spotAimX"),
     ("spotAimY", "spotAimY"),
     ("spotAngle", "spotAngle"),
     ("spotEdge", "spotEdge"),
+    ("spotSharp", "spotSharp"),
     ("sunAzimuth", "sunAzimuth"),
     ("sunElevation", "sunElevation"),
     ("boxWidth", "boxWidth"),
@@ -111,6 +115,7 @@ impl KindSettings {
             "spotAimY" => &mut self.spot_aim_y,
             "spotAngle" => &mut self.spot_angle,
             "spotEdge" => &mut self.spot_edge,
+            "spotSharp" => &mut self.spot_sharp,
             "sunAzimuth" => &mut self.sun_azimuth,
             "sunElevation" => &mut self.sun_elevation,
             "boxWidth" => &mut self.box_width,
@@ -194,8 +199,9 @@ pub static SPECS: &[ControlSpec] = &[
     spec("relight.kind", "Light Type", (0.0, 5.0, 0.0), (1.0, 0)),
     spec("relight.spotAimX", "Aim Left to Right", (-0.5, 1.5, 0.5), (0.001, 3)),
     spec("relight.spotAimY", "Aim Top to Bottom", (-0.5, 1.5, 0.65), (0.001, 3)),
-    spec("relight.spotAngle", "Cone Angle", (5.0, 85.0, 30.0), (1.0, 0)),
+    spec("relight.spotAngle", "Cone Angle", (2.0, 85.0, 30.0), (1.0, 0)),
     spec("relight.spotEdge", "Cone Edge", (0.0, 100.0, 40.0), (1.0, 0)),
+    spec("relight.spotSharp", "Sharp Cone", (0.0, 1.0, 0.0), (1.0, 0)),
     spec("relight.sunAzimuth", "Sun Direction", (-180.0, 180.0, 40.0), (1.0, 0)),
     spec("relight.sunElevation", "Sun Height", (0.0, 90.0, 35.0), (1.0, 0)),
     spec("relight.boxWidth", "Box Width", (0.02, 1.5, 0.3), (0.001, 3)),
@@ -225,13 +231,28 @@ mod tests {
         let v = s.to_json();
         let light = &v[crate::relight::KEY]["lights"][0];
         assert_eq!((light["kind"].as_str(), light["spotAngle"].as_f64()), (Some("spot"), Some(12.0)));
-        assert!(light.get("spotEdge").is_none() && light.get("sunAzimuth").is_none());
+        assert!(light.get("spotEdge").is_none() && light.get("sunAzimuth").is_none() && light.get("spotSharp").is_none());
         let back = DevelopSettings::from_json(&v).unwrap();
         assert_eq!(back.relight, s.relight);
         assert_eq!(
             (get(&back, "relight.kind"), get(&back, "relight.spotAngle"), get(&back, "relight.spotEdge")),
             (Some(1.0), Some(12.0), Some(40.0))
         );
+    }
+
+    #[test]
+    fn a_sharp_narrow_spot_and_a_visible_source_are_saved_and_read_back_within_range() {
+        // (issue #334) Cone Angle goes down to 2, Sharp Cone is 0 or 1, Visible Source 0..100; all left out at their defaults
+        let mut s = DevelopSettings::default();
+        assert!(set(&mut s, "relight.amount", 50.0) && set(&mut s, "relight.kind", 1.0));
+        assert!(set(&mut s, "relight.spotAngle", 0.5) && set(&mut s, "relight.spotSharp", 1.0) && set(&mut s, "relight.source", 80.0));
+        let v = s.to_json();
+        let light = &v[crate::relight::KEY]["lights"][0];
+        assert_eq!((light["spotAngle"].as_f64(), light["spotSharp"].as_f64(), light["source"].as_f64()), (Some(2.0), Some(1.0), Some(80.0)));
+        assert_eq!(DevelopSettings::from_json(&v).unwrap().relight, s.relight);
+        let odd = json!({"fork_relight": {"lights": [{"amount": 50.0, "kind": "spot", "spotSharp": 7.0, "source": 400.0, "spotAngle": 1.0}]}});
+        let l = DevelopSettings::from_json(&odd).unwrap().relight.lights[0].clone();
+        assert_eq!((l.kind.spot_sharp, l.effects.source, l.kind.spot_angle), (1.0, 100.0, 2.0));
     }
 
     #[test]
@@ -247,7 +268,7 @@ mod tests {
         let v =
             json!({"fork_relight": {"lights": [{"kind": "Softbox", "boxWidth": 9.0, "boxHeight": "tall", "boxRotation": 1e9, "spotAngle": -1.0}]}});
         let l = DevelopSettings::from_json(&v).unwrap().relight.lights[0].clone();
-        assert_eq!((l.kind.name(), l.kind.box_width, l.kind.box_height, l.kind.box_rotation, l.kind.spot_angle), ("softbox", 1.5, 0.2, 180.0, 5.0));
+        assert_eq!((l.kind.name(), l.kind.box_width, l.kind.box_height, l.kind.box_rotation, l.kind.spot_angle), ("softbox", 1.5, 0.2, 180.0, 2.0));
         assert!(l.kind.has_place());
         let mut s = DevelopSettings::default();
         assert!(set(&mut s, "relight.kind", 4.4) && set(&mut s, "relight.rimWidth", f64::NAN));

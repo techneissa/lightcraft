@@ -176,8 +176,11 @@ fn a_spots_beam_is_brightest_near_its_source_and_widens_along_its_axis() {
     // a spot high in the middle in front of a far wall, aimed straight down the wall: across the beam, it is brighter near
     // the light than far down its axis, and wider far down than near
     let f = scene(Some((0.0..0.0, 0.0..0.0, -0.6)));
-    let spot =
-        Light { kind: LightKind::Spot(crate::Spot { aim_x: 0.5, aim_y: 0.95, angle: 15.0, edge: 0.6 }), softness: 0.2, ..point(0.5, 0.05, 0.6) };
+    let spot = Light {
+        kind: LightKind::Spot(crate::Spot { aim_x: 0.5, aim_y: 0.95, angle: 15.0, edge: 0.6, sharp: false }),
+        softness: 0.2,
+        ..point(0.5, 0.05, 0.6)
+    };
     let (w, h, s) = whole(&f, &spot, &haze(0.0));
     let row = |v: f32| -> Vec<f32> {
         let y = (v * h as f32) as usize;

@@ -133,7 +133,12 @@ pub(super) fn relight(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSet
     });
     // (the sliders act on the selected light, named by its own ids)
     let kind = d.relight.lights.get(sel).map_or(0, |l| l.kind.index());
+    let sharp = d.relight.lights.get(sel).is_some_and(|l| l.kind.spot_sharp >= 0.5);
     for field in kinds::fields(kind) {
+        // (issue #334: a sharp cone's edge is fixed, so its softness slider has nothing to set)
+        if *field == "spotEdge" && sharp {
+            continue;
+        }
         control(app, ui, d, &format!("relight.{sel}.{field}"), true);
     }
     // (issue #315: a light with a place the light comes from casts shadows: a point, a spot, a sun and a softbox; a rim and a fill don't)
