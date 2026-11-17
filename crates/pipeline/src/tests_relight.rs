@@ -4,6 +4,7 @@
 use std::sync::Arc;
 
 use lightcraft_develop::DevelopSettings;
+use lightcraft_develop::relight::LightSettings;
 use lightcraft_raster::{Rgb32f, Rgba8};
 use lightcraft_relight::Field;
 
@@ -35,10 +36,7 @@ fn info() -> SourceInfo {
 
 fn lit(amount: f64) -> DevelopSettings {
     let mut s = DevelopSettings::default();
-    s.relight.amount = amount;
-    s.relight.x = 0.3;
-    s.relight.y = 0.45;
-    s.relight.depth = 10.0;
+    s.relight.lights[0] = LightSettings { amount, x: 0.3, y: 0.45, depth: 10.0, ..LightSettings::default() };
     s
 }
 
@@ -81,7 +79,7 @@ fn a_draft_and_an_export_make_the_same_light() {
     let src = scene(W, H);
     let info = info();
     let mut s = lit(80.0);
-    s.relight.warmth = 60.0;
+    s.relight.lights[0].warmth = 60.0;
     s.relight.darken = 30.0;
     let check = |s: &DevelopSettings| {
         let small = render(&src, &info, s, &RenderRequest::fit(W / 4, H / 4)).image;
@@ -148,13 +146,7 @@ fn a_warm_light_warms_a_neutral_wall_and_a_cool_one_cools_it() {
     };
     for warmth in [-100.0, -67.0, 67.0, 100.0] {
         let mut s = DevelopSettings::default();
-        s.relight.amount = 48.0;
-        s.relight.softness = 84.0;
-        s.relight.wrap = 28.0;
-        s.relight.x = 0.5;
-        s.relight.y = 0.5;
-        s.relight.depth = 10.0;
-        s.relight.warmth = warmth;
+        s.relight.lights[0] = LightSettings { amount: 48.0, softness: 84.0, wrap: 28.0, x: 0.5, y: 0.5, depth: 10.0, warmth };
         let img = render(&src, &wall, &s, &RenderRequest::fit(W, H)).image;
         for (name, b) in [("left", (0.1, 0.4, 0.2, 0.6)), ("middle", (0.45, 0.4, 0.55, 0.6)), ("right", (0.8, 0.4, 0.9, 0.6))] {
             let [r, g, b] = mean_rgb(&img, b);
@@ -167,4 +159,65 @@ fn a_warm_light_warms_a_neutral_wall_and_a_cool_one_cools_it() {
             }
         }
     }
+}
+
+/// A flat grey wall field, lit by `lights` (place; Warmth), each at Amount 60.
+fn wall_with(lights: &[(f64, f64)]) -> DevelopSettings {
+    let mut s = DevelopSettings::default();
+    s.relight.lights =
+        lights.iter().map(|&(x, warmth)| LightSettings { amount: 60.0, softness: 30.0, wrap: 28.0, x, y: 0.5, depth: 10.0, warmth }).collect();
+    s
+}
+
+fn wall() -> (Rgb32f, SourceInfo) {
+    let src = Rgb32f::from_fn(W, H, |_, _| [0.06; 3]);
+    let (fw, fh) = (240, 160);
+    let field = Field::from_parts(fw, fh, vec![0.0; fw * fh], vec![-2.0; fw * fh]).unwrap();
+    (src, SourceInfo { relight: Some(relight::Input { field: Arc::new(field), key: 21 }), ..SourceInfo::default() })
+}
+
+#[test]
+fn a_block_saved_with_one_light_renders_as_that_light() {
+    // (the shape before issue #299: one light's numbers and Darken Surroundings in one object)
+    let (src, info) = (scene(W, H), info());
+    let old = serde_json::json!({"fork_relight": {"amount": 70.0, "softness": 35.0, "warmth": 40.0, "x": 0.3, "y": 0.45, "depth": 10.0, "darken": 25.0, "wrap": 30.0}});
+    let read = DevelopSettings { relight: DevelopSettings::from_json(&old).unwrap().relight, ..DevelopSettings::default() };
+    let mut built = DevelopSettings::default();
+    built.relight.lights[0] = LightSettings { amount: 70.0, softness: 35.0, warmth: 40.0, x: 0.3, y: 0.45, depth: 10.0, wrap: 30.0 };
+    built.relight.darken = 25.0;
+    let req = RenderRequest::fit(W, H);
+    let (a, b) = (render(&src, &info, &read, &req).image, render(&src, &info, &built, &req).image);
+    assert!(a.data == b.data, "the old block and the one light built by hand render differently");
+    assert!(a.data != render(&src, &SourceInfo::default(), &read, &req).image.data, "the light does something");
+    // and saved again it reads back to the same picture
+    let again = DevelopSettings::from_json(&read.to_json()).unwrap();
+    assert!(render(&src, &info, &again, &req).image.data == a.data, "saved and read again, the light renders differently");
+}
+
+#[test]
+fn two_lights_add_up_and_a_warm_and_a_cool_one_each_colour_their_side() {
+    let (src, info) = wall();
+    let req = RenderRequest::fit(W, H);
+    let alone = |x: f64, w: f64| render(&src, &info, &wall_with(&[(x, w)]), &req).image;
+    let (left, right) = (alone(0.2, 100.0), alone(0.8, -100.0));
+    let both = render(&src, &info, &wall_with(&[(0.2, 100.0), (0.8, -100.0)]), &req).image;
+    let plain = render(&src, &SourceInfo::default(), &DevelopSettings::default(), &req).image;
+    // between the two lights, both together are brighter than either alone
+    let middle = (0.45, 0.4, 0.55, 0.6);
+    let (b, l, r, p) = (mean(&both, middle), mean(&left, middle), mean(&right, middle), mean(&plain, middle));
+    assert!(b > l.max(r) + 2.0 && l > p && r > p, "both {b}, left {l}, right {r}, plain {p}");
+    // the warm light's side is warm and the cool one's cool, as when each is alone
+    let (near_warm, near_cool) = ((0.15, 0.4, 0.25, 0.6), (0.75, 0.4, 0.85, 0.6));
+    let [wr, _, wb] = mean_rgb(&both, near_warm);
+    let [cr, _, cb] = mean_rgb(&both, near_cool);
+    assert!(wr > wb + 6.0, "near the warm light: {wr} {wb}");
+    assert!(cb > cr + 3.0, "near the cool light: {cr} {cb}");
+    // a light with no Amount adds nothing: the picture is the other light's
+    let mut dead = wall_with(&[(0.2, 100.0), (0.8, -100.0)]);
+    dead.relight.lights[1].amount = 0.0;
+    assert!(render(&src, &info, &dead, &req).image.data == left.data, "a light with no Amount changed the picture");
+    // eight lights on one spot are brighter than one, and the grey wall stays a neutral grey
+    let (one, eight) = (alone(0.5, 0.0), render(&src, &info, &wall_with(&[(0.5, 0.0); 8]), &req).image);
+    let [r, g, b] = mean_rgb(&eight, (0.45, 0.4, 0.55, 0.6));
+    assert!(mean(&eight, (0.45, 0.4, 0.55, 0.6)) > mean(&one, (0.45, 0.4, 0.55, 0.6)) && (r - g).abs() < 2.0 && (g - b).abs() < 2.0, "{r} {g} {b}");
 }

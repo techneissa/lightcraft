@@ -20,8 +20,7 @@ use std::sync::{Condvar, Mutex, MutexGuard, Once, OnceLock, PoisonError};
 use egui::{Color32, Painter, Pos2, Rect, Shape, Stroke, vec2};
 use lightcraft_catalog::PhotoId;
 use lightcraft_geom::Point;
-use lightcraft_pipeline::relight::{Input, light_of, shading_for};
-use lightcraft_relight::Light;
+use lightcraft_pipeline::relight::{Input, Scene, scene_of, shading_for, shading_key};
 use lightcraft_relight::overlay::{self, Contours, Marks};
 
 use super::geometry::CanvasMap;
@@ -51,19 +50,18 @@ enum What {
     Contours,
 }
 
-/// What names a geometry: the photo's field, every number the shading depends on (not Warmth: it only tints) and
-/// what is made of it.
+/// What names a geometry: the photo's field, the lights' shading of it (every light's numbers, Darken Surroundings and
+/// the exposure) and what is made of it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Key {
     field: u64,
-    light: [u64; 8],
+    lights: u64,
     shape: What,
 }
 
 impl Key {
-    fn new(input: &Input, light: &Light, ev: f64, shape: What) -> Key {
-        let l = [light.x, light.y, light.depth, light.amount, light.softness, light.darken, light.wrap, ev].map(f64::to_bits);
-        Key { field: input.key, light: l, shape }
+    fn new(input: &Input, scene: &Scene, ev: f64, shape: What) -> Key {
+        Key { field: input.key, lights: shading_key(input, scene, ev), shape }
     }
 }
 
@@ -75,7 +73,7 @@ enum Geometry {
 struct Request {
     key: Key,
     input: Input,
-    light: Light,
+    scene: Scene,
     ev: f64,
     ctx: egui::Context,
 }
@@ -111,11 +109,11 @@ fn lock(s: &Store) -> MutexGuard<'_, Slot> {
     s.slot.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// The geometry of `req`: the light's shading (the render's, when it made it already) and what is drawn of it; with
+/// The geometry of `req`: the lights' shading (the render's, when it made it already) and what is drawn of it; with
 /// the milliseconds each took.
 fn build(req: &Request) -> (Geometry, [f64; 2]) {
     let t = std::time::Instant::now();
-    let (_, shading) = shading_for(&req.input, &req.light, req.ev);
+    let (_, shading) = shading_for(&req.input, &req.scene, req.ev);
     let shaded = t.elapsed().as_secs_f64() * 1e3;
     let geometry = match req.key.shape {
         What::Crosses { grid } => Geometry::Marks(overlay::marks(&req.input.field, &shading, grid)),
@@ -213,7 +211,7 @@ pub(super) fn draw(app: &LightcraftApp, ui: &egui::Ui, p: &Painter, map: &Canvas
     if cfg!(target_arch = "wasm32") {
         return;
     }
-    let (Some(made), Some(light)) = (app.session.relight_made(id), light_of(d)) else { return };
+    let (Some(made), Some(scene)) = (app.session.relight_made(id), scene_of(d)) else { return };
     let map = map.for_mask(true);
     let p = p.with_clip_rect(clip);
     p.rect_filled(clip, 0.0, Color32::from_black_alpha(DIM));
@@ -224,18 +222,41 @@ pub(super) fn draw(app: &LightcraftApp, ui: &egui::Ui, p: &Painter, map: &Canvas
         RelightLook::Contours => What::Contours,
     };
     let ev = d.light.exposure;
-    let key = Key::new(&made.input, &light, ev, shape);
+    let key = Key::new(&made.input, &scene, ev, shape);
     let ctx = ui.ctx().clone();
     let input = made.input.clone();
-    let Some(g) = geometry_for(&key, || Request { key: key.clone(), input, light, ev, ctx }) else { return };
+    let Some(g) = geometry_for(&key, || Request { key: key.clone(), input, scene, ev, ctx }) else { return };
+    let warmth = mean_warmth(d);
     let t = lightcraft_pipeline::profiling().then(std::time::Instant::now);
     match &*g {
-        Geometry::Marks(m) => draw_marks(&p, &map, m, d.relight.warmth, clip),
-        Geometry::Contours(c) => draw_contours(ui.ctx(), &p, &map, c, d.relight.warmth, clip),
+        Geometry::Marks(m) => draw_marks(&p, &map, m, warmth, clip),
+        Geometry::Contours(c) => draw_contours(ui.ctx(), &p, &map, c, warmth, clip),
     }
+    mark_selected(app, ui, &p, &map, d, id);
     if let Some(t) = t {
         eprintln!("    relight overlay drawn {:?} (UI thread, shapes made): {:.2} ms", key.shape, t.elapsed().as_secs_f64() * 1e3);
     }
+}
+
+/// The selected light's name beside its handle, so the combined light's picture says whose control is being dragged
+/// (the handle itself, with its ring, is drawn above the dimming by the handles' own overlay).
+fn mark_selected(app: &LightcraftApp, ui: &egui::Ui, p: &Painter, map: &CanvasMap, d: &DevelopSettings, id: PhotoId) {
+    let sel = app.session.relight_selected(id);
+    let Some(l) = d.relight.lights.get(sel) else { return };
+    let Some(at) = map.try_screen(Point::new(l.x, l.y)) else { return };
+    let t = Tokens::get(ui.ctx());
+    let text = crate::i18n::tr_format!("Light {n}", n = sel + 1);
+    let galley = p.layout_no_wrap(text, t.font(11.0), Color32::WHITE);
+    // (just under the handle, inside its ring)
+    let r = Rect::from_min_size(at + vec2(-(galley.size().x + 10.0) / 2.0, 14.0), galley.size() + vec2(10.0, 4.0));
+    p.rect_filled(r, 3.0, Color32::from_black_alpha(160));
+    p.galley(r.min + vec2(5.0, 2.0), galley, Color32::WHITE);
+}
+
+/// The lights' Warmth, averaged by Amount: what tints the marks and lines of the combined light.
+fn mean_warmth(d: &DevelopSettings) -> f64 {
+    let (sum, total) = d.relight.lights.iter().filter(|l| l.amount > 0.0).fold((0.0, 0.0), |(s, t), l| (s + l.warmth * l.amount, t + l.amount));
+    if total > 0.0 { sum / total } else { 0.0 }
 }
 
 /// One mark's arm length as a fraction of half the spacing: the gain `stops` (absolute: [`overlay::peak_stops`] is the

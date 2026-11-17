@@ -511,6 +511,9 @@ pub struct Session {
     pub retouch_faces: retouch_input::FaceStore,
     /// Fork (issue #288): each photo's Relight field, made once and kept.
     pub relight: relight::RelightStore,
+    /// Fork (issue #299): the photo whose light is selected and its index (UI state, not saved in the edit; see
+    /// [`Session::relight_selected`]).
+    pub(crate) relight_selection: (Option<PhotoId>, usize),
     /// Portrait presets: the library's named people for matching, and Apply to Every Photo running (fork,
     /// `fork/portrait-presets.md`).
     pub(crate) portrait_presets: portrait_presets::matching::State,
@@ -638,6 +641,7 @@ impl Session {
             retouch_faces: Default::default(),
             portrait_presets: Default::default(),
             relight: Default::default(),
+            relight_selection: (None, 0),
             face_shared_dir: None,
             face_downloads: Default::default(),
             lensfun: Default::default(),

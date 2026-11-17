@@ -33,9 +33,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         amount: num(3, 0.7),
         softness: num(4, 0.5),
         warmth: num(5, 0.0),
-        darken: num(6, 0.0),
         wrap: num(7, 0.4),
     };
+    let darken = num(6, 0.0);
     let img = image::open(photo)?.to_rgb8();
     let long = 1600u32;
     let s = f64::from(long) / f64::from(img.width().max(img.height()));
@@ -53,7 +53,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let field = Field::prepare_model(DepthMap { width: dw, height: dh, values: &depth, kind: Kind::Depth }, &lin)?;
     eprintln!("field {w} × {h} in {:.0} ms", t.elapsed().as_secs_f64() * 1e3);
     let t = std::time::Instant::now();
-    let rig = field.rig(&light, 0.0);
+    let rig = field.rig(&light, darken, 0.0);
     let probe = |u: f32, v: f32| field.depth_plane().data.get((v * h as f32) as usize * w + (u * w as f32) as usize).copied().unwrap_or(0.0);
     eprintln!("near {:.2} far {:.2}; under the light {:.2}", field.near, field.far, probe(light.x as f32, light.y as f32));
     let shading = field.shading(&rig);

@@ -205,6 +205,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let mut target_rect = fit_rect(main_area, display_aspect, app.ui.zoom, native, ppp, app.ui.pan);
     let mut img_rect = animated_rect(ui.ctx(), &mut app.ui.zoom_anim, target_rect);
     let in_pane = |pane: Rect, image: Rect| image.translate(pane.center() - main_area.center());
+    // fork (issue #299): a scroll over a Relight handle moves that light in depth; the view doesn't take it
+    relight::claim_scroll(app, ui, &resp, &CanvasMap::new(&frame, img_rect), d);
     let navigating = areas.iter().any(|&view_area| {
         let view_img = in_pane(view_area, img_rect);
         navigate_gesture(app, ui, &resp, view_area, view_img, native) || middle_pan(app, ui, &resp, view_area, view_img)
