@@ -91,7 +91,7 @@ pub struct Rig {
     /// The largest `falloff · facing` of the photo (the Amount is given to it).
     peak: f32,
     /// The photo's exposure (stops): the guide's luminance plus this is the pixel's.
-    ev: f32,
+    pub(crate) ev: f32,
 }
 
 /// How much of a surface's light its facing decides: `cos` is the cosine between its normal and the direction to the light.

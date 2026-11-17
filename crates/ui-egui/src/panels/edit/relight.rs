@@ -265,11 +265,15 @@ fn depth_box(
         }
     }
     let ctx = ui.ctx().clone();
-    drag(app, ui, &resp, ("Relight Light", "relight.x"), |app, q| {
-        let (x, y) = (((q.x - rect.left()) / rect.width()) as f64, ((q.y - rect.top()) / rect.height()) as f64);
-        set(app, &ctx, json!({"relight.x": x.clamp(0.0, 1.0), "relight.y": y.clamp(0.0, 1.0)}));
-    });
-    if resp.hovered() {
+    // (a rim and a fill have no place: a drag in the box moves nothing and makes no undo step)
+    let places = d.relight.lights.get(sel).is_none_or(|l| l.kind.has_place());
+    if places {
+        drag(app, ui, &resp, ("Relight Light", "relight.x"), |app, q| {
+            let (x, y) = (((q.x - rect.left()) / rect.width()) as f64, ((q.y - rect.top()) / rect.height()) as f64);
+            set(app, &ctx, json!({"relight.x": x.clamp(0.0, 1.0), "relight.y": y.clamp(0.0, 1.0)}));
+        });
+    }
+    if resp.hovered() && places {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
     }
     for (i, (l, at)) in d.relight.lights.iter().zip(&spots).enumerate() {

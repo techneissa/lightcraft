@@ -12,7 +12,8 @@
 //!   light's depth, facing into the scene; each pixel sums the light of a grid of points across it, so a bigger box
 //!   is softer and wraps more round shapes.
 //! - **Rim**: no place; the near side of depth edges and the surfaces turning away from the camera there.
-//! - **Fill**: no place; lifts the shadows, more on near things than far, from the camera's side.
+//! - **Fill**: no place; lifts the shadows (by the luminance the photo shows, its exposure included), more on near things
+//!   than far, from the camera's side.
 //!
 //! Positions are normalized photo coordinates, as the point light's. Every number is read leniently: not a number is
 //! its default, the rest is clamped to its range.
@@ -204,9 +205,9 @@ impl Shape {
             }
             LightKind::Rim(r) => {
                 let w = finite(r.width, 0.0, 1.0, 0.5) as f32;
-                Shape::Rim { turned: 0.15 + 0.35 * w, reach: 0.005 + 0.03 * w }
+                Shape::Rim { turned: 0.15 + 0.35 * w, reach: 0.008 + 0.035 * w }
             }
-            LightKind::Fill(f) => Shape::Fill { near: finite(f.near, 0.0, 1.0, 0.5) as f32, top: -1.0 + 3.5 * softness },
+            LightKind::Fill(f) => Shape::Fill { near: finite(f.near, 0.0, 1.0, 0.5) as f32, top: 0.5 + 2.0 * softness },
         }
     }
 }
@@ -218,6 +219,12 @@ const BOX_GRID: usize = 4;
 /// the rings don't line up into rays.
 const H: f32 = std::f32::consts::FRAC_1_SQRT_2;
 const RING: [(f32, f32); 8] = [(1.0, 0.0), (H, H), (0.0, 1.0), (-H, H), (-1.0, 0.0), (-H, -H), (0.0, -1.0), (H, -H)];
+/// The most an edge's weight can be: a step at the nearest ring ([`RINGS`] first radius, `1 − 0.7 r`).
+const RIM_EDGE_MAX: f32 = 0.76;
+/// How much of a pixel's light a fill gives at full Amount: under half the point light's (a third), so the Amount reads about as
+/// strongly as the other types' (a fill spreads over the whole shadow, a point over a pool: at full Amount about 1.4 stops
+/// in the deepest shadows of a flat, face-on wall).
+const FILL_GAIN: f32 = 0.32;
 /// The rings' radii as shares of the reach.
 const RINGS: [f32; 3] = [0.34, 0.67, 1.0];
 
@@ -278,16 +285,20 @@ pub(crate) fn light_at(field: &Field, rig: &Rig, (u, v): (f32, f32), lz: f32, n:
                     edge = edge.max(smooth(0.12, 0.45, slz - lz) * (1.0 - 0.7 * r));
                 }
             }
-            edge * (0.1 + 0.9 * away)
+            // (the nearest ring's weight is the most a step gives: that is a whole edge)
+            (edge / RIM_EDGE_MAX).min(1.0) * (0.5 + 0.5 * away)
         }
         Shape::Fill { near, top } => {
             let (_, _, lum) = field.at(u, v);
+            // (the pixel's luminance as the photo shows it: the guide's plus the photo's exposure, as the grade reads it)
+            let l = lum + rig.ev;
             let span = (field.far - field.near).max(1e-3);
             let nearness = 1.0 - ((lz - field.near) / span).clamp(0.0, 1.0);
             let by_depth = (1.0 - near) + near * nearness;
-            let shadow = 1.0 - smooth(-6.0, *top, lum);
+            // (full in the deepest shadows, fading out linearly to nothing at `top`, a little over mid-grey)
+            let shadow = 1.0 - ((l + 6.0) / (top + 6.0)).clamp(0.0, 1.0);
             let c = (-dot(n, norm(p, [0.0, 0.0, 1.0]))).clamp(0.0, 1.0);
-            by_depth * shadow * (1.0 - rig.face + rig.face * c)
+            FILL_GAIN * by_depth * shadow * (1.0 - rig.face + rig.face * c)
         }
     };
     if value.is_finite() { value.max(0.0) } else { 0.0 }

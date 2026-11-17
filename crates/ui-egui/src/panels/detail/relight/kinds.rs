@@ -4,7 +4,8 @@
 //! - **Spot:** the aim (a second dot: the cone points at the surface under it) and a grip on the cone's edge (drag it to
 //!   widen or narrow the cone, in degrees as the photo shows them).
 //! - **Sun / Window:** an arrow from the light's handle to a tip: its direction on the photo is the sun's azimuth, its
-//!   length the height (a long arrow is a low sun, a short one a sun overhead). A hollow tip: the sun is behind the scene.
+//!   length the height (the longest arrow is a sun overhead, a short one a low sun in front of the scene). A hollow tip: the sun is
+//!   behind the scene.
 //! - **Softbox:** the rectangle (the handle is its middle), a corner grip that resizes it and a knob above its top
 //!   edge that turns it.
 //! - **Rim, Fill:** no place, so no handle (the row in the list selects them).
@@ -265,6 +266,10 @@ pub(super) fn overlay(
     c: Pos2,
     clip: Rect,
 ) -> bool {
+    // (the web build has no Relight)
+    if cfg!(target_arch = "wasm32") {
+        return false;
+    }
     let found = handles(map, l, c);
     if found.is_empty() || !clip.contains(c) {
         // (a drag that began on a handle ends where its light's handles stop)

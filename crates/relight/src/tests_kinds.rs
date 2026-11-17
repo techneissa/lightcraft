@@ -60,18 +60,25 @@ fn a_rim_lights_the_edges_that_turn_away_and_not_the_middle_or_the_background() 
     // (the brightest of the dome's last few pixels: the rim is a thin line)
     let edge = (0..=10).map(|i| at(0.2 + 0.005 * i as f32)).fold(0.0, f32::max);
     let (middle, background) = (at(0.0), at(0.42));
-    assert!(edge > 0.5 && middle < 0.05 && background < 0.05, "middle {middle} edge {edge} background {background}");
+    assert!((1.2..=2.6).contains(&edge) && middle < 0.05 && background < 0.05, "middle {middle} edge {edge} background {background}");
 }
 
 #[test]
-fn a_fill_lifts_shadows_and_leaves_highlights() {
+fn a_fill_lifts_shadows_clearly_and_fades_out_above_mid_grey() {
+    // a flat wall in bands of luminance (stops under or over 18 % grey), full Amount
     let (w, h) = (96usize, 64usize);
-    let lum: Vec<f32> = (0..w * h).map(|i| if i % w < w / 2 { -4.0 } else { 1.0 }).collect();
+    let bands = [-4.0f32, -2.0, 0.0, 1.0, 2.5];
+    let lum: Vec<f32> = (0..w * h).map(|i| bands[(i % w) * bands.len() / w]).collect();
     let f = Field::from_parts(w, h, vec![0.0; w * h], lum).unwrap();
-    let l = light(LightKind::Fill(Fill { near: 0.5 }));
-    let rig = f.rig(&l, 0.0, 0.0);
-    let (shadow, highlight) = (f.shade(&rig, 0.2, 0.5).stops, f.shade(&rig, 0.8, 0.5).stops);
-    assert!(shadow > 1.0 && highlight < 0.1, "shadow {shadow} highlight {highlight}");
+    let rig = f.rig(&light(LightKind::Fill(Fill { near: 0.5 })), 0.0, 0.0);
+    let at = |k: usize| f.shade(&rig, (k as f32 + 0.5) / bands.len() as f32, 0.5).stops;
+    let s: Vec<f32> = (0..bands.len()).map(at).collect();
+    assert!((1.0..=1.6).contains(&s[0]), "deep shadow {s:?}");
+    assert!(s[0] > s[1] && s[1] > s[2] && s[2] > s[3] && s[2] > 0.2, "fading out {s:?}");
+    assert!(s[4] < 0.05, "highlight {s:?}");
+    // the photo's exposure counts: the same wall at −2 stops is in deeper shadow
+    let dark = f.rig(&light(LightKind::Fill(Fill { near: 0.5 })), 0.0, -2.0);
+    assert!(f.shade(&dark, 0.5, 0.5).stops > s[2] + 0.3, "exposure not read: {} {}", f.shade(&dark, 0.5, 0.5).stops, s[2]);
     // and near things more than far ones
     let lz: Vec<f32> = (0..w * h).map(|i| if i % w < w / 2 { -0.7 } else { 0.0 }).collect();
     let f = Field::from_parts(w, h, lz, vec![-4.0; w * h]).unwrap();
@@ -83,7 +90,7 @@ fn a_fill_lifts_shadows_and_leaves_highlights() {
 fn a_bigger_softbox_is_softer_and_reaches_further() {
     let f = wall(0.0);
     let boxed = |s: f64| Light { x: 0.2, softness: 0.5, ..light(LightKind::Softbox(Softbox { width: s, height: s, rotation: 0.0 })) };
-    // (the share of the most lit point's light that a point far across the wall gets)
+    // (the ratio of the gain, in stops, a point far across the wall gets to the most lit point's)
     let share = |s: f64| {
         let rig = f.rig(&boxed(s), 0.0, 0.0);
         f.shade(&rig, 0.9, 0.5).stops / f.shade(&rig, 0.2, 0.5).stops.max(1e-3)

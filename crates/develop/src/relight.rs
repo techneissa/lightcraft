@@ -176,6 +176,15 @@ impl LightSettings {
         self.kind.which = self.kind.which.round();
     }
 
+    /// The light's type was `before` (an index of [`relight_kinds::NAMES`](crate::relight_kinds::NAMES)) and has just been
+    /// set: a light that becomes a Sun / Window, with Wrap still at its default, starts at Wrap 0 (a sun lights what faces it
+    /// and not the rest; Wrap still works when raised).
+    pub fn kind_changed(&mut self, before: usize) {
+        if self.kind.index() == 2 && before != 2 && self.wrap == LightSettings::default().wrap {
+            self.wrap = 0.0;
+        }
+    }
+
     fn value(&self, field: &str) -> Option<f64> {
         let mut c = self.clone();
         c.field(field).map(|v| *v)
@@ -348,10 +357,18 @@ pub fn get(s: &crate::DevelopSettings, id: &str) -> Option<f64> {
 /// Write a Relight control, kept within its range. False: not one, or the light isn't there.
 pub fn set(s: &mut crate::DevelopSettings, id: &str, v: f64) -> bool {
     let Some(spec) = find(id) else { return false };
+    let light = split(id).map(|(n, _)| n.unwrap_or(0));
+    let before = light.and_then(|n| s.relight.lights.get(n)).map(|l| l.kind.index());
     match s.relight.field(id) {
         Some(f) => {
             // (the light's type is a whole number)
             *f = if spec.id == "relight.kind" { spec.clamp(v).round() } else { spec.clamp(v) };
+            if spec.id == "relight.kind"
+                && let (Some(n), Some(before)) = (light, before)
+                && let Some(l) = s.relight.lights.get_mut(n)
+            {
+                l.kind_changed(before);
+            }
             true
         }
         None => false,

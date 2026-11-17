@@ -133,6 +133,7 @@ fn add(s: &mut Session, p: &Value) -> Result<Value> {
         if let Some(k) = p.get("kind").filter(|k| !k.is_null()) {
             l.kind.which = KindSettings::kind_of(k).ok_or_else(|| bad(c, format!("no light type {k}: point, spot, sun, softbox, rim or fill (or 0..5)")))?;
         }
+        l.kind_changed(0);
         l.sanitize();
         d.relight.lights.push(l);
         Ok(d.relight.lights.len() - 1)

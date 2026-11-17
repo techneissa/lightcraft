@@ -235,4 +235,17 @@ mod tests {
         s.relight.lights.push(LightSettings::default());
         assert!(set(&mut s, "relight.1.fillNear", 70.0) && get(&s, "relight.0.fillNear") == Some(50.0));
     }
+
+    #[test]
+    fn a_light_that_becomes_a_sun_starts_at_wrap_0_and_wrap_still_works() {
+        let mut s = DevelopSettings::default();
+        assert_eq!(get(&s, "relight.wrap"), Some(40.0));
+        assert!(set(&mut s, "relight.kind", 2.0));
+        assert_eq!(get(&s, "relight.wrap"), Some(0.0));
+        assert!(set(&mut s, "relight.wrap", 30.0) && set(&mut s, "relight.kind", 1.0) && set(&mut s, "relight.kind", 2.0));
+        assert_eq!(get(&s, "relight.wrap"), Some(30.0), "a Wrap that was set is kept");
+        // (a Wrap read from a saved file is never touched)
+        let v = json!({"fork_relight": {"lights": [{"kind": "sun"}]}});
+        assert_eq!(DevelopSettings::from_json(&v).unwrap().relight.lights[0].wrap, 40.0);
+    }
 }
