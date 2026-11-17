@@ -200,7 +200,7 @@ fn disk_gate(folder: Option<&OpenedFolder>) -> Option<lightcraft_preview::WriteG
     Some(std::sync::Arc::new(move || folder.check().is_ok()))
 }
 
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Default, Serialize)]
 #[serde(default, rename_all = "camelCase")]
 struct PresetsFile {
     user: Vec<Preset>,
@@ -208,6 +208,47 @@ struct PresetsFile {
     /// Favourite profiles, and the recently applied ones (newest first).
     profile_favorites: Vec<String>,
     profile_recent: Vec<String>,
+    /// The user's light presets (fork, issue #301).
+    relight_presets: Vec<lightcraft_develop::relight_presets::LightPreset>,
+}
+
+/// presets.json as it is read: every list holds its entries as they are written, and each is read alone, so one entry that
+/// isn't what it should be (a name that is `null`, a number among the favourites) costs that entry and not the file: the
+/// rest of the user's presets, favourites and profile lists are kept and nothing is set aside.
+#[derive(Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+struct PresetsRead {
+    #[serde(deserialize_with = "entries")]
+    user: Vec<serde_json::Value>,
+    #[serde(deserialize_with = "entries")]
+    favorites: Vec<serde_json::Value>,
+    #[serde(deserialize_with = "entries")]
+    profile_favorites: Vec<serde_json::Value>,
+    #[serde(deserialize_with = "entries")]
+    profile_recent: Vec<serde_json::Value>,
+    #[serde(deserialize_with = "entries")]
+    relight_presets: Vec<serde_json::Value>,
+}
+
+/// A list's entries; anything that isn't a list is an empty one.
+fn entries<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Vec<serde_json::Value>, D::Error> {
+    match serde_json::Value::deserialize(d)? {
+        serde_json::Value::Array(a) => Ok(a),
+        _ => Ok(Vec::new()),
+    }
+}
+
+/// The entries of `list` that read as `T`, and how many didn't.
+fn read_each<T: serde::de::DeserializeOwned>(list: Vec<serde_json::Value>) -> (Vec<T>, usize) {
+    let total = list.len();
+    let ok: Vec<T> = list.into_iter().filter_map(|v| serde_json::from_value(v).ok()).collect();
+    let skipped = total - ok.len();
+    (ok, skipped)
+}
+
+/// The strings among `list`.
+fn strings(list: Vec<serde_json::Value>) -> Vec<String> {
+    list.into_iter().filter_map(|v| v.as_str().map(str::to_string)).collect()
 }
 
 /// The state presets.json was last written (or read) from. Saving checks the preset list's
@@ -219,6 +260,7 @@ struct PresetsSaved {
     generation: u64,
     profile_favorites: Vec<String>,
     profile_recent: Vec<String>,
+    relight_presets: Vec<lightcraft_develop::relight_presets::LightPreset>,
     /// Hash of the bytes written: a list borrowed mutably but left as it was isn't rewritten.
     hash: u64,
 }
@@ -229,13 +271,17 @@ impl PresetsSaved {
             generation: s.presets.generation(),
             profile_favorites: s.profile_favorites.clone(),
             profile_recent: s.profile_recent.clone(),
+            relight_presets: s.relight_presets.clone(),
             hash: 0,
         }
     }
 
     /// `s` changed its presets or profile lists since this state.
     fn differs(&self, s: &Session) -> bool {
-        self.generation != s.presets.generation() || self.profile_favorites != s.profile_favorites || self.profile_recent != s.profile_recent
+        self.generation != s.presets.generation()
+            || self.profile_favorites != s.profile_favorites
+            || self.profile_recent != s.profile_recent
+            || self.relight_presets != s.relight_presets
     }
 }
 
@@ -382,6 +428,7 @@ fn presets_json(s: &Session) -> String {
         favorites: presets.iter().filter(|p| p.builtin && p.favorite).map(|p| p.id.clone()).collect(),
         profile_favorites: s.profile_favorites.clone(),
         profile_recent: s.profile_recent.clone(),
+        relight_presets: s.relight_presets.clone(),
     };
     serde_json::to_string_pretty(&f).unwrap_or_default()
 }
@@ -745,13 +792,20 @@ impl Session {
             settings.blocked.push(crate::book::store::NAME);
         }
         settings.warnings.extend(loaded.warnings);
-        // presets
-        if let Some(f) = settings.read::<PresetsFile>(files.as_mut(), "presets.json") {
+        // presets: what the last library left in the session is not this one's
+        self.presets.retain(|p| p.builtin);
+        self.presets.iter_mut().for_each(|p| p.favorite = false);
+        self.profile_favorites.clear();
+        self.profile_recent.clear();
+        self.relight_presets.clear();
+        if let Some(f) = settings.read::<PresetsRead>(files.as_mut(), "presets.json") {
+            let favorites = strings(f.favorites);
             for p in &mut self.presets {
-                p.favorite = p.builtin && f.favorites.contains(&p.id) || (!p.builtin && p.favorite);
+                p.favorite = p.builtin && favorites.contains(&p.id) || (!p.builtin && p.favorite);
             }
+            let (user, bad_user) = read_each::<Preset>(f.user);
             let mut ids: std::collections::HashSet<String> = self.presets.iter().map(|p| p.id.clone()).collect();
-            for u in f.user {
+            for u in user {
                 if ids.insert(u.id.clone()) {
                     self.presets.push(u);
                 }
@@ -761,8 +815,16 @@ impl Session {
                     || self.lut_profiles.iter().any(|p| &p.id == id)
                     || self.dcp_profiles.iter().any(|p| &p.id == id)
             };
-            self.profile_favorites = f.profile_favorites.into_iter().filter(known).collect();
-            self.profile_recent = f.profile_recent.into_iter().filter(known).take(crate::presets::RECENT_PROFILES).collect();
+            self.profile_favorites = strings(f.profile_favorites).into_iter().filter(known).collect();
+            self.profile_recent = strings(f.profile_recent).into_iter().filter(known).take(crate::presets::RECENT_PROFILES).collect();
+            let (light, bad_light) = read_each::<lightcraft_develop::relight_presets::LightPreset>(f.relight_presets);
+            let (light, bad_names) = crate::relight_presets::read_user(light);
+            self.relight_presets = light;
+            // (what is left out or cut is kept in a copy of the file, as for the saved locations: the next save writes the good ones only)
+            let bad = bad_user + bad_light + bad_names;
+            if bad > 0 {
+                settings.set_aside(files.as_mut(), "presets.json", &format!("{bad} preset(s) in it aren't valid or were left out or cut"));
+            }
         }
         // view state
         if let Some(v) = settings.read::<ViewFile>(files.as_mut(), "view.json") {

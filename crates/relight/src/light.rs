@@ -136,7 +136,7 @@ impl Field {
         let (x, y) = (f(light.x, -0.5, 1.5, 0.5), f(light.y, -0.5, 1.5, 0.5));
         let depth = f(light.depth, 0.0, 1.0, 0.3);
         // from in front of the nearest thing (55 % of its distance) to the farthest
-        let near = self.near - 0.6;
+        let near = self.near - crate::probe::NEAR_MARGIN;
         let lz = near + depth * (self.far - near).max(0.1);
         let pos = self.point(x, y, lz);
         let zl = lz.exp();

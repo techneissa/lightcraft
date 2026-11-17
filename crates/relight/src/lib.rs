@@ -23,6 +23,7 @@ pub mod light;
 mod occluder;
 pub mod overlay;
 mod pattern;
+pub mod probe;
 mod projector;
 mod rim;
 pub mod shadow;

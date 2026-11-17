@@ -69,6 +69,13 @@ impl Source {
     }
 }
 
+/// Where a photo's depth stands ([`Session::relight_depth`]).
+pub(crate) enum Depth {
+    Ready,
+    Finding,
+    Missing,
+}
+
 /// A made field and what the section shows of it.
 pub struct Made {
     pub input: Input,
@@ -711,6 +718,36 @@ impl Session {
         }
     }
 
+    /// Where photo `id`'s depth stands for the light presets, which place their lights by the subject's own depth: kept
+    /// ([`Depth::Ready`]), being found by the worker (started here when nothing has started it, a depth that was
+    /// cancelled or failed is not tried again: [`Depth::Finding`]), or not coming ([`Depth::Missing`]: cancelled, failed,
+    /// no model). Nothing runs on this thread.
+    pub(crate) fn relight_depth(&mut self, id: PhotoId) -> Depth {
+        let Some(p) = self.catalog.photo(id).cloned() else { return Depth::Missing };
+        let key = self.relight_key(&p);
+        if self.relight.get(&key).is_some() {
+            return Depth::Ready;
+        }
+        self.relight_start(&p, &key);
+        if self.relight.lock().busy.contains(&key) { Depth::Finding } else { Depth::Missing }
+    }
+
+    /// Tests: photo `id`'s depth failed with `why`.
+    #[cfg(test)]
+    pub(crate) fn relight_test_failure(&mut self, id: PhotoId, why: &str) {
+        let Some(p) = self.catalog.photo(id).cloned() else { return };
+        let key = self.relight_key(&p);
+        self.relight.put(&key, Err(why.to_string()));
+    }
+
+    /// Tests: photo `id` has `field` as its depth.
+    #[cfg(test)]
+    pub(crate) fn relight_test_field(&mut self, id: PhotoId, field: Field) {
+        let Some(p) = self.catalog.photo(id).cloned() else { return };
+        let key = self.relight_key(&p);
+        self.relight.put(&key, Ok(made(&key, field, Source::Model)));
+    }
+
     /// For an export set up now and run later: photo `id`'s field, waited for or made in the export's worker
     /// ([`ExportRelight::fill`]). `None` when the photo's light is off.
     pub(crate) fn relight_export(&mut self, id: PhotoId) -> Option<ExportRelight> {
@@ -822,6 +859,33 @@ mod tests {
             s.catalog.apply(op).unwrap();
         }
         (s, ids)
+    }
+
+    /// A light preset applied while the photo's depth is still being found changes nothing and waits for nothing; one applied
+    /// to a photo whose depth was cancelled does not start it again (issue #301).
+    #[test]
+    fn a_light_preset_never_makes_the_depth_itself_and_never_restarts_a_cancelled_one() {
+        let (mut s, ids) = relit(1);
+        let id = ids[0];
+        s.execute("library.select", &json!({"ids": [id.0]})).unwrap();
+        let key = s.relight_key(&s.catalog.photo(id).unwrap().clone());
+        let before = (*s.develop_of(id).unwrap()).clone();
+        s.relight.lock().busy.push(key.clone());
+        let r = s.execute("relight.applyPreset", &json!({"preset": "rembrandt"})).unwrap();
+        assert_eq!((r["applied"].as_bool(), r["finding"].as_bool()), (Some(false), Some(true)));
+        assert_eq!(*s.develop_of(id).unwrap(), before);
+        assert!(s.relight.get(&key).is_none() && s.relight.lock().queue.is_empty(), "nothing was made or queued");
+        // cancelled from the activity ring: the lights go on with their depth as written, and nothing is started
+        {
+            let mut st = s.relight.lock();
+            st.busy.clear();
+            st.cancelled.push(key.clone());
+        }
+        let r = s.execute("relight.applyPreset", &json!({"preset": "rembrandt"})).unwrap();
+        assert_eq!(r["applied"].as_bool(), Some(true));
+        let st = s.relight.lock();
+        assert!(st.busy.is_empty() && st.queue.is_empty() && st.cancelled.contains(&key), "a cancelled depth stays cancelled");
+        assert!(st.made.is_empty());
     }
 
     #[test]
