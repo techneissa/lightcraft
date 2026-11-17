@@ -170,26 +170,25 @@ fn delete(s: &mut Session, p: &Value) -> Result<Value> {
 fn set_gel(s: &mut Session, p: &Value) -> Result<Value> {
     let c = "relight.setGel";
     let named = p.get("gel").filter(|v| !v.is_null());
-    let (hue, strength) = match named {
-        Some(Value::String(name)) => LightEffects::gel(name).ok_or_else(|| {
+    let num = |k: &str| p.get(k).filter(|v| !v.is_null()).map(|v| v.as_f64().ok_or_else(|| bad(c, format!("{k} is a number")))).transpose();
+    let (hue, strength) = (num("hue")?, num("strength")?);
+    // a named gel gives both numbers (`strength` overrides its own); without one a missing number is the light's own
+    let preset = match named {
+        Some(Value::String(name)) => Some(LightEffects::gel(name).ok_or_else(|| {
             let names: Vec<&str> = GELS.iter().map(|g| g.0).collect();
             bad(c, format!("no gel named {name:?}: the named gels are {}", names.join(", ")))
-        })?,
+        })?),
         Some(_) => return Err(bad(c, "gel is a name")),
-        None => {
-            let num = |k: &str| p.get(k).filter(|v| !v.is_null()).map(|v| v.as_f64().ok_or_else(|| bad(c, format!("{k} is a number")))).transpose();
-            match (num("hue")?, num("strength")?) {
-                (None, None) => return Err(bad(c, "give a gel name, or a hue and a strength (strength 0 takes the gel off)")),
-                (hue, strength) => (hue.unwrap_or(0.0), strength.unwrap_or(80.0)),
-            }
+        None if hue.is_none() && strength.is_none() => {
+            return Err(bad(c, "give a gel name, or a hue and/or a strength (strength 0 takes the gel off)"));
         }
+        None => None,
     };
-    // (a named gel with its own strength: `strength` overrides it)
-    let strength = p.get("strength").and_then(Value::as_f64).unwrap_or(strength);
     change(s, c, "Set Gel", |d, sel| {
         let i = light_param(p, c, d, sel)?;
         let e = &mut d.relight.lights[i].effects;
-        (e.gel_hue, e.gel_strength) = (hue, strength);
+        let (h, k) = preset.map_or((hue.unwrap_or(e.gel_hue), strength.unwrap_or(e.gel_strength)), |(h, k)| (h, strength.unwrap_or(k)));
+        (e.gel_hue, e.gel_strength) = (h, k);
         d.relight.lights[i].sanitize();
         // (the selection stays where it was)
         Ok(sel)
@@ -269,7 +268,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Set Gel",
             [],
             None,
-            "{gel?: Warm Amber|Teal|Magenta|Deep Blue|Red, hue?: 0..360 degrees, strength?: 0..100, index?: light (default the selected one)} → {index, count} — put a gel on a light: a named one (hue and strength set together; strength overrides its own), or any hue (0 red, 120 green, 240 blue) with a strength; strength 0 takes the gel off. Warmth stays. The gel is also the controls relight.<n>.gelHue and .gelStrength; one undo step",
+            "{gel?: Warm Amber|Teal|Magenta|Deep Blue|Red, hue?: 0..360 degrees, strength?: 0..100, index?: light (default the selected one)} → {index, count} — put a gel on a light: a named one (hue and strength set together; strength overrides its own), or any hue (0 red, 120 green, 240 blue) and/or strength (one alone keeps the light's other); strength 0 takes the gel off. Warmth stays. The gel is also the controls relight.<n>.gelHue and .gelStrength; one undo step",
             has_active,
             set_gel
         ),
@@ -380,6 +379,12 @@ mod tests {
         assert_eq!(effects(&s, 1).gel_strength, 0.0);
         s.execute("edit.undo", &json!({})).unwrap();
         assert_eq!(effects(&s, 1).gel_strength, 55.0);
+        // a hue alone keeps the strength, a strength alone keeps the hue
+        s.execute("relight.setGel", &json!({"hue": 300})).unwrap();
+        assert_eq!((effects(&s, 1).gel_hue, effects(&s, 1).gel_strength), (300.0, 55.0));
+        s.execute("relight.setGel", &json!({"strength": 20})).unwrap();
+        assert_eq!((effects(&s, 1).gel_hue, effects(&s, 1).gel_strength), (300.0, 20.0));
+        s.execute("relight.setGel", &json!({"hue": 90, "strength": 55})).unwrap();
         // nothing named, a gel that does not exist, a light that is not there: errors
         assert!(s.execute("relight.setGel", &json!({})).is_err());
         assert!(s.execute("relight.setGel", &json!({"gel": "chartreuse"})).is_err());

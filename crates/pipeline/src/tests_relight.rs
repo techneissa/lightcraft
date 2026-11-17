@@ -273,3 +273,36 @@ fn a_pattern_stripes_the_wall_and_haze_brightens_around_the_light() {
     assert!(mean(&hazy, far) > mean(&plain, far) + 1.0, "{} {}", mean(&hazy, far), mean(&plain, far));
     assert!(mean(&hazy, far) - mean(&plain, far) > mean(&hazy, near) - mean(&plain, near), "haze is no stronger over what is far");
 }
+
+#[test]
+fn the_same_effect_on_another_light_is_another_scene() {
+    // two lights, a red gel on the first or on the second: the shading key names which, and the render puts the colour
+    // on the right side
+    let (src, info) = wall();
+    let req = RenderRequest::fit(W, H);
+    let with_gel_on = |i: usize| {
+        let mut s = wall_with(&[(0.2, 0.0), (0.8, 0.0)]);
+        (s.relight.lights[i].effects.gel_hue, s.relight.lights[i].effects.gel_strength) = (0.0, 100.0);
+        s
+    };
+    let (first, second) = (with_gel_on(0), with_gel_on(1));
+    let input = info.relight.as_ref().unwrap();
+    let key = |s: &DevelopSettings| relight::shading_key(input, &relight::scene_of(s).unwrap(), 0.0);
+    assert_ne!(key(&first), key(&second), "the key doesn't say which light has the gel");
+    // (and shading_for, asked in turn, gives each its own)
+    for _ in 0..2 {
+        for s in [&first, &second] {
+            let (k, _) = relight::shading_for(input, &relight::scene_of(s).unwrap(), 0.0);
+            assert_eq!(k, key(s));
+        }
+    }
+    let redness = |img: &Rgba8, b: (f32, f32, f32, f32)| {
+        let [r, g, _] = mean_rgb(img, b);
+        r / g.max(1.0)
+    };
+    let (left, right) = ((0.1, 0.4, 0.3, 0.6), (0.7, 0.4, 0.9, 0.6));
+    let a = render(&src, &info, &first, &req).image;
+    assert!(redness(&a, left) > 1.5 * redness(&a, right), "the gel on the first light isn't on the left");
+    let b = render(&src, &info, &second, &req).image;
+    assert!(redness(&b, right) > 1.5 * redness(&b, left), "the gel on the second light isn't on the right");
+}

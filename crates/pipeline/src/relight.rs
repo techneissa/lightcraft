@@ -191,9 +191,11 @@ pub fn shading_key(input: &Input, scene: &Scene, ev: f64) -> u64 {
                 std::hash::Hash::hash(&v.to_bits(), h);
             }
         }
-        // (a scene whose lights have no effects hashes as it did before them)
-        for e in scene.effects.iter().filter(|e| **e != Effects::default()) {
-            std::hash::Hash::hash(&format!("{e:?}"), h);
+        // each light's effects with the light's place in the list (a scene whose lights have none hashes as it did before
+        // them; the same effect on another light is another scene)
+        for (i, e) in scene.effects.iter().enumerate().filter(|(_, e)| **e != Effects::default()) {
+            std::hash::Hash::hash(&(i, e.gel_hue.to_bits(), e.gel_strength.to_bits(), e.pattern, e.scale.to_bits()), h);
+            std::hash::Hash::hash(&(e.rotation.to_bits(), e.softness.to_bits(), e.haze.to_bits()), h);
         }
     })
 }

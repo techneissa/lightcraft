@@ -175,22 +175,99 @@ pub fn transmission(pattern: Pattern, u: f32, v: f32, w: f32) -> f32 {
             let axis = |c: f32| soft_edge((c - c.floor() - 0.5).abs(), 0.43, (0.5 * w).min(0.07));
             axis(0.5 * u) * axis(0.5 * v)
         }
-        Pattern::Leaves => 1.0 - cover(u, v, w, 2, leaf),
-        Pattern::Dapple => 0.08 + 0.92 * cover(u, v, w, 1, spot),
+        Pattern::Leaves | Pattern::Dapple => cell_pattern(pattern, u, v, w, None),
     };
     if t.is_finite() { t.clamp(0.0, 1.0) } else { 1.0 }
 }
 
-/// The largest of `per_cell` shapes' coverage from the cell of `(u, v)` and its eight neighbours.
-fn cover(u: f32, v: f32, w: f32, per_cell: u32, shape: impl Fn([f32; 2], u32, f32) -> f32) -> f32 {
+/// Leaves and dapple at `(u, v)` (cells): made of shapes scattered one or two to a cell, which is dear per pixel, so
+/// the field's pattern bakes them into a texture ([`Baked`]) that repeats every `period` cells.
+fn cell_pattern(pattern: Pattern, u: f32, v: f32, w: f32, period: Option<i32>) -> f32 {
+    match pattern {
+        Pattern::Leaves => 1.0 - cover(u, v, w, 2, period, leaf),
+        _ => 0.08 + 0.92 * cover(u, v, w, 1, period, spot),
+    }
+}
+
+/// Cells a baked texture repeats over, and its texels per cell (a texel is a 24th of a cell: an edge sharper than that
+/// reads as that soft).
+const TILE: usize = 16;
+const TEXELS: usize = 24;
+
+/// A leaves or dapple pattern baked into a tileable texture: at its own softness (`sharp`) and with edges three times as
+/// wide (`wide`, which a surface seen at a grazing angle takes, in part), and its mean.
+struct Baked {
+    n: usize,
+    sharp: Vec<f32>,
+    wide: Vec<f32>,
+    mean: f32,
+}
+
+static BAKED: std::sync::Mutex<Vec<((Pattern, u32), std::sync::Arc<Baked>)>> = std::sync::Mutex::new(Vec::new());
+
+impl Baked {
+    fn make(pattern: Pattern, edge: f32) -> Baked {
+        let n = TILE * TEXELS;
+        let draw = |w: f32| -> Vec<f32> {
+            let mut t = vec![0f32; n * n];
+            t.par_chunks_mut(n).enumerate().for_each(|(y, row)| {
+                for (x, out) in row.iter_mut().enumerate() {
+                    let (u, v) = ((x as f32 + 0.5) / TEXELS as f32, (y as f32 + 0.5) / TEXELS as f32);
+                    *out = cell_pattern(pattern, u, v, w, Some(TILE as i32)).clamp(0.0, 1.0);
+                }
+            });
+            t
+        };
+        let sharp = draw(edge);
+        let mean = sharp.iter().sum::<f32>() / sharp.len().max(1) as f32;
+        Baked { n, sharp, wide: draw(3.0 * edge), mean }
+    }
+
+    /// The one for `pattern` at `edge`, made once and kept (the newest four).
+    fn of(pattern: Pattern, edge: f32) -> std::sync::Arc<Baked> {
+        let key = (pattern, edge.to_bits());
+        if let Some((_, b)) = BAKED.lock().unwrap_or_else(std::sync::PoisonError::into_inner).iter().find(|(k, _)| *k == key) {
+            return b.clone();
+        }
+        let b = std::sync::Arc::new(Baked::make(pattern, edge));
+        let mut kept = BAKED.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        kept.retain(|(k, _)| *k != key);
+        kept.insert(0, (key, b.clone()));
+        kept.truncate(4);
+        b
+    }
+
+    /// The texture `tex` at `(u, v)` in cells, bilinear and repeating.
+    fn sample(&self, tex: &[f32], u: f32, v: f32) -> f32 {
+        let n = self.n;
+        let period = TILE as f32;
+        let wrapped = |c: f32| (c - period * (c / period).floor()) * TEXELS as f32 - 0.5;
+        let (fx, fy) = (wrapped(u), wrapped(v));
+        let (x0, y0) = (fx.floor(), fy.floor());
+        let (tx, ty) = (fx - x0, fy - y0);
+        let at = |x: f32, y: f32| {
+            let (xi, yi) = ((x as i64).rem_euclid(n as i64) as usize, (y as i64).rem_euclid(n as i64) as usize);
+            tex.get(yi * n + xi).copied().unwrap_or(1.0)
+        };
+        let top = at(x0, y0) + (at(x0 + 1.0, y0) - at(x0, y0)) * tx;
+        let bottom = at(x0, y0 + 1.0) + (at(x0 + 1.0, y0 + 1.0) - at(x0, y0 + 1.0)) * tx;
+        top + (bottom - top) * ty
+    }
+}
+
+/// The largest of `per_cell` shapes' coverage from the cell of `(u, v)` and its eight neighbours. With `period`
+/// the cells' shapes repeat every `period` cells (the neighbours' hashes wrap), which is how a pattern is baked into a
+/// texture that tiles.
+fn cover(u: f32, v: f32, w: f32, per_cell: u32, period: Option<i32>, shape: impl Fn([f32; 2], u32, f32) -> f32) -> f32 {
     let (ix, iy) = (u.floor() as i32, v.floor() as i32);
+    let wrap = |i: i32| period.map_or(i, |p| i.rem_euclid(p.max(1)));
     let mut best = 0f32;
     for dy in -1..=1 {
         for dx in -1..=1 {
+            let (cx, cy) = (ix.wrapping_add(dx), iy.wrapping_add(dy));
             for k in 0..per_cell {
-                let h = hash(ix.wrapping_add(dx), iy.wrapping_add(dy), k);
-                let centre =
-                    [(ix.wrapping_add(dx)) as f32 + 0.15 + 0.7 * rand(h), (iy.wrapping_add(dy)) as f32 + 0.15 + 0.7 * rand(h.rotate_left(11))];
+                let h = hash(wrap(cx), wrap(cy), k);
+                let centre = [cx as f32 + 0.15 + 0.7 * rand(h), cy as f32 + 0.15 + 0.7 * rand(h.rotate_left(11))];
                 best = best.max(shape([u - centre[0], v - centre[1]], hash(h as i32, k as i32, 7), w));
             }
         }
@@ -218,7 +295,7 @@ fn spot(p: [f32; 2], h: u32, w: f32) -> f32 {
 impl Field {
     /// The pattern of effects `e` over the field, laid on the surfaces as the light would throw it (`rig`: the light
     /// set up on this field): 0 where it shades, 1 where it lets the light through, one value per field pixel. All
-    /// 1 for no pattern.
+    /// 1 for no pattern. A surface beside or behind the light's plane gets the pattern's mean coverage.
     pub fn pattern_plane(&self, rig: &Rig, e: &Effects) -> Vec<f32> {
         let (w, h) = (self.width, self.height);
         let n = w * h;
@@ -233,6 +310,14 @@ impl Field {
         let (freq, edge) = (e.frequency(), e.edge());
         let turn = if e.rotation.is_finite() { (e.rotation % 360.0).to_radians() as f32 } else { 0.0 };
         let (sin, cos) = turn.sin_cos();
+        let baked = matches!(e.pattern, Pattern::Leaves | Pattern::Dapple).then(|| Baked::of(e.pattern, edge));
+        // (past the light's plane the pattern fades to its own mean coverage: half for blinds, the bars' share for
+        // panes, what the baked texture holds for the others)
+        let mean = match (&baked, e.pattern) {
+            (Some(b), _) => b.mean,
+            (None, Pattern::Panes) => 0.86 * 0.86,
+            _ => 0.5,
+        };
         let mut plane = vec![1f32; n];
         plane.par_chunks_mut(w.max(1)).enumerate().for_each(|(y, row)| {
             let v = (y as f32 + 0.5) / h as f32;
@@ -248,8 +333,15 @@ impl Field {
                 let (cu, cv) = ((tx * cos - ty * sin) * freq, (tx * sin + ty * cos) * freq);
                 // (a surface seen at a grazing angle to the light smears the pattern: its edges widen)
                 let incidence = (-(normal[0] * d[0] + normal[1] * d[1] + normal[2] * d[2]) / len).abs().clamp(0.35, 1.0);
-                let t = transmission(e.pattern, cu, cv, edge / incidence);
-                let value = 0.5 + (t - 0.5) * ahead;
+                let t = match &baked {
+                    Some(b) => {
+                        let widen = ((1.0 / incidence - 1.0) / 1.86).clamp(0.0, 1.0);
+                        let sharp = b.sample(&b.sharp, cu, cv);
+                        sharp + (b.sample(&b.wide, cu, cv) - sharp) * widen
+                    }
+                    None => transmission(e.pattern, cu, cv, edge / incidence),
+                };
+                let value = mean + (t - mean) * ahead;
                 *out = if value.is_finite() { value } else { 1.0 };
             }
         });
@@ -333,9 +425,10 @@ mod tests {
         assert!(teal[0] < teal[1] && teal[0] < teal[2], "{teal:?}");
         let magenta = tinted(grey, Effects { gel_hue: 300.0, gel_strength: 1.0, ..Effects::default() }.light_colour(0.0));
         assert!(magenta[1] < magenta[0] && magenta[1] < magenta[2], "{magenta:?}");
-        // half the strength is between none and full
+        // half the strength is redder than none and less red than full (red over green, so the grey's own ratio is 1)
         let half = tinted(grey, Effects { gel_strength: 0.5, ..red }.light_colour(0.0));
-        assert!(half[0] > c[1] && half[0] < c[0], "{half:?} {c:?}");
+        let ratio = |c: [f32; 3]| c[0] / c[1];
+        assert!(ratio(half) > 1.05 && ratio(half) < ratio(c), "{half:?} {c:?}");
         // without a gel the colour is Warmth's tilt and no tint, to the bit
         for w in [-1.0, -0.3, 0.0, 0.6, 1.0] {
             assert_eq!(Effects::default().light_colour(w), (warmth_tilt(w), 0.0));
@@ -399,15 +492,17 @@ mod tests {
         // lit and unlit both appear, in about equal shares
         let lit = plane.iter().filter(|v| **v > 0.5).count() as f32 / plane.len() as f32;
         assert!((0.35..0.65).contains(&lit), "{lit}");
-        // a floor that recedes with the picture's height: the stripes bunch up with distance
+        // a floor that recedes down the picture (the bottom is the far side): the stripes, level and evenly spaced on the
+        // wall, spread out steadily towards the far side as the surface's distance from the light grows
         let floor = flat(|_, y| -0.5 + 1.0 * y as f32 / 128.0);
         let rig = floor.rig(&Light { depth: 0.0, ..light() }, 0.0, 0.0);
         let plane = floor.pattern_plane(&rig, &e);
         let ed = edges(&plane, w, h, w / 2);
         assert!(ed.len() >= 4, "{ed:?}");
         let gaps: Vec<usize> = ed.windows(2).map(|p| p[1] - p[0]).collect();
-        let (lo, hi) = (gaps.iter().min().copied().unwrap_or(0), gaps.iter().max().copied().unwrap_or(0));
-        assert!(hi > lo + lo / 2, "stripes didn't bend over the floor {gaps:?}");
+        let (first, last) = (gaps.first().copied().unwrap_or(0), gaps.last().copied().unwrap_or(0));
+        assert!(last > first + first / 2, "the stripes don't spread out towards the far side {gaps:?}");
+        assert!(gaps.windows(2).all(|p| p[1] + 1 >= p[0]), "the stripes' spacing doesn't grow steadily {gaps:?}");
     }
 
     #[test]
@@ -417,7 +512,33 @@ mod tests {
         let f = flat(|x, _| if x < 96 { 0.0 } else { 0.4 });
         let plane = f.pattern_plane(&f.rig(&light(), 0.0, 0.0), &e);
         let (w, h) = (f.width, f.height);
-        assert_ne!(edges(&plane, w, h, 40), edges(&plane, w, h, 150));
+        // each side's stripes are level on their own, and the far side's are somewhere else
+        let (near_a, near_b, far_a, far_b) = (edges(&plane, w, h, 20), edges(&plane, w, h, 80), edges(&plane, w, h, 120), edges(&plane, w, h, 180));
+        let same = |a: &[usize], b: &[usize]| a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.abs_diff(*y) <= 1);
+        assert!(same(&near_a, &near_b) && same(&far_a, &far_b), "{near_a:?} {near_b:?} {far_a:?} {far_b:?}");
+        assert!(!same(&near_a, &far_a), "the step moved nothing: {near_a:?} {far_a:?}");
+    }
+
+    #[test]
+    fn beside_the_lights_plane_a_pattern_fades_to_its_own_mean_coverage() {
+        // the light at the far end of this scene sits at log depth 0 (the farthest thing), so the right half lies in the
+        // light's own plane and gets each pattern's mean; the left half, nearer, gets the pattern
+        let f = flat(|x, _| if x < 96 { -0.6 } else { 0.0 });
+        let rig = f.rig(&Light { depth: 1.0, ..light() }, 0.0, 0.0);
+        let at = |plane: &[f32], xs: std::ops::Range<usize>| -> Vec<f32> {
+            (0..128).flat_map(|y| xs.clone().map(move |x| (x, y))).map(|(x, y)| plane[y * 192 + x]).collect()
+        };
+        let spread = |v: &[f32]| v.iter().copied().fold(0.0, f32::max) - v.iter().copied().fold(f32::MAX, f32::min);
+        for (pattern, mean) in [(Pattern::Blinds, Some(0.5)), (Pattern::Panes, Some(0.86 * 0.86)), (Pattern::Leaves, None), (Pattern::Dapple, None)] {
+            let plane = f.pattern_plane(&rig, &Effects { pattern, ..Effects::default() });
+            let beside = at(&plane, 130..190);
+            assert!(spread(&beside) < 1e-4, "{pattern:?}: the plane's own side isn't flat: {}", spread(&beside));
+            match mean {
+                Some(m) => assert!((beside[0] - m).abs() < 1e-3, "{pattern:?}: {} is not {m}", beside[0]),
+                None => assert!((0.3..0.95).contains(&beside[0]), "{pattern:?}: {}", beside[0]),
+            }
+            assert!(spread(&at(&plane, 5..60)) > 0.5, "{pattern:?} shows no pattern in front of the light");
+        }
     }
 
     #[test]
@@ -462,7 +583,12 @@ mod tests {
         // teal: cool and green (more green than the mean of its red and blue: a negative tint), no warm, no magenta
         assert!(s.cool.is_some() && s.green.is_some() && s.warm.is_none() && s.magenta.is_none());
         assert!(sh.tilt_down > 0.0 && sh.tint_down > 0.0 && sh.tint_up == 0.0, "{} {} {}", sh.tilt_down, sh.tint_up, sh.tint_down);
+        // the planes hold the light: strong where the light is, and the green plane is as wide as the cool one
+        let top = |p: &Option<Vec<f32>>| p.as_ref().map_or(0.0, |v| v.iter().copied().fold(0.0, f32::max));
+        assert!(top(&s.cool) > 0.3 && top(&s.green) > 0.3 && (top(&s.cool) - top(&s.green)).abs() < 0.05, "{} {}", top(&s.cool), top(&s.green));
         let plain = f.shading_of(&[crate::Part { lobe: &lobe, gain: rig.gain(), tilt: 0.3, tint: 0.0 }], 1.0, 0.0);
-        assert!(plain.bytes() == 192 * 128 * 12 && plain.split(8, 8, &|x, y| (x / 8.0, y / 8.0)).magenta.is_none());
+        // a light with a tilt and no gel makes a warm plane only, and holds no tint memory
+        let p = plain.split(8, 8, &|x, y| (x / 8.0, y / 8.0));
+        assert!(plain.bytes() == 192 * 128 * 12 && p.warm.is_some() && p.cool.is_none() && p.magenta.is_none() && p.green.is_none());
     }
 }

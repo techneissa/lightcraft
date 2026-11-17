@@ -469,11 +469,11 @@ impl Shading {
     }
 
     /// The light at normalized photo coordinates `(u, v)` (bilinear, clamped at the borders); its `share` is the
-    /// warm and the cool plane together (or the magenta and the green, for a light with a gel and no tilt).
+    /// strongest of the colour planes.
     #[inline]
     pub fn at(&self, u: f32, v: f32) -> Shade {
         let [stops, warm, cool, magenta, green] = self.sample(u * self.width as f32, v * self.height as f32);
-        Shade { stops, share: (warm + cool).max(magenta + green).min(1.0) }
+        Shade { stops, share: warm.max(cool).max(magenta).max(green).min(1.0) }
     }
 
     /// The values at field position `(x, y)` (pixel centres at `i + 0.5`): the gain, then the warm, cool, magenta and

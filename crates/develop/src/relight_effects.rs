@@ -72,11 +72,6 @@ impl LightEffects {
         })
     }
 
-    /// Whether the light has any effect that changes the photo.
-    pub fn is_on(&self) -> bool {
-        self.gel_strength > 0.0 || self.pattern.round() >= 1.0 || self.haze > 0.0
-    }
-
     /// The named gel `name` (case and spaces aside), as `(hue, strength)`.
     pub fn gel(name: &str) -> Option<(f64, f64)> {
         let key = |s: &str| s.chars().filter(|c| c.is_alphanumeric()).collect::<String>().to_lowercase();
