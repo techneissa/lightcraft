@@ -14,14 +14,18 @@ use crate::HoverPreview;
 
 /// The long edge of a row's picture (pixels).
 const THUMB_EDGE: usize = 128;
-/// A row's height (points).
+/// A row's least height (points), where its text starts from the row's left edge, and the height of its "n lights" line.
 const ROW_H: f32 = 52.0;
+const TEXT_X: f32 = 4.0 + 66.0 + 10.0;
+const SUB_H: f32 = 14.0;
 
 /// What the flyout remembers between frames: the name being typed for a new preset, and a rename under way.
 #[derive(Clone, Default)]
 struct Edit {
     naming: Option<String>,
     renaming: Option<(String, String)>,
+    /// A preset clicked while the photo's depth was still being found: applied once it is.
+    pending: Option<(PhotoId, String)>,
 }
 
 fn state_id() -> egui::Id {
@@ -34,11 +38,13 @@ pub(super) fn presets(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSet
     if crate::widgets::flyout_row(ui, "relightPresets", "Light Presets", Icon::Presets, open).clicked() {
         app.ui.toggle_flyout("relightPresets");
     }
-    if !open {
-        return;
-    }
     let ctx = ui.ctx().clone();
     let mut edit: Edit = ctx.data(|x| x.get_temp(state_id())).unwrap_or_default();
+    apply_pending(app, &ctx, &mut edit, id);
+    if !open {
+        ctx.data_mut(|x| x.insert_temp(state_id(), edit));
+        return;
+    }
     let subject = app.session.relight_subject(id).0;
     let list = app.session.relight_preset_list();
     egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 4, bottom: 4 }).show(ui, |ui| {
@@ -59,10 +65,43 @@ pub(super) fn presets(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSet
     ctx.data_mut(|x| x.insert_temp(state_id(), edit));
 }
 
+/// Apply preset `preset` (`relight.applyPreset`); when the photo's depth is still being found nothing is applied and it
+/// is applied once the depth is there (the top-bar ring shows the finding).
+fn apply(app: &mut LightcraftApp, ctx: &egui::Context, edit: &mut Edit, photo: PhotoId, preset: &str) {
+    match app.run("relight.applyPreset", json!({"preset": preset})) {
+        Ok(r) if r["finding"].as_bool() == Some(true) => {
+            edit.pending = Some((photo, preset.to_string()));
+            app.toast(ctx, crate::i18n::tr("Finding the photo's depth… the preset applies when it is found"));
+        }
+        Ok(_) => {}
+        Err(e) => app.toast(ctx, e),
+    }
+}
+
+/// The preset clicked while the depth was being found, once it is (or can't be): applied then; dropped on another photo.
+fn apply_pending(app: &mut LightcraftApp, ctx: &egui::Context, edit: &mut Edit, photo: PhotoId) {
+    let Some((on, preset)) = edit.pending.clone() else { return };
+    edit.pending = None;
+    if on != photo {
+        return;
+    }
+    if app.session.relight_status(photo)["finding"].as_bool() == Some(true) {
+        edit.pending = Some((on, preset));
+        ctx.request_repaint_after(std::time::Duration::from_millis(250));
+        return;
+    }
+    apply(app, ctx, edit, photo, &preset);
+}
+
 /// One preset's row: its picture, its name and how many lights it sets.
 fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, _d: &DevelopSettings, photo: PhotoId, p: &LightPreset, look: &DevelopSettings, edit: &mut Edit) {
     let t = Tokens::get(ui.ctx());
-    let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), Sense::click());
+    // (the name wraps, whatever its length: a long one makes the row taller)
+    let name = if p.builtin { crate::i18n::builtin_label(&p.name, true).to_string() } else { p.name.clone() };
+    let wrap_w = (ui.available_width() - TEXT_X - 6.0).max(40.0);
+    let galley = ui.painter().layout(name, t.font(13.0), t.text_label, wrap_w);
+    let row_h = ROW_H.max(galley.size().y + SUB_H + 18.0);
+    let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), row_h), Sense::click());
     crate::widgets::announce(&resp, p.name.clone());
     register(ui, format!("relight:preset:{}", p.id), r);
     let renaming = edit.renaming.as_ref().is_some_and(|(id, _)| *id == p.id);
@@ -76,27 +115,25 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, _d: &DevelopSettings, photo: 
     {
         ui.painter().image(tex.id(), tr, crate::panels::presets::cover_uv(tr, tex.size), Color32::WHITE);
     }
-    let x = tr.right() + 10.0;
+    let x = r.left() + TEXT_X;
     if renaming {
         let field = Rect::from_min_max(pos2(x, r.top() + 6.0), pos2(r.right() - 6.0, r.top() + 30.0));
         rename_field(app, ui, p, field, edit);
     } else {
-        let name = if p.builtin { crate::i18n::builtin_label(&p.name, true).to_string() } else { p.name.clone() };
-        ui.painter().text(pos2(x, r.top() + 17.0), Align2::LEFT_CENTER, name, t.font(13.0), t.text_label);
+        let below = r.top() + 8.0 + galley.size().y + 4.0;
+        ui.painter().galley(pos2(x, r.top() + 8.0), galley, t.text_label);
         let n = p.lights.lights.len();
         let sub = crate::i18n::tr_format!("{n} light{s}", n = n, s = crate::i18n::plural_s(n));
-        ui.painter().text(pos2(x, r.top() + 35.0), Align2::LEFT_CENTER, sub, t.font(11.0), t.text_dim);
+        ui.painter().text(pos2(x, below), Align2::LEFT_TOP, sub, t.font(11.0), t.text_dim);
     }
     // resting on a preset shows it on the photo (no undo step)
     if resp.hovered() && !renaming {
         let label = crate::i18n::tr_format!("Light Preset: {name}", name = p.name);
         app.hover_preview = Some(HoverPreview { label, settings: look.clone() });
     }
-    if resp.clicked()
-        && !renaming
-        && let Err(e) = app.run("relight.applyPreset", json!({"preset": p.id}))
-    {
-        app.toast(ui.ctx(), e);
+    if resp.clicked() && !renaming {
+        let ctx = ui.ctx().clone();
+        apply(app, &ctx, edit, photo, &p.id);
     }
     if !p.builtin {
         crate::widgets::context_menu(&resp, |ui| {

@@ -9,7 +9,7 @@
 
 use lightcraft_catalog::PhotoId;
 use lightcraft_develop::DevelopSettings;
-use lightcraft_develop::relight_presets::{LightPreset, MAX_USER, Subject, built_in, selection_box};
+use lightcraft_develop::relight_presets::{LightPreset, MAX_NAME, MAX_USER, Subject, built_in, selection_box};
 use lightcraft_develop::{MaskShape, SegMask};
 use lightcraft_meta::RegionKind;
 
@@ -36,19 +36,24 @@ impl SubjectSource {
     }
 }
 
-/// The presets read from a library's file: no preset without an id and a name, none whose id repeats (or is a built-in
-/// one's), at most [`MAX_USER`], each as a user preset.
+/// The presets read from a library's file: none without an id and a name, none whose id repeats (or is a built-in one's)
+/// or whose name is a built-in preset's or an earlier one's (letter case aside), at most [`MAX_USER`], each as a user preset,
+/// its name cut to [`MAX_NAME`] characters.
 pub fn read_user(list: Vec<LightPreset>) -> Vec<LightPreset> {
-    let mut seen: Vec<String> = built_in().iter().map(|p| p.id.clone()).collect();
+    let mut ids: Vec<String> = built_in().iter().map(|p| p.id.clone()).collect();
+    let mut names: Vec<String> = built_in().iter().map(|p| p.name.to_lowercase()).collect();
     let mut out = Vec::new();
     for mut p in list {
         let Some(name) = lightcraft_develop::relight_presets::clean_name(&p.name) else { continue };
-        if p.id.trim().is_empty() || seen.contains(&p.id) || out.len() >= MAX_USER {
+        let name: String = name.chars().take(MAX_NAME).collect();
+        let name = name.trim().to_string();
+        if p.id.trim().is_empty() || ids.contains(&p.id) || names.contains(&name.to_lowercase()) || out.len() >= MAX_USER {
             continue;
         }
         p.name = name;
         p.builtin = false;
-        seen.push(p.id.clone());
+        ids.push(p.id.clone());
+        names.push(p.name.to_lowercase());
         out.push(p);
     }
     out
@@ -145,13 +150,6 @@ impl Session {
         let all = || built_in().iter().chain(&self.relight_presets);
         let key = key.trim();
         all().find(|p| p.id == key).or_else(|| all().find(|p| p.name.eq_ignore_ascii_case(key))).cloned()
-    }
-
-    /// Photo `id`'s settings with `preset`'s lights round its subject: what a click on the preset makes (the thumbnails
-    /// and the hover preview show the same).
-    pub fn relight_preset_applied(&self, id: PhotoId, preset: &LightPreset) -> Option<DevelopSettings> {
-        let d = self.develop_of(id)?;
-        Some(preset.onto(&d, &self.relight_subject(id).0))
     }
 }
 

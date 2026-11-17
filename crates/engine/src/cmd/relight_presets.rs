@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 use lightcraft_develop::relight_presets::{LightPreset, MAX_NAME, MAX_USER, Subject, clean_name};
 
 use super::{CommandSpec, always, bad, cmd, has_active, photo_id, str_param};
+use crate::relight::Depth;
 use crate::relight_presets::SubjectSource;
 use crate::{Result, Session};
 
@@ -33,11 +34,12 @@ fn name_of(s: &Session, raw: Option<&str>, except: Option<&str>, c: &str) -> Res
 fn presets(s: &mut Session, p: &Value) -> Result<Value> {
     let c = "relight.presets";
     let id = photo_id(p, c)?.or_else(|| s.active());
-    if p.get("wait").and_then(Value::as_bool) == Some(true)
-        && let Some(i) = id
-    {
-        s.relight_wait(i);
-    }
+    // (the photo's depth is found by the worker as for the Relight section: nothing is waited for)
+    let finding = match id {
+        Some(i) if p.get("find").and_then(Value::as_bool) == Some(true) => matches!(s.relight_depth(i), Depth::Finding),
+        Some(i) => s.relight_status(i)["finding"].as_bool().unwrap_or(false),
+        None => false,
+    };
     let list: Vec<Value> = s
         .relight_preset_list()
         .iter()
@@ -47,22 +49,25 @@ fn presets(s: &mut Session, p: &Value) -> Result<Value> {
         })
         .collect();
     let subject = id.map(|i| subject_json(s.relight_subject(i)));
-    Ok(json!({"presets": list, "subject": subject}))
+    Ok(json!({"presets": list, "subject": subject, "finding": finding}))
 }
 
 fn apply(s: &mut Session, p: &Value) -> Result<Value> {
     let c = "relight.applyPreset";
     let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
     let preset = named(s, p, c)?;
-    // (the lights go by the subject's own depth: make the photo's depth now when it isn't there yet)
-    s.relight_wait(id);
+    // (the lights go by the subject's own depth: while the worker is still finding the photo's depth nothing is applied, and
+    // nothing waits; a depth that was cancelled or failed is not tried again, the lights then take their depth as written)
+    if matches!(s.relight_depth(id), Depth::Finding) {
+        return Ok(json!({"applied": false, "finding": true, "preset": {"id": preset.id, "name": preset.name}}));
+    }
     let subject = s.relight_subject(id);
     let d = s.develop_of(id).ok_or_else(|| bad(c, "no photo"))?;
     let out = preset.onto(&d, &subject.0);
     let count = out.relight.lights.len();
     s.set_develop(id, out, &format!("Light Preset: {}", preset.name))?;
     s.relight_select(id, 0);
-    Ok(json!({"preset": {"id": preset.id, "name": preset.name}, "lights": count, "subject": subject_json(subject)}))
+    Ok(json!({"applied": true, "preset": {"id": preset.id, "name": preset.name}, "lights": count, "subject": subject_json(subject)}))
 }
 
 fn save(s: &mut Session, p: &Value) -> Result<Value> {
@@ -76,9 +81,25 @@ fn save(s: &mut Session, p: &Value) -> Result<Value> {
     if !d.relight.is_on() {
         return Err(bad(c, "the photo has no light turned on: raise a light's Amount first"));
     }
+    // (a preset is kept relative to the subject's depth: with no depth found its lights' depths would later be read as relative
+    // ones that they are not)
+    match s.relight_depth(id) {
+        Depth::Ready => {}
+        Depth::Finding => return Err(bad(c, "Relight is still finding this photo's depth: save the preset once it is found")),
+        Depth::Missing => {
+            let why = s.relight_status(id)["error"].as_str().map(|e| format!(" ({e})")).unwrap_or_default();
+            return Err(bad(c, format!("this photo's depth can't be found{why}: a light preset is saved relative to the subject's depth")));
+        }
+    }
     let subject = s.relight_subject(id);
-    // (an id no preset has, kept stable when others are deleted)
-    let next = s.relight_presets.iter().filter_map(|q| q.id.strip_prefix("user-").and_then(|n| n.parse::<u64>().ok())).max().map_or(1, |n| n + 1);
+    // (an id no preset has, kept stable when others are deleted; one that would overflow is not counted)
+    let next = s
+        .relight_presets
+        .iter()
+        .filter_map(|q| q.id.strip_prefix("user-").and_then(|n| n.parse::<u64>().ok()))
+        .max()
+        .map_or(Some(1), |n| n.checked_add(1))
+        .ok_or_else(|| bad(c, "no free id for a new preset: delete the presets of your own that were written by hand"))?;
     let preset = LightPreset::capture(&format!("user-{next}"), &name, &d.relight, &subject.0);
     let out = json!({"id": preset.id, "name": preset.name, "subject": subject_json(subject)});
     s.relight_presets.push(preset);
@@ -116,7 +137,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Light Presets",
             [],
             None,
-            "{id?: photo, wait?: bool} → {presets: [{id, name, builtin, lights, kinds, darken}], subject: {x, y, w, h, source: face|mask|centre, depth?: {own, span}}} — the light presets (the built-in ones Rembrandt, Butterfly, Split, Rim + Fill, Golden-Hour Window, Neon Two-Tone and Candle, then your own) and where the photo's subject is: the face the preset's lights are placed round (the photo's face, else one worked out from a person or subject mask, else one at the centre) and, once the photo's depth is found, its depth (`own`: the subject's depth as a light's depth value 0..100; `span`: the log depth 100 of them cover). `wait: true` finds the depth first (on this thread)",
+            "{id?: photo, find?: bool} → {finding, presets: [{id, name, builtin, lights, kinds, darken}], subject: {x, y, w, h, source: face|mask|centre, depth?: {own, span}}} — the light presets (the built-in ones Rembrandt, Butterfly, Split, Rim + Fill, Golden-Hour Window, Neon Two-Tone and Candle, then your own) and where the photo's subject is: the face the preset's lights are placed round (the photo's face, else one worked out from a person or subject mask, else one at the centre) and, once the photo's depth is found, its depth (`own`: the subject's depth as a light's depth value 0..100; `span`: the log depth 100 of them cover). `find: true` starts finding the depth (on the worker, as the Relight section does; never waited for); `finding` says it is being found",
             always,
             presets
         ),
@@ -125,7 +146,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Apply Light Preset",
             [],
             None,
-            "{preset: a preset's id or name} → {preset: {id, name}, lights, subject} — replace the active photo's lights (and Darken Surroundings) with the preset's, placed round the photo's face and at its depth (the photo's depth is found first when it isn't), and turn the Relight section on; one undo step. The photo's other settings are not touched",
+            "{preset: a preset's id or name} → {preset: {id, name}, lights, subject} — replace the active photo's lights (and Darken Surroundings) with the preset's, placed round the photo's face and at its depth, and turn the Relight section on; one undo step. While the photo's depth is still being found nothing is applied and `{applied: false, finding: true}` comes back at once (apply again when `relight.status` says ready); a depth that was cancelled or failed is not tried again and the lights take their depth as written The photo's other settings are not touched",
             has_active,
             apply
         ),
@@ -134,7 +155,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Save Lights as Preset",
             [],
             None,
-            "{name: up to 40 characters, not another preset's} → {id, name, subject} — save the active photo's lights (and Darken Surroundings) as a preset of your own, kept relative to the photo's subject so it fits any photo; an error while no light is turned on",
+            "{name: up to 40 characters, not another preset's} → {id, name, subject} — once the photo's depth is found (an error says so until then), save the active photo's lights (and Darken Surroundings) as a preset of your own, kept relative to the photo's subject so it fits any photo; an error while no light is turned on",
             has_active,
             save
         ),

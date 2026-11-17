@@ -5,14 +5,21 @@ use lightcraft_develop::relight_presets::built_in;
 use lightcraft_develop::{Mask, MaskComponent, MaskOp, MaskShape, SegMask};
 use lightcraft_geom::Rect;
 use lightcraft_meta::{Region, RegionKind};
+use lightcraft_relight::Field;
 use serde_json::json;
 
 use super::SubjectSource;
 use crate::Session;
 
+/// A depth for photo `id`: the presets place their lights by it, and a preset is only saved once it is found.
+fn depth(s: &mut Session, id: PhotoId) {
+    s.relight_test_field(id, Field::from_parts(4, 3, vec![0.0; 12], vec![0.0; 12]).unwrap());
+}
+
 fn session() -> (Session, Vec<PhotoId>) {
     let mut s = Session::with_demo();
     let ids: Vec<PhotoId> = s.catalog.photos().map(|p| p.id).take(2).collect();
+    ids.iter().for_each(|id| depth(&mut s, *id));
     s.execute("library.select", &json!({"ids": [ids[0].0]})).unwrap();
     (s, ids)
 }
@@ -115,6 +122,7 @@ fn a_saved_preset_survives_a_restart_and_fits_another_photo() {
     let ids: Vec<PhotoId> = s.catalog.photos().map(|p| p.id).take(2).collect();
     s.execute("library.select", &json!({"ids": [ids[0].0]})).unwrap();
     face(&mut s, ids[0], (0.30, 0.25, 0.40, 0.40));
+    depth(&mut s, ids[0]);
     // nothing to save while no light is on, and a built-in name is taken
     assert!(s.execute("relight.savePreset", &json!({"name": "Mine"})).is_err());
     s.execute("relight.applyPreset", &json!({"preset": "split"})).unwrap();
@@ -165,4 +173,113 @@ fn a_damaged_list_of_saved_presets_reads_what_it_can() {
         LightPreset { id: "rembrandt".into(), name: "Takes A Built-In Id".into(), ..LightPreset::default() },
     ];
     assert_eq!(super::read_user(list), vec![good]);
+}
+
+#[test]
+fn a_preset_is_not_saved_until_the_photos_depth_is_found() {
+    let mut s = Session::with_demo();
+    let ids: Vec<PhotoId> = s.catalog.photos().map(|p| p.id).take(2).collect();
+    depth(&mut s, ids[0]);
+    // a photo whose depth failed: the lights are on, and nothing is saved
+    s.relight_test_failure(ids[1], "no depth model");
+    s.execute("library.select", &json!({"ids": [ids[1].0]})).unwrap();
+    s.execute("develop.set", &json!({"control": "relight.amount", "value": 60})).unwrap();
+    let e = s.execute("relight.savePreset", &json!({"name": "Mine"})).unwrap_err().to_string();
+    assert!(e.contains("depth") && e.contains("no depth model"), "{e}");
+    assert!(s.relight_presets.is_empty());
+    // a photo with its depth saves
+    s.execute("library.select", &json!({"ids": [ids[0].0]})).unwrap();
+    s.execute("develop.set", &json!({"control": "relight.amount", "value": 60})).unwrap();
+    s.execute("relight.savePreset", &json!({"name": "Mine"})).unwrap();
+}
+
+#[test]
+fn a_new_ids_number_that_would_overflow_is_an_error_not_a_panic() {
+    use lightcraft_develop::relight_presets::LightPreset;
+    let (mut s, ids) = session();
+    s.relight_presets.push(LightPreset { id: format!("user-{}", u64::MAX), name: "Hand Written".into(), ..LightPreset::default() });
+    s.execute("library.select", &json!({"ids": [ids[0].0]})).unwrap();
+    s.execute("develop.set", &json!({"control": "relight.amount", "value": 60})).unwrap();
+    assert!(s.execute("relight.savePreset", &json!({"name": "Mine"})).is_err());
+}
+
+#[test]
+fn names_from_the_file_are_cut_and_a_built_in_or_repeated_name_is_left_out() {
+    use lightcraft_develop::relight_presets::{LightPreset, MAX_NAME};
+    let named = |id: &str, name: &str| LightPreset { id: id.into(), name: name.into(), ..LightPreset::default() };
+    let list =
+        super::read_user(vec![named("user-1", &"x".repeat(90)), named("user-2", " RemBrandt "), named("user-3", "Mine"), named("user-4", "mine")]);
+    assert_eq!(list.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(), ["user-1", "user-3"]);
+    assert_eq!(list[0].name.chars().count(), MAX_NAME);
+}
+
+fn temp_library(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("lc-light-presets-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+/// A presets.json with one light preset that isn't one beside a good one, a develop preset and a number among the
+/// favourites: the good ones load, and nothing is set aside.
+#[test]
+fn one_bad_entry_of_presets_json_costs_only_itself() {
+    let dir = temp_library("bad-entry");
+    let mut s = Session::new().with_fs();
+    s.open_library(&dir, false).unwrap();
+    s.close_library().unwrap();
+    drop(s);
+    let good =
+        serde_json::to_value(lightcraft_develop::relight_presets::LightPreset { id: "user-1".into(), name: "Good".into(), ..Default::default() })
+            .unwrap();
+    let file = json!({
+        "user": [
+            {"id": "mine-1", "name": "Mine", "group": "User", "settings": {}},
+            {"id": "mine-2", "name": null, "group": "User", "settings": {}},
+        ],
+        "favorites": ["mine-1", 7],
+        "relightPresets": [{"id": "user-9", "name": null, "lights": 3}, good],
+    });
+    std::fs::write(dir.join("presets.json"), file.to_string()).unwrap();
+    let mut s = Session::new().with_fs();
+    s.open_library(&dir, false).unwrap();
+    assert!(s.presets.iter().any(|p| p.id == "mine-1" && !p.builtin), "the develop preset loads");
+    assert!(s.presets.iter().all(|p| p.id != "mine-2"));
+    assert_eq!(s.relight_presets.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), ["Good"]);
+    let aside = std::fs::read_dir(&dir).unwrap().filter_map(|e| e.ok()).any(|e| e.file_name().to_string_lossy().contains("presets.json.corrupt"));
+    assert!(!aside, "nothing is set aside");
+    drop(s);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Presets saved in one library are not the next one's: opening another library in the same session clears them.
+#[test]
+fn another_library_does_not_show_the_last_ones_presets() {
+    let (a, b) = (temp_library("a"), temp_library("b"));
+    let mut s = Session::new().with_fs();
+    s.open_library(&a, true).unwrap();
+    let id = s.catalog.photos().next().unwrap().id;
+    depth(&mut s, id);
+    s.execute("library.select", &json!({"ids": [id.0]})).unwrap();
+    s.execute("develop.set", &json!({"control": "relight.amount", "value": 60})).unwrap();
+    s.execute("relight.savePreset", &json!({"name": "From A"})).unwrap();
+    s.presets.push(lightcraft_develop::Preset {
+        id: "a-1".into(),
+        name: "A's".into(),
+        group: "User".into(),
+        settings: json!({}),
+        favorite: false,
+        builtin: false,
+    });
+    s.open_library(&b, false).unwrap();
+    let list = s.execute("relight.presets", &json!({})).unwrap();
+    assert!(list["presets"].as_array().unwrap().iter().all(|p| p["builtin"] == true), "{list}");
+    assert!(s.relight_presets.is_empty() && s.presets.iter().all(|p| p.builtin));
+    // and a save in B writes nothing of A's into B's file
+    s.close_library().unwrap();
+    drop(s);
+    let text = std::fs::read_to_string(b.join("presets.json")).unwrap_or_default();
+    assert!(!text.contains("From A") && !text.contains("A's"), "{text}");
+    let _ = std::fs::remove_dir_all(&a);
+    let _ = std::fs::remove_dir_all(&b);
 }
