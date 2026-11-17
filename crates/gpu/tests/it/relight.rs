@@ -64,10 +64,29 @@ fn relight_matches_cpu() {
     // a warm key and a cool fill together (the colour goes up as two planes)
     let mut pair = lit(70.0, 20.0);
     pair.relight.lights.push(LightSettings { amount: 60.0, warmth: -80.0, x: 0.8, y: 0.3, depth: 40.0, softness: 30.0, ..LightSettings::default() });
-    let req = RenderRequest::fit(720, 720);
-    for (name, s) in
-        [("white light", lit(0.0, 0.0)), ("warm, darkened", warm), ("cool, cropped", cropped), ("after a mask", masked), ("warm and cool", pair)]
+    // (issue #302) a teal gel with a pattern and haze on one light, a red gel with blinds and a magenta one with leaves on others
+    let mut effects = lit(20.0, 0.0);
     {
+        let e = &mut effects.relight.lights[0].effects;
+        (e.gel_hue, e.gel_strength, e.pattern, e.pattern_scale, e.haze) = (178.0, 80.0, 1.0, 60.0, 50.0);
+    }
+    effects.relight.lights.push(LightSettings { amount: 70.0, x: 0.75, y: 0.4, depth: 30.0, ..LightSettings::default() });
+    effects.relight.lights.push(LightSettings { amount: 60.0, x: 0.5, y: 0.2, depth: 50.0, ..LightSettings::default() });
+    {
+        let e = &mut effects.relight.lights[1].effects;
+        (e.gel_hue, e.gel_strength, e.pattern, e.pattern_rotation) = (0.0, 100.0, 3.0, 20.0);
+        let e = &mut effects.relight.lights[2].effects;
+        (e.gel_hue, e.gel_strength, e.pattern) = (305.0, 80.0, 4.0);
+    }
+    let req = RenderRequest::fit(720, 720);
+    for (name, s) in [
+        ("white light", lit(0.0, 0.0)),
+        ("warm, darkened", warm),
+        ("cool, cropped", cropped),
+        ("after a mask", masked),
+        ("warm and cool", pair),
+        ("gels, patterns, haze", effects),
+    ] {
         let cpu = render(&src, &info, &s, &req).image;
         let off = render(&src, &SourceInfo { relight: None, ..info.clone() }, &s, &req).image;
         assert_ne!(cpu.data, off.data, "{name}: the light changed nothing");
