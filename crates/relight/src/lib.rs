@@ -22,6 +22,8 @@ pub mod light;
 pub mod overlay;
 mod rim;
 #[cfg(test)]
+mod tests_edge;
+#[cfg(test)]
 mod tests_kinds;
 #[cfg(test)]
 mod tests_rim;

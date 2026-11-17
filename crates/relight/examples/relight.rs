@@ -2,11 +2,11 @@
 //! with a soft shoulder, not the app's tone curve), and pictures of the field.
 //!
 //! `cargo run --release -p lightcraft-relight --example relight -- photo.jpg <depth dump dir> out-prefix
-//! [x y depth amount softness warmth darken wrap]` (the dump dir is `lightcraft-depth`'s example `--dump`: `depth.f32`
+//! [x y depth amount softness warmth darken wrap]` with `LC_KIND=sun|softbox` from the environment (`LC_SUN=azimuth,elevation`, `LC_BOX=width,height,rotation`; anything else is a point light) (the dump dir is `lightcraft-depth`'s example `--dump`: `depth.f32`
 //! and `size.txt`). Writes `<prefix>-before.png`, `<prefix>-after.png`, `<prefix>-gain.png`, `<prefix>-normals.png`, `<prefix>-depth.png` (the field's depth, near light).
 
 use lightcraft_raster::Rgb32f;
-use lightcraft_relight::{DepthMap, Field, Kind, Light, warmth_tilt};
+use lightcraft_relight::{DepthMap, Field, Kind, Light, LightKind, Softbox, Sun, warmth_tilt};
 
 fn srgb_to_linear(v: f32) -> f32 {
     if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
@@ -18,6 +18,19 @@ fn display(v: f32) -> u8 {
     let v = if v > 0.8 { 0.8 + 0.2 * (1.0 - (-(v - 0.8) / 0.2).exp()) } else { v };
     let e = if v <= 0.003_130_8 { v * 12.92 } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 };
     (e.clamp(0.0, 1.0) * 255.0).round() as u8
+}
+
+fn env_numbers(name: &str) -> Vec<f64> {
+    std::env::var(name).map(|s| s.split(',').filter_map(|v| v.trim().parse().ok()).collect()).unwrap_or_default()
+}
+
+fn kind_from_env() -> LightKind {
+    let n = |name: &str, i: usize, d: f64| env_numbers(name).get(i).copied().unwrap_or(d);
+    match std::env::var("LC_KIND").as_deref() {
+        Ok("sun") => LightKind::Sun(Sun { azimuth: n("LC_SUN", 0, 40.0), elevation: n("LC_SUN", 1, 35.0) }),
+        Ok("softbox") => LightKind::Softbox(Softbox { width: n("LC_BOX", 0, 0.3), height: n("LC_BOX", 1, 0.2), rotation: n("LC_BOX", 2, 0.0) }),
+        _ => LightKind::Point,
+    }
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -34,7 +47,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         softness: num(4, 0.5),
         warmth: num(5, 0.0),
         wrap: num(7, 0.4),
-        kind: lightcraft_relight::LightKind::Point,
+        kind: kind_from_env(),
     };
     let darken = num(6, 0.0);
     let img = image::open(photo)?.to_rgb8();
