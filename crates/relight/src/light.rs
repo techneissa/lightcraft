@@ -46,9 +46,11 @@ const CEILING: f32 = 2.3;
 /// How far under [`CEILING`] the roll-off begins (stops).
 const KNEE: f32 = 1.3;
 /// Log2 luminance (relative to 18 % grey) below which the roll-off is off (`.0`) and from which it holds (`.1`): the
-/// pixels in between take it in part, so a mid-grey at the most lit point gains about 2.7 stops of the 3 at full
-/// Amount, and everything from `.1` (where the roll-off begins, [`CEILING`] − [`KNEE`]) up is rolled off as it was.
-const FULL: (f32, f32) = (-0.5, 1.0);
+/// pixels in between take it in part, so a mid-grey at the most lit point gains about 2.25 stops of the 3 at full
+/// Amount (nothing goes past the ceiling), and everything from `.1` (where the roll-off begins, [`CEILING`] − [`KNEE`]) up is rolled off as it was.
+const FULL: (f32, f32) = (-0.3, 1.0);
+/// The knee of the cut that keeps even those pixels under [`CEILING`] (stops): a mid-grey gains about 2.25 of its 3.
+const FREE_KNEE: f32 = 0.3;
 /// The darkest the rest of the photo gets at full Darken Surroundings: `1 − DARKEN_MAX` of its light (3.3 stops).
 const DARKEN_MAX: f32 = 0.9;
 /// Where shadows begin to be held back (log2 luminance below 18 % grey): fully at `SHADOW.0`, not at `SHADOW.1`.
@@ -164,9 +166,12 @@ impl Field {
             let start = CEILING - KNEE;
             let limited = if target <= start { raw } else { (start + KNEE * (1.0 - (-(target - start) / KNEE).exp()) - l).clamp(0.0, raw) };
             // (the roll-off holds from `FULL.1` up; below `FULL.0` the light gets all its stops, so mid-grey at the
-            // peak gains nearly the whole Amount: 2.7 of 3 stops)
+            // peak gains most of the Amount: 2.25 of 3 stops, never past the ceiling)
             let free = 1.0 - smoothstep(FULL.0, FULL.1, l);
-            let rolled = limited + (raw - limited) * free;
+            // (but never past the ceiling: the stops it gets are cut to what fits under it, by a tighter knee)
+            let start = CEILING - FREE_KNEE;
+            let cut = if target <= start { raw } else { (start + FREE_KNEE * (1.0 - (-(target - start) / FREE_KNEE).exp()) - l).clamp(0.0, raw) };
+            let rolled = limited + (cut.max(limited) - limited) * free;
             // and less in the deepest shadows
             rolled * held
         } else {
@@ -465,11 +470,18 @@ mod tests {
         let rig = f.rig(&light(), 0.0);
         let best = (0..96).map(|x| f.shade(&rig, (x as f32 + 0.5) / 96.0, 0.5).stops).fold(0f32, f32::max);
         assert!((best - 3.0).abs() < 0.2, "{best}");
-        // a mid-grey point at the peak gains nearly all of it (not two stops: the roll-off is for highlights)
+        // a mid-grey point at the peak gains most of it (not two stops: the roll-off is for highlights)
         let grey = Field::from_parts(96, 64, vec![0.0; 96 * 64], vec![0.0; 96 * 64]).unwrap();
         let rig = grey.rig(&light(), 0.0);
         let best = (0..96).map(|x| grey.shade(&rig, (x as f32 + 0.5) / 96.0, 0.5).stops).fold(0f32, f32::max);
-        assert!(best >= 2.6, "mid-grey gains {best} stops at full Amount");
+        assert!(best >= 2.2, "mid-grey gains {best} stops at full Amount");
+        // and skin tones a half and a whole stop over grey stay at or under the ceiling
+        for l in [0.5f32, 1.0] {
+            let f = Field::from_parts(96, 64, vec![0.0; 96 * 64], vec![l; 96 * 64]).unwrap();
+            let rig = f.rig(&light(), 0.0);
+            let top = (0..96).map(|x| f.shade(&rig, (x as f32 + 0.5) / 96.0, 0.5).stops).fold(0f32, f32::max);
+            assert!(l + top <= CEILING + 0.01, "a point {l} stops over grey reaches {} at full Amount", l + top);
+        }
         // a pixel already near white gets little more
         let bright = Field::from_parts(96, 64, vec![0.0; 96 * 64], vec![2.2; 96 * 64]).unwrap();
         let rig = bright.rig(&light(), 0.0);
