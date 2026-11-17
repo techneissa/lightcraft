@@ -47,6 +47,12 @@ fn grab_id() -> egui::Id {
     egui::Id::unique("relightKindDrag")
 }
 
+/// The aim arrow's true tip and the pointer's place at the press, both from the light's handle (kept while the drag goes): the
+/// arrow is drawn at least [`AIM_MIN`] out, so a drag takes the pointer's moves from the press and not its place (issue #335).
+fn aim_grab_id() -> egui::Id {
+    egui::Id::unique("relightKindAimGrab")
+}
+
 /// A drag of one of these handles that is going when the handles stop showing ends there (like the light's own).
 pub(super) fn release(app: &mut LightcraftApp, ui: &egui::Ui, showing: bool) {
     if !showing && ui.ctx().data(|m| m.get_temp::<Handle>(grab_id())).is_some() {
@@ -95,8 +101,7 @@ fn sun_tip(l: &LightSettings, c: Pos2) -> Pos2 {
 /// The tip of the softbox's aim arrow on the screen: the box's axis seen from the camera times [`AIM_LEN`], kept a little off
 /// the handle so a box shining straight in still has a tip to take (a hollow one, below its middle).
 fn aim_tip(l: &LightSettings, c: Pos2) -> Pos2 {
-    let n = lightcraft_relight::kinds::box_normal(l.kind.box_aim_h, l.kind.box_aim_v);
-    let arrow = vec2(n[0], n[1]) * AIM_LEN;
+    let arrow = aim_offset(l.kind.box_aim_h, l.kind.box_aim_v);
     let len = arrow.length();
     if len >= AIM_MIN {
         c + arrow
@@ -105,6 +110,31 @@ fn aim_tip(l: &LightSettings, c: Pos2) -> Pos2 {
     } else {
         c + vec2(0.0, AIM_MIN)
     }
+}
+
+/// The box's axis seen from the camera times [`AIM_LEN`]: where the aim arrow's tip is from the light's handle, at its true
+/// length (a tip nearer than [`AIM_MIN`] is drawn pinned out, [`aim_tip`]).
+fn aim_offset(aim_h: f64, aim_v: f64) -> egui::Vec2 {
+    let n = lightcraft_relight::kinds::box_normal(aim_h, aim_v);
+    vec2(n[0], n[1]) * AIM_LEN
+}
+
+/// The aim (tilts in degrees, right and down) for an arrow tip `p` from the light's handle (points).
+fn aim_of_offset(mut p: egui::Vec2) -> (f64, f64) {
+    p /= AIM_LEN;
+    let reach = lightcraft_relight::kinds::AIM_MAX.to_radians().sin() as f32;
+    if p.length() > reach {
+        p *= reach / p.length();
+    }
+    let z = (1.0 - p.length_sq()).max(0.0).sqrt();
+    let deg = |a: f32| f64::from(a.atan2(z).to_degrees()).round().clamp(-80.0, 80.0);
+    (deg(p.x), deg(p.y))
+}
+
+/// The aim a drag gives: the arrow's true tip `base` at the press `from`, moved as the pointer has moved to `to` (all from
+/// the light's handle). A press that doesn't move changes nothing, a small move a small change.
+fn aim_dragged(base: egui::Vec2, from: egui::Vec2, to: egui::Vec2) -> (f64, f64) {
+    aim_of_offset(base + (to - from))
 }
 
 /// The softbox's half-sizes on the screen, and its corner, turning knob and stem on it.
@@ -221,7 +251,7 @@ fn paint(p: &egui::Painter, map: &CanvasMap, l: &LightSettings, c: Pos2, hot: Op
 }
 
 /// What dragging `h` to the screen point `q` sets: the control ids and values (the selected light's).
-fn values(map: &CanvasMap, l: &LightSettings, c: Pos2, h: Handle, q: Pos2) -> serde_json::Value {
+fn values(map: &CanvasMap, l: &LightSettings, c: Pos2, h: Handle, q: Pos2, aim_grab: (egui::Vec2, egui::Vec2)) -> serde_json::Value {
     match h {
         Handle::Aim => {
             let n = map.norm(q);
@@ -254,15 +284,8 @@ fn values(map: &CanvasMap, l: &LightSettings, c: Pos2, h: Handle, q: Pos2) -> se
             })
         }
         Handle::BoxAim => {
-            // (the point under the pointer as the box's axis seen from the camera: its x and y, and the rest of the unit vector)
-            let mut p = (q - c) / AIM_LEN;
-            let reach = lightcraft_relight::kinds::AIM_MAX.to_radians().sin() as f32;
-            if p.length() > reach {
-                p *= reach / p.length();
-            }
-            let z = (1.0 - p.length_sq()).max(0.0).sqrt();
-            let deg = |a: f32| f64::from(a.atan2(z).to_degrees()).round().clamp(-80.0, 80.0);
-            json!({"relight.boxAimH": deg(p.x), "relight.boxAimV": deg(p.y)})
+            let (aim_h, aim_v) = aim_dragged(aim_grab.0, aim_grab.1, q - c);
+            json!({"relight.boxAimH": aim_h, "relight.boxAimV": aim_v})
         }
         Handle::BoxTurn => {
             let v = q - c;
@@ -338,6 +361,10 @@ pub(super) fn overlay(
             if resp.drag_started() {
                 let _ = app.run("develop.beginInteraction", json!({"label": label_of(h)}));
                 ui.ctx().data_mut(|m| m.insert_temp(grab_id(), h));
+                if let Some(p) = press {
+                    let grab = (aim_offset(l.kind.box_aim_h, l.kind.box_aim_v), p - c);
+                    ui.ctx().data_mut(|m| m.insert_temp(aim_grab_id(), grab));
+                }
                 app.ui.dragging_control = Some(control_of(h).into());
             }
             return true;
@@ -346,9 +373,10 @@ pub(super) fn overlay(
     }
     let Some(h) = grab else { return false };
     ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+    let aim_grab = ui.ctx().data(|m| m.get_temp::<(egui::Vec2, egui::Vec2)>(aim_grab_id())).unwrap_or_default();
     if resp.dragged()
         && let Some(q) = resp.interact_pointer_pos()
-        && let Err(e) = app.run("develop.set", json!({"values": values(map, l, c, h, q)}))
+        && let Err(e) = app.run("develop.set", json!({"values": values(map, l, c, h, q, aim_grab)}))
     {
         app.toast(ui.ctx(), e);
     }
@@ -374,4 +402,24 @@ pub(super) fn has_ring(l: &LightSettings) -> bool {
 /// The light's handle's place on the screen; none (NaN: never near, never drawn) for a light without a place.
 pub(super) fn spot_of(map: &CanvasMap, l: &LightSettings) -> Pos2 {
     if l.kind.has_place() { map.screen(Point::new(l.x, l.y)) } else { pos2(f32::NAN, f32::NAN) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pressing_the_aim_arrow_of_a_straight_in_softbox_and_moving_a_little_aims_a_little() {
+        // (issue #335) a softbox shining straight in draws its arrow 30 points out; a press on it and a 2 point move
+        // aimed it by 16° and more, because the arrow was taken at the pointer's place and not by its moves
+        let drawn = vec2(0.0, AIM_MIN);
+        let base = aim_offset(0.0, 0.0);
+        assert_eq!(aim_dragged(base, drawn, drawn), (0.0, 0.0), "a press that does not move");
+        for step in [vec2(2.0, 0.0), vec2(0.0, 2.0), vec2(-2.0, 0.0), vec2(0.0, -2.0)] {
+            let (h, v) = aim_dragged(base, drawn, drawn + step);
+            assert!(h.abs() < 2.0 && v.abs() < 2.0, "2 points moved the aim to {h}, {v}");
+        }
+        // and the aim it gives for the arrow's true tip is the aim it came from
+        assert_eq!(aim_of_offset(aim_offset(30.0, -15.0)), (30.0, -15.0));
+    }
 }

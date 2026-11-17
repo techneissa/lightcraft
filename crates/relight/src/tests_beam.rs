@@ -313,10 +313,9 @@ fn a_drags_beam_matches_the_releases_and_stays_on_its_side_of_an_outline() {
 
 #[test]
 fn a_patterned_softboxs_beam_is_about_as_bright_as_the_plain_ones_where_the_window_is_open() {
-    // (issue #335, fix round) a guard: the window only cuts the shaft into panes, so where its beam is bright the haze is as lit
-    // as an unpatterned softbox's at the same pixels, straight in or aimed. The air of a far source is as strong as the light the
-    // surfaces get (about 1 of the lit surfaces' share, as a sun's), so nothing dims it; the beam is faint where it is cut
-    // by the bars, and faint in absolute terms on a bright scene, not per open pane
+    // (issue #335, fix round) a guard, not a proof of equality: where the panes' beam is bright (its upper part), its median
+    // is at least half the plain softbox's median over the same pixels, straight in or aimed, so the pattern's far source does
+    // not dim the air. The beam is fainter where the bars cut it, and faint in absolute terms on a bright scene
     let f = scene(Some((0.0..0.0, 0.0..0.0, -0.6)));
     let boxed = |aim_h: f64, aim_v: f64| Light {
         kind: LightKind::Softbox(crate::Softbox { width: 0.3, height: 0.3, rotation: 0.0, aim_h, aim_v }),

@@ -641,4 +641,39 @@ mod tests {
         assert!(a != b_fresh, "Wrap doesn't move the far source here: the test shows nothing");
         assert!(b == b_fresh, "the shadows of Wrap 0 were kept for Wrap 1");
     }
+
+    #[test]
+    fn a_softboxs_shadows_follow_its_aim() {
+        // (issue #335) the shadow key holds the aim: another aim is another key, and a patterned softbox, which marches its shadows
+        // from a far source along its aim, gets another shadow map (the kept one of the other aim used to be reused)
+        let (w, h) = (160, 100);
+        let lz = (0..w * h).map(|i| if (60..100).contains(&(i % w)) && (30..80).contains(&(i / w)) { -0.6 } else { 0.0 }).collect();
+        let lum = (0..w * h).map(|i| if i % w < w / 2 { -1.0 } else { -3.0 }).collect();
+        let field = Arc::new(Field::from_parts(w, h, lz, lum).unwrap());
+        let input = Input { field: field.clone(), key: 335_101 };
+        let effects = Effects { pattern: Pattern::Blinds, ..Effects::default() };
+        let boxed = |aim_h: f64| Light {
+            x: 0.2,
+            y: 0.3,
+            depth: 0.1,
+            amount: 0.8,
+            softness: 0.4,
+            warmth: 0.0,
+            wrap: 0.4,
+            kind: LightKind::Softbox(Softbox { width: 0.2, height: 0.2, rotation: 0.0, aim_h, aim_v: 0.0 }),
+        };
+        for far in [false, true] {
+            assert_ne!(shadow_key(&input, &boxed(0.0), false, far), shadow_key(&input, &boxed(50.0), false, far));
+        }
+        let marched = |l: &Light| {
+            let far = field.pattern_rig(&field.rig(l, 0.0, 0.0), &effects).unwrap();
+            let kept = shadows_for(&input, l, &far, false, true).unwrap();
+            let fresh = field.visibility(&far, l, false).unwrap();
+            (field.visibility_plane(&kept), field.visibility_plane(&fresh))
+        };
+        let (a, _) = marched(&boxed(0.0));
+        let (b, b_fresh) = marched(&boxed(50.0));
+        assert!(a != b_fresh, "the aim doesn't move the far source here: the test shows nothing");
+        assert!(b == b_fresh, "the shadows of the straight-in softbox were kept for the aimed one");
+    }
 }
