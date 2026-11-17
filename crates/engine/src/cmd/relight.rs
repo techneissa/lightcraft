@@ -1,7 +1,8 @@
 //! `relight.*` (fork, issue #288, `fork/relight.md`): where a photo's Relight field stands, finding it again, and the
 //! depth model's download; and (issue #299) adding, duplicating, deleting and selecting lights. A photo holds up to
 //! eight lights. Each light's numbers are develop controls, `relight.<n>.amount`, `.softness`, `.warmth`, `.x`, `.y`,
-//! `.depth` and `.wrap` (`n` from 0), and `relight.darken` is the photo's; `relight.amount` and the other shorthands act
+//! `.depth` and `.wrap` (`n` from 0) and, for a light's type (issue #300), `.kind` (0 point, 1 spot, 2 sun / window, 3 softbox,
+//! 4 rim, 5 fill) and the numbers of each type (`.spotAimX` …; `lightcraft_develop::relight_kinds`), and `relight.darken` is the photo's; `relight.amount` and the other shorthands act
 //! on the selected light (see [`Session::relight_selected`]). They are set like every slider (`develop.set`,
 //! `develop.merge`), so undo, presets, copy settings and sync reach them.
 
@@ -9,7 +10,7 @@ use serde_json::{Value, json};
 
 use lightcraft_catalog::PhotoId;
 use lightcraft_develop::DevelopSettings;
-use lightcraft_develop::relight::{LightSettings, MAX_LIGHTS};
+use lightcraft_develop::relight::{KindSettings, LightSettings, MAX_LIGHTS};
 
 use super::{CommandSpec, always, bad, cmd, has_active, index_req, photo_id};
 use crate::{Result, Session};
@@ -114,6 +115,9 @@ fn add(s: &mut Session, p: &Value) -> Result<Value> {
         let (x, y) = free_spot(&d.relight.lights);
         let at = |k: &str, v: f64| p.get(k).and_then(Value::as_f64).unwrap_or(v);
         let mut l = LightSettings { amount: at("amount", 50.0), x: at("x", x), y: at("y", y), ..LightSettings::default() };
+        if let Some(k) = p.get("kind") {
+            l.kind.which = KindSettings::read(&json!({"kind": k})).which;
+        }
         l.sanitize();
         d.relight.lights.push(l);
         Ok(d.relight.lights.len() - 1)
@@ -194,7 +198,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Add Light",
             [],
             None,
-            "{amount?: 0..100 (default 50), x?, y?: normalized place} → {index, count} — add a light (at most 8) on the active photo, in a free spot, and select it; one undo step",
+            "{amount?: 0..100 (default 50), x?, y?: normalized place, kind?: point (default), spot, sun, softbox, rim or fill (or 0..5)} → {index, count} — add a light (at most 8) on the active photo, in a free spot, and select it; one undo step. A light's type and its numbers are controls: relight.<n>.kind and .spotAimX, .spotAimY, .spotAngle, .spotEdge, .sunAzimuth, .sunElevation, .boxWidth, .boxHeight, .boxRotation, .rimWidth, .fillNear",
             has_active,
             add
         ),
@@ -292,5 +296,23 @@ mod tests {
             s.execute("relight.deleteLight", &json!({})).unwrap();
         }
         assert!(s.develop_of(id).unwrap().relight.is_default(), "the last light goes back to its defaults");
+    }
+
+    #[test]
+    fn a_light_has_a_type_by_name_and_by_control() {
+        let (mut s, id) = session();
+        s.execute("relight.addLight", &json!({"kind": "spot"})).unwrap();
+        s.execute("relight.addLight", &json!({"kind": "teapot"})).unwrap();
+        let names: Vec<_> = lights(&s, id).iter().map(|l| l.kind.name()).collect();
+        assert_eq!(names, ["point", "spot", "point"]);
+        s.execute("develop.set", &json!({"values": {"relight.1.spotAngle": 20, "relight.2.kind": 3, "relight.2.boxWidth": 0.5}})).unwrap();
+        s.execute("relight.selectLight", &json!({"index": 1})).unwrap();
+        let controls = s.execute("develop.controls", &json!({"section": "relight"})).unwrap();
+        let value = |id: &str| controls.as_array().unwrap().iter().find(|c| c["id"] == id).map(|c| c["value"].clone());
+        assert_eq!((value("relight.spotAngle"), value("relight.2.kind")), (Some(json!(20.0)), Some(json!(3.0))));
+        let l = lights(&s, id);
+        assert_eq!((l[1].kind.spot_angle, l[2].kind.name(), l[2].kind.box_width), (20.0, "softbox", 0.5));
+        let status = s.execute("relight.status", &json!({})).unwrap();
+        assert_eq!(status["lights"][1]["kind"], json!("spot"));
     }
 }

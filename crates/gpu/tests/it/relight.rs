@@ -68,21 +68,52 @@ fn relight_matches_cpu() {
     for (name, s) in
         [("white light", lit(0.0, 0.0)), ("warm, darkened", warm), ("cool, cropped", cropped), ("after a mask", masked), ("warm and cool", pair)]
     {
-        let cpu = render(&src, &info, &s, &req).image;
         let off = render(&src, &SourceInfo { relight: None, ..info.clone() }, &s, &req).image;
-        assert_ne!(cpu.data, off.data, "{name}: the light changed nothing");
-        let gpu = lightcraft_gpu::render(&src, &info, &s, &req, None).expect("gpu render").image;
-        assert_eq!((cpu.width, cpu.height), (gpu.width, gpu.height), "{name}");
-        let (mut sum, mut max) = (0u64, 0u8);
-        for (p, q) in cpu.data.iter().zip(&gpu.data) {
-            for c in 0..3 {
-                let d = p[c].abs_diff(q[c]);
-                sum += u64::from(d);
-                max = max.max(d);
-            }
+        assert_ne!(render(&src, &info, &s, &req).image.data, off.data, "{name}: the light changed nothing");
+        close(&src, &info, &s, &req, name);
+    }
+}
+
+/// The GPU's render of `s` equals the CPU's.
+fn close(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest, name: &str) {
+    let cpu = render(src, info, s, req).image;
+    let gpu = lightcraft_gpu::render(src, info, s, req, None).expect("gpu render").image;
+    assert_eq!((cpu.width, cpu.height), (gpu.width, gpu.height), "{name}");
+    let (mut sum, mut max) = (0u64, 0u8);
+    for (p, q) in cpu.data.iter().zip(&gpu.data) {
+        for c in 0..3 {
+            let d = p[c].abs_diff(q[c]);
+            sum += u64::from(d);
+            max = max.max(d);
         }
-        let mean = sum as f64 / (cpu.data.len() * 3) as f64;
-        eprintln!("relight {name:<16} mean {mean:.4}  max {max}");
-        assert!(mean < 0.5 && max <= 3, "{name}: mean {mean:.4}, max {max}");
+    }
+    let mean = sum as f64 / (cpu.data.len() * 3) as f64;
+    eprintln!("relight {name:<16} mean {mean:.4}  max {max}");
+    assert!(mean < 0.5 && max <= 3, "{name}: mean {mean:.4}, max {max}");
+}
+
+/// One light of each type (issue #300): the GPU equals the CPU.
+#[test]
+fn relight_types_match_cpu() {
+    if !gpu() {
+        return;
+    }
+    let (src, info) = source();
+    let req = RenderRequest::fit(720, 720);
+    let numbers: [(&str, &[(&str, f64)]); 5] = [
+        ("spot", &[("kind", 1.0), ("spotAimX", 0.7), ("spotAimY", 0.6), ("spotAngle", 25.0)]),
+        ("sun", &[("kind", 2.0), ("sunAzimuth", 60.0), ("sunElevation", 30.0)]),
+        ("softbox", &[("kind", 3.0), ("boxWidth", 0.4), ("boxHeight", 0.25), ("boxRotation", 30.0)]),
+        ("rim", &[("kind", 4.0)]),
+        ("fill", &[("kind", 5.0)]),
+    ];
+    for (name, set) in numbers {
+        let mut s = lit(20.0, 0.0);
+        for (field, v) in set {
+            assert!(lightcraft_develop::relight::set(&mut s, &format!("relight.{field}"), *v));
+        }
+        let off = render(&src, &SourceInfo { relight: None, ..info.clone() }, &s, &req).image;
+        assert_ne!(render(&src, &info, &s, &req).image.data, off.data, "{name}: the light changed nothing");
+        close(&src, &info, &s, &req, name);
     }
 }
