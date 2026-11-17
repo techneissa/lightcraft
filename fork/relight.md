@@ -56,6 +56,10 @@ List: Relight, a Develop section with a light you drag on the photo that brighte
 
 - Issue #302: `crates/relight/src/lib.rs` (`pub mod effects;` and its re-exports), `light.rs` (`Part::tint`, the four colour planes in `Shading` and `Split`, `Rig::position`, `Lobe::m` crate-visible), `crates/develop/src/lib.rs` (`pub mod relight_effects;`), `relight.rs` (`LightSettings::effects`, flattened; its seven specs), `crates/pipeline/src/relight.rs` (`Scene::effects`, the lobe and shading keys, the haze parts, the two more plane ids), `crates/engine/src/cmd/relight.rs` (`relight.setGel`, the status), `crates/ui-egui/src/panels/edit/relight.rs` (`mod effects;`, one call and the list dot's gel colour), `docs/parity-checklist.md` (the row cites `relight.setGel`).
 
+## Known limits
+
+- A pattern swaps sides when a light's depth crosses the scene's mean depth: the aim into or out of the picture is picked by comparing the light's depth with the scene's mean (`Field::pattern_plane`), so the pattern jumps there (redo in #316).
+
 ## Tests
 
 `fork/tests.d/relight.txt`:

@@ -172,6 +172,9 @@ fn set_gel(s: &mut Session, p: &Value) -> Result<Value> {
     let named = p.get("gel").filter(|v| !v.is_null());
     let num = |k: &str| p.get(k).filter(|v| !v.is_null()).map(|v| v.as_f64().ok_or_else(|| bad(c, format!("{k} is a number")))).transpose();
     let (hue, strength) = (num("hue")?, num("strength")?);
+    if named.is_some() && hue.is_some() {
+        return Err(bad(c, "give a gel name or a hue, not both (a name sets the hue; `strength` may go with either)"));
+    }
     // a named gel gives both numbers (`strength` overrides its own); without one a missing number is the light's own
     let preset = match named {
         Some(Value::String(name)) => Some(LightEffects::gel(name).ok_or_else(|| {
@@ -385,6 +388,8 @@ mod tests {
         s.execute("relight.setGel", &json!({"strength": 20})).unwrap();
         assert_eq!((effects(&s, 1).gel_hue, effects(&s, 1).gel_strength), (300.0, 20.0));
         s.execute("relight.setGel", &json!({"hue": 90, "strength": 55})).unwrap();
+        // a name and a hue together: an error
+        assert!(s.execute("relight.setGel", &json!({"gel": "teal", "hue": 20})).is_err());
         // nothing named, a gel that does not exist, a light that is not there: errors
         assert!(s.execute("relight.setGel", &json!({})).is_err());
         assert!(s.execute("relight.setGel", &json!({"gel": "chartreuse"})).is_err());

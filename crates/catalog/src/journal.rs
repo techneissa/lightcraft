@@ -495,6 +495,13 @@ struct SnapFile {
     catalog: Catalog,
 }
 
+/// Whether the log of a snapshot with `header` names Relight's first form (one light's numbers in one object): one under a
+/// fork 11 or older snapshot, or an official or legacy one. Fork 12 wrote the lights list, so its patches name `lights` and
+/// replay as they are.
+fn log_names_relight_first_form(header: Option<crate::fork_format::Header>) -> bool {
+    matches!(header, Some(crate::fork_format::Header::Older { fork, version }) if !fork || version <= 11)
+}
+
 impl Journal {
     /// Open (or create) the catalog in `store`: load the snapshot, replay the log, repair a torn
     /// tail. Fails only if the snapshot itself is unreadable (then nothing is modified).
@@ -543,7 +550,7 @@ impl Journal {
         };
         let log = log.unwrap_or_default();
         let mut replay = Replay::default();
-        replay.first_form_relight = matches!(header, Some(crate::fork_format::Header::Older { .. }));
+        replay.first_form_relight = log_names_relight_first_form(header);
 
         // Scan records; `good_end` is the byte offset just past the last good record.
         let mut pos = 0usize;
