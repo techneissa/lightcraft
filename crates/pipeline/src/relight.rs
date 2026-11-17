@@ -11,10 +11,11 @@
 
 use std::sync::{Arc, Mutex, PoisonError};
 
+use lightcraft_develop::relight::KindSettings;
 use lightcraft_develop::{DevelopSettings, LocalAdjustments};
 use lightcraft_geom::Point;
 use lightcraft_raster::Plane;
-use lightcraft_relight::{Effects, Field, HAZE_GAIN, Light, Lobe, MAX_LIGHTS, Part, Pattern, Rig, Shading};
+use lightcraft_relight::{Effects, Field, Fill, HAZE_GAIN, Light, LightKind, Lobe, MAX_LIGHTS, Part, Pattern, Rig, Rim, Shading, Softbox, Spot, Sun};
 
 use crate::masks::{Evaluated, MaskAlpha};
 use crate::{Plan, SourceInfo};
@@ -130,6 +131,7 @@ pub fn scene_of(s: &DevelopSettings) -> Option<Scene> {
             softness: l.softness / 100.0,
             warmth: l.warmth / 100.0,
             wrap: l.wrap / 100.0,
+            kind: kind_of(&l.kind),
         })
         .collect();
     let effects = on().map(|l| effects_of(&l.effects)).collect();
@@ -149,6 +151,18 @@ fn effects_of(e: &lightcraft_develop::relight_effects::LightEffects) -> Effects 
     }
 }
 
+/// The type of light `k` names, with its numbers in the units the relight crate takes (issue #300).
+fn kind_of(k: &KindSettings) -> LightKind {
+    match k.index() {
+        1 => LightKind::Spot(Spot { aim_x: k.spot_aim_x, aim_y: k.spot_aim_y, angle: k.spot_angle, edge: k.spot_edge / 100.0 }),
+        2 => LightKind::Sun(Sun { azimuth: k.sun_azimuth, elevation: k.sun_elevation }),
+        3 => LightKind::Softbox(Softbox { width: k.box_width, height: k.box_height, rotation: k.box_rotation }),
+        4 => LightKind::Rim(Rim { width: k.rim_width / 100.0 }),
+        5 => LightKind::Fill(Fill { near: k.fill_near / 100.0 }),
+        _ => LightKind::Point,
+    }
+}
+
 /// The light of a render of `info` with settings `s` (`None`: off, or the photo has no field yet).
 pub fn lit(info: &SourceInfo, s: &DevelopSettings) -> Option<Lit> {
     let input = info.relight.as_ref()?;
@@ -165,11 +179,19 @@ fn hashed(parts: impl FnOnce(&mut std::collections::hash_map::DefaultHasher)) ->
 
 /// The key naming `light`'s lobe on `input`'s field: its place, depth, Softness and Wrap and its pattern (not Amount,
 /// Warmth, a gel, haze or Darken Surroundings, which the lobe doesn't depend on).
-fn lobe_key(input: &Input, light: &Light, effects: &Effects) -> u64 {
+fn lobe_key(input: &Input, light: &Light, effects: &Effects, ev: f64) -> u64 {
     hashed(|h| {
         std::hash::Hash::hash(&(0u8, input.key), h);
         for v in [light.x, light.y, light.depth, light.softness, light.wrap] {
             std::hash::Hash::hash(&v.to_bits(), h);
+        }
+        // (a point hashes as it did before light types: the same key, the same kept lobe)
+        if light.kind != LightKind::Point {
+            std::hash::Hash::hash(&light.kind.key_bits(), h);
+        }
+        // (a fill reads the luminance the photo shows, its exposure included)
+        if matches!(light.kind, LightKind::Fill(_)) {
+            std::hash::Hash::hash(&ev.to_bits(), h);
         }
         // (a light without a pattern hashes as it did before patterns: the same key, the same kept lobe)
         if effects.pattern != Pattern::None {
@@ -191,6 +213,10 @@ pub fn shading_key(input: &Input, scene: &Scene, ev: f64) -> u64 {
                 std::hash::Hash::hash(&v.to_bits(), h);
             }
         }
+        // each light's type and its numbers with the light's place in the list (a scene of points hashes as it did before types)
+        for (i, l) in scene.lights.iter().enumerate().filter(|(_, l)| l.kind != LightKind::Point) {
+            std::hash::Hash::hash(&(i, l.kind.key_bits()), h);
+        }
         // each light's effects with the light's place in the list (a scene whose lights have none hashes as it did before
         // them; the same effect on another light is another scene)
         for (i, e) in scene.effects.iter().enumerate().filter(|(_, e)| **e != Effects::default()) {
@@ -201,8 +227,8 @@ pub fn shading_key(input: &Input, scene: &Scene, ev: f64) -> u64 {
 }
 
 /// `light`'s lobe on `input`'s field (`rig`: the light set up on it), seen through its pattern; made once and kept.
-fn lobe_for(input: &Input, light: &Light, effects: &Effects, rig: &Rig) -> Arc<Lobe> {
-    let key = lobe_key(input, light, effects);
+fn lobe_for(input: &Input, light: &Light, effects: &Effects, rig: &Rig, ev: f64) -> Arc<Lobe> {
+    let key = lobe_key(input, light, effects, ev);
     if let Some(l) = LOBES.get(key) {
         return l;
     }
@@ -227,9 +253,10 @@ pub fn shading_for(input: &Input, scene: &Scene, ev: f64) -> (u64, Arc<Shading>)
     let rigs: Vec<Rig> = scene.lights.iter().take(MAX_LIGHTS).map(|l| input.field.rig(l, scene.darken, ev)).collect();
     let none = Effects::default();
     let effects = |i: usize| scene.effects.get(i).unwrap_or(&none);
-    let lobes: Vec<Arc<Lobe>> = scene.lights.iter().zip(&rigs).enumerate().map(|(i, (l, r))| lobe_for(input, l, effects(i), r)).collect();
+    let lobes: Vec<Arc<Lobe>> = scene.lights.iter().zip(&rigs).enumerate().map(|(i, (l, r))| lobe_for(input, l, effects(i), r, ev)).collect();
     // (a light's haze is one more lobe of the same light, in the same colour; made here, not kept: it is one pass)
-    let hazes: Vec<Option<Lobe>> = scene.lights.iter().enumerate().map(|(i, l)| (effects(i).haze > 0.0).then(|| input.field.haze_lobe(l))).collect();
+    let hazes: Vec<Option<Lobe>> =
+        scene.lights.iter().enumerate().map(|(i, l)| (effects(i).haze > 0.0 && l.kind.has_place()).then(|| input.field.haze_lobe(l))).collect();
     let mut parts: Vec<Part<'_>> = Vec::with_capacity(2 * rigs.len());
     for (i, ((l, r), lobe)) in scene.lights.iter().zip(&rigs).zip(&lobes).enumerate() {
         let (tilt, tint) = effects(i).light_colour(l.warmth);

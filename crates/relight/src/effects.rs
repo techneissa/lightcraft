@@ -403,7 +403,8 @@ mod tests {
     }
 
     fn light() -> Light {
-        Light { x: 0.5, y: 0.5, depth: 0.0, amount: 1.0, softness: 0.5, warmth: 0.0, wrap: 0.4 }
+        use crate::kinds::LightKind;
+        Light { x: 0.5, y: 0.5, depth: 0.0, amount: 1.0, softness: 0.5, warmth: 0.0, wrap: 0.4, kind: LightKind::Point }
     }
 
     /// The finish stage's local temperature and tint on `rgb`, as `finish.rs` applies them.

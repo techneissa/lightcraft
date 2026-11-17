@@ -12,6 +12,7 @@ pub mod presets;
 pub mod reflection_area;
 pub mod relight;
 pub mod relight_effects;
+pub mod relight_kinds;
 pub mod residual_look;
 pub mod retouch;
 pub mod segmask;

@@ -14,6 +14,7 @@ use serde_json::{Value, json};
 use super::{Icon, LightcraftApp, Tokens, control, register};
 
 mod effects;
+mod kinds;
 
 /// How near a press must be to a handle to take it (points).
 const HIT: f32 = 12.0;
@@ -128,7 +129,8 @@ pub(super) fn relight(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSet
         depth_box(app, ui, d, id, made.as_deref(), sel);
     });
     // (the sliders act on the selected light, named by its own ids)
-    for field in ["amount", "softness", "warmth"] {
+    let kind = d.relight.lights.get(sel).map_or(0, |l| l.kind.index());
+    for field in kinds::fields(kind) {
         control(app, ui, d, &format!("relight.{sel}.{field}"), true);
     }
     ui.add_space(4.0);
@@ -138,7 +140,9 @@ pub(super) fn relight(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSet
     }
     if open {
         control(app, ui, d, "relight.darken", true);
-        control(app, ui, d, &format!("relight.{sel}.wrap"), true);
+        if kinds::has_wrap(kind) {
+            control(app, ui, d, &format!("relight.{sel}.wrap"), true);
+        }
     }
     // (issue #302: the light's gel, pattern and haze)
     effects::effects(app, ui, d, sel);
@@ -171,6 +175,7 @@ fn lights_list(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings, 
         p.text(pos2(r.left() + 28.0, r.center().y), Align2::LEFT_CENTER, label, t.font(12.0), t.text);
         let amount = if l.amount > 0.0 { format!("{}", l.amount.round()) } else { crate::i18n::tr("Off").to_string() };
         p.text(pos2(r.right() - 10.0, r.center().y), Align2::RIGHT_CENTER, amount, t.font(11.0), t.text_dim);
+        kinds::type_chip(app, ui, r, i, l, sel);
         if resp.clicked() {
             picked = Some(i);
         }
@@ -240,7 +245,13 @@ fn depth_box(
         .relight
         .lights
         .iter()
-        .map(|l| pos2(rect.left() + rect.width() * l.x.clamp(0.0, 1.0) as f32, rect.top() + rect.height() * l.y.clamp(0.0, 1.0) as f32))
+        .map(|l| {
+            // (a rim and a fill have no place: no handle)
+            if !l.kind.has_place() {
+                return pos2(f32::NAN, f32::NAN);
+            }
+            pos2(rect.left() + rect.width() * l.x.clamp(0.0, 1.0) as f32, rect.top() + rect.height() * l.y.clamp(0.0, 1.0) as f32)
+        })
         .collect();
     let mut sel = sel;
     if (resp.drag_started() || resp.clicked())
@@ -254,27 +265,36 @@ fn depth_box(
         }
     }
     let ctx = ui.ctx().clone();
-    drag(app, ui, &resp, ("Relight Light", "relight.x"), |app, q| {
-        let (x, y) = (((q.x - rect.left()) / rect.width()) as f64, ((q.y - rect.top()) / rect.height()) as f64);
-        set(app, &ctx, json!({"relight.x": x.clamp(0.0, 1.0), "relight.y": y.clamp(0.0, 1.0)}));
-    });
-    if resp.hovered() {
+    // (a rim and a fill have no place: a drag in the box moves nothing and makes no undo step)
+    let places = d.relight.lights.get(sel).is_none_or(|l| l.kind.has_place());
+    if places {
+        drag(app, ui, &resp, ("Relight Light", "relight.x"), |app, q| {
+            let (x, y) = (((q.x - rect.left()) / rect.width()) as f64, ((q.y - rect.top()) / rect.height()) as f64);
+            set(app, &ctx, json!({"relight.x": x.clamp(0.0, 1.0), "relight.y": y.clamp(0.0, 1.0)}));
+        });
+    }
+    if resp.hovered() && places {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
     }
     for (i, (l, at)) in d.relight.lights.iter().zip(&spots).enumerate() {
         // (the selected light on top, and the only one with its ring)
+        if at.x.is_nan() {
+            continue;
+        }
         if i != sel {
             paint_light(&p, *at, 4.5, l.warmth, false);
             register(ui, format!("relight:light:{i}"), Rect::from_center_size(*at, vec2(14.0, 14.0)));
         }
     }
-    if let (Some(l), Some(at)) = (d.relight.lights.get(sel), spots.get(sel)) {
+    if let (Some(l), Some(at)) = (d.relight.lights.get(sel), spots.get(sel).filter(|a| !a.x.is_nan())) {
         paint_light(&p, *at, 5.5, l.warmth, true);
         register(ui, "relight:light", Rect::from_center_size(*at, vec2(16.0, 16.0)));
         register(ui, format!("relight:light:{sel}"), Rect::from_center_size(*at, vec2(16.0, 16.0)));
     }
     ui.add_space(8.0);
-    depth_track(app, ui, d, rect.left()..=rect.right(), sel);
+    if kinds::has_depth(d.relight.lights.get(sel).map_or(0, |l| l.kind.index())) {
+        depth_track(app, ui, d, rect.left()..=rect.right(), sel);
+    }
     // (a switch under the track: the picture ⌥ shows while a Relight control is dragged)
     ui.add_space(4.0);
     look_switch(app, ui);

@@ -1,4 +1,4 @@
-# Relight (issues #288, #293, #299, #302)
+# Relight (issues #288, #293, #299, #300, #302)
 cargo test -p lightcraft-relight --lib
 cargo test -p lightcraft-depth --lib
 cargo test -p lightcraft-develop --lib -- relight
