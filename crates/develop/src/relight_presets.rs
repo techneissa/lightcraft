@@ -10,6 +10,14 @@
 //! place (a Rim, a Fill, a Sun's direction) and every other number (depth, Amount, Softness, colour, gel, pattern, haze,
 //! Cast Shadows) are carried as they are. The frame keeps every number inside the ranges its control has, so a saved
 //! preset reads with the lenient reader of [`Relight`] and is never clamped out of shape.
+//!
+//! **Depth.** A light's depth is a number between the photo's nearest and farthest thing, so what it means depends on how
+//! deep the scene is: a key at depth 40 is at the face's distance in one photo and far behind it in another. A preset
+//! therefore writes the depth of a light that has one (a Point, a Spot, a Softbox) as a distance in front of the subject:
+//! 50 is the subject's own depth, and every point below 50 is [`DEPTH_SPAN`] / 100 nearer the camera in log depth (a light
+//! at `50 − 50·k` is `k` in log depth, about `e^k` times, nearer than the subject). Applying it uses the subject's own depth
+//! ([`SubjectDepth`], the median depth of the face in the photo's field) and how much log depth a depth unit covers there;
+//! a photo whose depth is not found yet places the depth as written.
 
 use std::sync::OnceLock;
 
@@ -35,6 +43,20 @@ pub struct Subject {
     pub y: f64,
     pub w: f64,
     pub h: f64,
+    /// Its depth in the photo (`None` until the photo's depth is found).
+    pub depth: Option<SubjectDepth>,
+}
+
+/// The log depth that 100 depth units of a preset's frame cover: a light written `k` log depth in front of the subject is at
+/// depth `50 − 50·k` (with this span of 2: about 7 times the subject's distance at the largest).
+pub const DEPTH_SPAN: f64 = 2.0;
+
+/// Where the subject is in the photo's depth: its own depth as a light's depth value (0..100) and how much log depth 100 of
+/// those values cover in this photo.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SubjectDepth {
+    pub own: f64,
+    pub span: f64,
 }
 
 /// The smallest and largest a face is taken to be, as shares of the photo (a speck or the whole frame would send the
@@ -44,7 +66,7 @@ const MAX_SIZE: (f64, f64) = (0.40, 0.60);
 
 impl Subject {
     /// A photo the app found no subject on: a face of the canonical size, a little above its centre.
-    pub const CENTRE: Subject = Subject { x: 0.5, y: 0.42, w: CANON.0, h: CANON.1 };
+    pub const CENTRE: Subject = Subject { x: 0.5, y: 0.42, w: CANON.0, h: CANON.1, depth: None };
 
     /// The face inside box `[x0, y0, x1, y1]` (normalized); `None` for a box that is not one.
     pub fn from_face(b: [f64; 4]) -> Option<Subject> {
@@ -52,7 +74,7 @@ impl Subject {
         if !b.iter().all(|v| v.is_finite()) || x1 <= x0 || y1 <= y0 {
             return None;
         }
-        Some(Subject { x: (x0 + x1) / 2.0, y: (y0 + y1) / 2.0, w: x1 - x0, h: y1 - y0 }.kept())
+        Some(Subject { x: (x0 + x1) / 2.0, y: (y0 + y1) / 2.0, w: x1 - x0, h: y1 - y0, depth: None }.kept())
     }
 
     /// The face of whoever a mask's box `[x0, y0, x1, y1]` holds: a face a little over a third as wide and a third as
@@ -63,13 +85,19 @@ impl Subject {
             return None;
         }
         let (w, h) = (x1 - x0, y1 - y0);
-        Some(Subject { x: (x0 + x1) / 2.0, y: y0 + 0.2 * h, w: 0.38 * w, h: 0.3 * h }.kept())
+        Some(Subject { x: (x0 + x1) / 2.0, y: y0 + 0.2 * h, w: 0.38 * w, h: 0.3 * h, depth: None }.kept())
     }
 
     /// The numbers within the photo and the sizes the presets are written for.
     fn kept(self) -> Subject {
         let f = |v: f64, (lo, hi): (f64, f64)| if v.is_finite() { v.clamp(lo, hi) } else { lo };
-        Subject { x: f(self.x, (0.0, 1.0)), y: f(self.y, (0.0, 1.0)), w: f(self.w, (MIN_SIZE.0, MAX_SIZE.0)), h: f(self.h, (MIN_SIZE.1, MAX_SIZE.1)) }
+        Subject {
+            x: f(self.x, (0.0, 1.0)),
+            y: f(self.y, (0.0, 1.0)),
+            w: f(self.w, (MIN_SIZE.0, MAX_SIZE.0)),
+            h: f(self.h, (MIN_SIZE.1, MAX_SIZE.1)),
+            depth: self.depth,
+        }
     }
 
     /// Every number of `l` that is a place or a size on the photo, mapped with `f(value, axis_is_x, is_size)`: its place
@@ -91,11 +119,30 @@ impl Subject {
         }
     }
 
+    /// This subject with its depth (own depth as a light's depth value, 0..100, and the log depth 100 of them cover).
+    pub fn with_depth(self, own: f64, span: f64) -> Subject {
+        let ok = own.is_finite() && span.is_finite() && span > 0.0;
+        Subject { depth: ok.then_some(SubjectDepth { own, span }), ..self }
+    }
+
+    /// A light's depth in the preset frame (`frame` true) or in the photo, mapped to the other. Without the subject's
+    /// depth it is kept as it is.
+    fn map_depth(&self, v: f64, to_photo: bool) -> f64 {
+        match self.depth {
+            None => v,
+            Some(d) if to_photo => d.own + (v - 50.0) * DEPTH_SPAN / d.span,
+            Some(d) => 50.0 + (v - d.own) * d.span / DEPTH_SPAN,
+        }
+    }
+
     /// The lights of preset `r` (written in the preset frame) round this face.
     pub fn place(&self, r: &Relight) -> Relight {
         let mut out = r.clone();
         let (kx, ky) = (self.w / CANON.0, self.h / CANON.1);
         for l in &mut out.lights {
+            if matches!(l.kind.index(), 0 | 1 | 3) {
+                l.depth = self.map_depth(l.depth, true);
+            }
             Subject::map_light(l, |v, x, size| {
                 let (c, k) = if x { (self.x, kx) } else { (self.y, ky) };
                 if size { v * k } else { c + (v - 0.5) * k }
@@ -111,6 +158,9 @@ impl Subject {
         let mut out = r.clone();
         let (kx, ky) = (self.w / CANON.0, self.h / CANON.1);
         for l in &mut out.lights {
+            if matches!(l.kind.index(), 0 | 1 | 3) {
+                l.depth = self.map_depth(l.depth, false);
+            }
             Subject::map_light(l, |v, x, size| {
                 let (c, k) = if x { (self.x, kx) } else { (self.y, ky) };
                 if size { v / k } else { 0.5 + (v - c) / k }
@@ -187,8 +237,10 @@ pub fn clean_name(name: &str) -> Option<String> {
     (!s.is_empty()).then_some(s)
 }
 
-/// A light `(dx, dy)` of the photo's width and height from the face's centre (right and down are positive), at `depth`.
-fn light(amount: f64, (dx, dy): (f64, f64), depth: f64, softness: f64, warmth: f64) -> LightSettings {
+/// A light `(dx, dy)` of the photo's width and height from the face's centre (right and down are positive), `ahead` in log
+/// depth nearer the camera than the face (negative: behind it).
+fn light(amount: f64, (dx, dy): (f64, f64), ahead: f64, softness: f64, warmth: f64) -> LightSettings {
+    let depth = 50.0 - 100.0 * ahead / DEPTH_SPAN;
     LightSettings { amount, softness, warmth, x: 0.5 + dx, y: 0.5 + dy, depth, ..LightSettings::default() }
 }
 
@@ -268,19 +320,25 @@ pub fn built_in() -> &'static [LightPreset] {
                 "rembrandt",
                 "Rembrandt",
                 75.0,
-                vec![shadows(wrap(spot(light(100.0, (-0.34, -0.34), 40.0, 40.0, 6.0), 30.0, 60.0), 15.0), 100.0), fill(4.0, 0.0, 45.0)],
+                vec![shadows(wrap(spot(light(100.0, (-0.34, -0.34), 0.15, 40.0, 6.0), 30.0, 60.0), 15.0), 100.0), fill(4.0, 0.0, 45.0)],
             ),
             // The key straight in front and high: a small shadow under the nose and chin, a soft fill from below.
             preset(
                 "butterfly",
                 "Butterfly",
                 65.0,
-                vec![shadows(wrap(spot(light(100.0, (0.0, -0.42), 40.0, 40.0, 0.0), 30.0, 60.0), 15.0), 100.0), fill(15.0, 0.0, 55.0)],
+                vec![shadows(wrap(spot(light(100.0, (0.0, -0.42), 0.15, 40.0, 0.0), 30.0, 60.0), 15.0), 100.0), fill(15.0, 0.0, 55.0)],
             ),
             // One light exactly from the side, level with the face: half of it lit, half in shadow.
-            preset("split", "Split", 70.0, vec![shadows(wrap(spot(light(100.0, (-0.5, 0.0), 45.0, 40.0, 0.0), 30.0, 50.0), 0.0), 100.0)]),
-            // The subject's whole outline lit from behind, the face softly lit from the front.
-            preset("rim-fill", "Rim + Fill", 75.0, vec![rim(85.0, 0.0, (45.0, 0.0, 0.0)), fill(45.0, 4.0, 70.0)]),
+            preset("split", "Split", 70.0, vec![shadows(wrap(spot(light(100.0, (-0.5, 0.0), 0.1, 40.0, 0.0), 30.0, 50.0), 0.0), 100.0)]),
+            // The subject's whole outline lit from behind, the face evenly and softly lit from the front by a broad light (a
+            // Fill alone lifts only what is dark, and left a dark stripe between the rim and the lit part of the face).
+            preset(
+                "rim-fill",
+                "Rim + Fill",
+                30.0,
+                vec![rim(85.0, 0.0, (45.0, 0.0, 0.0)), wrap(light(40.0, (0.0, -0.05), 0.3, 100.0, 4.0), 100.0), fill(20.0, 4.0, 60.0)],
+            ),
             // A low warm light raking across the face and body from the left, the shadow side and the wall away from it
             // cooler and darker.
             preset(
@@ -288,8 +346,8 @@ pub fn built_in() -> &'static [LightPreset] {
                 "Golden-Hour Window",
                 60.0,
                 vec![
-                    gel(shadows(wrap(spot(light(100.0, (-0.6, 0.0), 60.0, 40.0, 100.0), 44.0, 80.0), 20.0), 100.0), 38.0, 45.0),
-                    wrap(light(10.0, (0.5, 0.1), 60.0, 80.0, -45.0), 40.0),
+                    gel(shadows(wrap(spot(light(100.0, (-0.6, 0.0), 0.1, 40.0, 100.0), 44.0, 80.0), 20.0), 100.0), 38.0, 45.0),
+                    wrap(light(10.0, (0.5, 0.1), 0.1, 80.0, -45.0), 40.0),
                 ],
             ),
             // A magenta light from the left and a teal one from the right, the room dark so the colours show.
@@ -298,8 +356,8 @@ pub fn built_in() -> &'static [LightPreset] {
                 "Neon Two-Tone",
                 75.0,
                 vec![
-                    gel(shadows(spot(light(50.0, (-0.5, 0.05), 50.0, 40.0, 0.0), 32.0, 70.0), 60.0), 305.0, 85.0),
-                    gel(shadows(spot(light(50.0, (0.5, 0.05), 50.0, 40.0, 0.0), 32.0, 70.0), 60.0), 178.0, 85.0),
+                    gel(shadows(spot(light(50.0, (-0.5, 0.05), 0.2, 40.0, 0.0), 32.0, 70.0), 60.0), 305.0, 85.0),
+                    gel(shadows(spot(light(50.0, (0.5, 0.05), 0.2, 40.0, 0.0), 32.0, 70.0), 60.0), 178.0, 85.0),
                 ],
             ),
             // One small, warm flame close and low in front: it falls off fast, the rest of the room is dark.
@@ -307,7 +365,7 @@ pub fn built_in() -> &'static [LightPreset] {
                 "candle",
                 "Candle",
                 65.0,
-                vec![with_effects(light(75.0, (0.08, 0.38), 4.0, 18.0, 100.0), |e| {
+                vec![with_effects(light(75.0, (0.08, 0.38), 0.25, 18.0, 100.0), |e| {
                     e.gel_hue = 38.0;
                     e.gel_strength = 30.0;
                     e.haze = 18.0;
@@ -343,22 +401,44 @@ mod tests {
     #[test]
     fn placing_follows_the_subject_and_capturing_undoes_it() {
         let rembrandt = &built_in()[0];
-        let centre = rembrandt.placed(&Subject { x: 0.5, y: 0.5, w: 0.25, h: 0.25 });
-        let moved = rembrandt.placed(&Subject { x: 0.3, y: 0.6, w: 0.25, h: 0.25 });
+        let centre = rembrandt.placed(&Subject { x: 0.5, y: 0.5, w: 0.25, h: 0.25, depth: None });
+        let moved = rembrandt.placed(&Subject { x: 0.3, y: 0.6, w: 0.25, h: 0.25, depth: None });
         let (a, b) = (&centre.lights[0], &moved.lights[0]);
         assert!((b.x - a.x + 0.2).abs() < 1e-9 && (b.y - a.y - 0.1).abs() < 1e-9, "{a:?} {b:?}");
         // a bigger subject takes its lights further out, in the same direction
-        let big = rembrandt.placed(&Subject { x: 0.5, y: 0.5, w: 0.5, h: 0.5 });
+        let big = rembrandt.placed(&Subject { x: 0.5, y: 0.5, w: 0.5, h: 0.5, depth: None });
         assert!((big.lights[0].x - 0.5).abs() > (a.x - 0.5).abs() && big.lights[0].x < 0.5);
         // what has no place on the photo stays as it was
         assert_eq!(centre.lights[1], big.lights[1]);
         // capturing what was placed gives the preset back
-        let s = Subject { x: 0.34, y: 0.58, w: 0.3, h: 0.4 };
+        let s = Subject { x: 0.34, y: 0.58, w: 0.3, h: 0.4, depth: None };
         let back = s.capture(&rembrandt.placed(&s));
         for (p, q) in rembrandt.lights.lights.iter().zip(&back.lights) {
             assert!((p.x - q.x).abs() < 1e-9 && (p.y - q.y).abs() < 1e-9 && p.amount == q.amount, "{p:?} {q:?}");
             assert!((p.kind.box_width - q.kind.box_width).abs() < 1e-9 && (p.kind.spot_aim_y - q.kind.spot_aim_y).abs() < 1e-9);
         }
+    }
+
+    #[test]
+    fn a_lights_depth_is_placed_in_front_of_the_subjects_own() {
+        let r = &built_in()[0];
+        let face = Subject { x: 0.5, y: 0.4, w: 0.15, h: 0.25, depth: None };
+        // the same preset in a shallow scene (the face at depth 20 of a span of 1) and in a deep one (60, span 3): the key is the same
+        // distance (0.15 of log depth) in front of the face in both
+        for (own, span) in [(20.0, 1.0), (60.0, 3.0)] {
+            let key = face.with_depth(own, span).place(&r.lights).lights[0].clone();
+            assert!(((own - key.depth) * span / 100.0 - 0.15).abs() < 1e-9, "{own} {span}: {}", key.depth);
+        }
+        // a light with no depth (a fill) keeps what it has, and a photo without depth yet places the depth as written
+        let placed = face.with_depth(20.0, 1.0).place(&r.lights);
+        assert_eq!(placed.lights[1].depth, r.lights.lights[1].depth);
+        assert_eq!(face.place(&r.lights).lights[0].depth, r.lights.lights[0].depth);
+        // capturing gives the preset's depth back
+        let back = face.with_depth(60.0, 3.0).capture(&face.with_depth(60.0, 3.0).place(&r.lights));
+        assert!((back.lights[0].depth - r.lights.lights[0].depth).abs() < 1e-9);
+        // nonsense depth is no depth
+        assert_eq!(face.with_depth(f64::NAN, 1.0).depth, None);
+        assert_eq!(face.with_depth(20.0, 0.0).depth, None);
     }
 
     #[test]

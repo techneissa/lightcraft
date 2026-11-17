@@ -1537,6 +1537,8 @@ mod tests_recolor_render;
 #[cfg(test)]
 mod tests_relight;
 #[cfg(test)]
+mod tests_relight_presets;
+#[cfg(test)]
 mod tests_retouch_blemish;
 #[cfg(test)]
 mod tests_retouch_cache;

@@ -90,6 +90,12 @@ fn face_box(faces: &[[f64; 4]]) -> Option<[f64; 4]> {
 impl Session {
     /// Where photo `id`'s subject is (see the module docs) and what it was taken from.
     pub fn relight_subject(&self, id: PhotoId) -> (Subject, SubjectSource) {
+        let (s, source) = self.relight_subject_box(id);
+        (self.with_subject_depth(id, s), source)
+    }
+
+    /// [`Session::relight_subject`] without its depth.
+    fn relight_subject_box(&self, id: PhotoId) -> (Subject, SubjectSource) {
         let Some(p) = self.catalog.photo(id) else { return (Subject::CENTRE, SubjectSource::Centre) };
         let mut faces: Vec<[f64; 4]> = p
             .meta
@@ -112,6 +118,20 @@ impl Session {
         match mask_box(&p.develop).and_then(Subject::from_mask_box) {
             Some(s) => (s, SubjectSource::Mask),
             None => (Subject::CENTRE, SubjectSource::Centre),
+        }
+    }
+
+    /// `s` with its depth: the median depth of what its box holds in photo `id`'s field, when the field is made.
+    fn with_subject_depth(&self, id: PhotoId, s: Subject) -> Subject {
+        let Some(made) = self.relight_made(id) else { return s };
+        let field = &made.input.field;
+        let b = [s.x - s.w / 2.0, s.y - s.h / 2.0, s.x + s.w / 2.0, s.y + s.h / 2.0];
+        match field.depth_in(b) {
+            Some(lz) => {
+                let (d, span) = field.light_depth_of(lz);
+                s.with_depth(100.0 * d, span)
+            }
+            None => s,
         }
     }
 

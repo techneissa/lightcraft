@@ -711,6 +711,18 @@ impl Session {
         }
     }
 
+    /// Photo `id`'s field, made here on this thread when it is not kept (light presets place their lights by the subject's
+    /// own depth). `None` when it can't be made: no depth model, no depth map, the web build.
+    pub(crate) fn relight_wait(&mut self, id: PhotoId) -> Option<Arc<Made>> {
+        let p = self.catalog.photo(id)?.clone();
+        let key = self.relight_key(&p);
+        if let Some(m) = self.relight.get(&key) {
+            return Some(m);
+        }
+        let maker = self.relight_maker(&p).ok()?;
+        self.relight.make_here(&key, Some(maker)).ok()
+    }
+
     /// For an export set up now and run later: photo `id`'s field, waited for or made in the export's worker
     /// ([`ExportRelight::fill`]). `None` when the photo's light is off.
     pub(crate) fn relight_export(&mut self, id: PhotoId) -> Option<ExportRelight> {

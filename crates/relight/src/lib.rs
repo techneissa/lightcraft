@@ -21,6 +21,7 @@ pub mod kinds;
 pub mod light;
 mod occluder;
 pub mod overlay;
+pub mod probe;
 mod rim;
 pub mod shadow;
 #[cfg(test)]
