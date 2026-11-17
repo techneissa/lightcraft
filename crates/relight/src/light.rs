@@ -89,7 +89,7 @@ pub struct Rig {
     /// What kind of light it is, set up on the field (issue #300).
     pub(crate) shape: Shape,
     /// The largest `falloff · facing` of the photo (the Amount is given to it).
-    peak: f32,
+    pub(crate) peak: f32,
     /// The photo's exposure (stops): the guide's luminance plus this is the pixel's.
     pub(crate) ev: f32,
     /// The light's Softness, 0..1 (a pattern's edges take the light's size from it).
@@ -160,18 +160,23 @@ impl Field {
         // the most lit point, on a grid of the photo (a shape with a fixed peak has no use for it: asking would make a Rim's
         // map for nothing)
         if !rig.shape.fixed_peak() {
-            let (gw, gh) = (64usize, 48usize);
-            let peak = (0..gw * gh)
-                .into_par_iter()
-                .map(|i| {
-                    let (u, v) = (((i % gw) as f32 + 0.5) / gw as f32, ((i / gw) as f32 + 0.5) / gh as f32);
-                    let (lz, n, _) = self.at(u, v);
-                    self.light_at(&rig, u, v, lz, n)
-                })
-                .reduce(|| 0.0, f32::max);
-            rig.peak = peak.max(1e-6);
+            rig.peak = self.peak_of(&rig);
         }
         rig
+    }
+
+    /// The most lit point of `rig`'s light (`falloff · facing`), on a grid of the photo.
+    pub(crate) fn peak_of(&self, rig: &Rig) -> f32 {
+        let (gw, gh) = (64usize, 48usize);
+        let peak = (0..gw * gh)
+            .into_par_iter()
+            .map(|i| {
+                let (u, v) = (((i % gw) as f32 + 0.5) / gw as f32, ((i / gw) as f32 + 0.5) / gh as f32);
+                let (lz, n, _) = self.at(u, v);
+                self.light_at(rig, u, v, lz, n)
+            })
+            .reduce(|| 0.0, f32::max);
+        peak.max(1e-6)
     }
 
     /// `falloff · facing` at `(u, v)` with log depth `lz` and normal `n`, before the peak's normalization.
@@ -406,89 +411,71 @@ impl Field {
             }
         });
         let r = crate::field::BAND_RADIUS;
-        let refine = |p: &[f32]| -> Vec<(usize, f32)> {
-            if self.band.is_empty() || p.iter().all(|v| *v == 0.0) {
-                return Vec::new();
-            }
-            let gp: Vec<f32> = p.par_iter().zip(&self.gi).map(|(a, b)| a * b).collect();
-            let (sp, sgp) = rayon::join(|| sat(p, w, h), || sat(&gp, w, h));
-            let stride = w + 1;
-            let window = |t: &[f64], x0: usize, y0: usize, x1: usize, y1: usize| -> f64 {
-                let at = |x: usize, y: usize| t.get(y * stride + x).copied().unwrap_or(0.0);
-                at(x1, y1) - at(x0, y1) - at(x1, y0) + at(x0, y0)
-            };
+        // (a colour plane that no light has a component for stays 0 and is refined for nothing)
+        let active: [bool; 4] = std::array::from_fn(|k| tops[k] > 0.0 && (k < 2 || want_tint));
+        // the gain and the colour planes refined along the edge band in one pass: each band pixel sums its own window
+        // (the band is a small share of the photo: far less work than tables of running sums over the whole of it for
+        // every plane, which a drag paid for)
+        let fits: Vec<(usize, [f32; 5])> = if self.band.is_empty() {
+            Vec::new()
+        } else {
             self.band
                 .par_iter()
                 .filter_map(|&(i, mean_g, var_g)| {
                     let i = i as usize;
                     let (x, y) = (i % w, i / w);
                     let (x0, y0, x1, y1) = (x.saturating_sub(r), y.saturating_sub(r), (x + r + 1).min(w), (y + r + 1).min(h));
-                    let k = ((x1 - x0) * (y1 - y0)) as f64;
+                    let k = ((x1 - x0) * (y1 - y0)) as f32;
                     if k < 1.0 {
                         return None;
                     }
-                    let (mp, mgp) = ((window(&sp, x0, y0, x1, y1) / k) as f32, (window(&sgp, x0, y0, x1, y1) / k) as f32);
-                    let a = (mgp - mean_g * mp) / (var_g + EDGE_EPS);
-                    let q = a * self.gi.get(i).copied()? + (mp - a * mean_g);
                     // (the local linear fit can swing past both sides where the photo's luminance and the light
                     // disagree: the light stays within the range the window holds, the two sides')
-                    let (mut lo, mut hi) = (f32::MAX, f32::MIN);
+                    let (mut lo, mut hi, mut sp, mut sgp) = ([f32::MAX; 5], [f32::MIN; 5], [0f32; 5], [0f32; 5]);
                     for row in y0..y1 {
-                        for v in p.get(row * w + x0..row * w + x1)? {
-                            lo = lo.min(*v);
-                            hi = hi.max(*v);
+                        let span = row * w + x0..row * w + x1;
+                        let (st, co, gs) = (stops.get(span.clone())?, col.get(span.clone())?, self.gi.get(span)?);
+                        for ((a, c), g) in st.iter().zip(co).zip(gs) {
+                            let v = [*a, c[0], c[1], c[2], c[3]];
+                            for q in 0..5 {
+                                lo[q] = lo[q].min(v[q]);
+                                hi[q] = hi[q].max(v[q]);
+                                sp[q] += v[q];
+                                sgp[q] += v[q] * g;
+                            }
                         }
                     }
-                    (q.is_finite() && lo <= hi).then(|| (i, q.clamp(lo, hi)))
+                    let gi = self.gi.get(i).copied()?;
+                    let fit = std::array::from_fn(|q| {
+                        let (mp, mgp) = (sp[q] / k, sgp[q] / k);
+                        let a = (mgp - mean_g * mp) / (var_g + EDGE_EPS);
+                        let v = a * gi + (mp - a * mean_g);
+                        if v.is_finite() && lo[q] <= hi[q] { v.clamp(lo[q], hi[q]) } else { f32::NAN }
+                    });
+                    Some((i, fit))
                 })
                 .collect()
         };
-        for (i, q) in refine(&stops) {
-            if let Some(v) = stops.get_mut(i) {
-                *v = q;
+        for (i, q) in fits {
+            if let Some(v) = stops.get_mut(i)
+                && q[0].is_finite()
+            {
+                *v = q[0];
             }
-        }
-        // (a plane that no light has a component for stays 0 and is refined for nothing)
-        for k in 0..if want_tint { 4 } else { 2 } {
-            let mut plane: Vec<f32> = col.iter().map(|c| c.get(k).copied().unwrap_or(0.0)).collect();
-            for (i, q) in refine(&plane) {
-                if let Some(v) = plane.get_mut(i) {
-                    *v = q.clamp(0.0, 1.0);
-                }
-            }
-            for (c, v) in col.iter_mut().zip(plane) {
-                if let Some(slot) = c.get_mut(k) {
-                    *slot = v;
+            if let Some(c) = col.get_mut(i) {
+                for k in 0..4 {
+                    if active[k] && q[k + 1].is_finite() {
+                        c[k] = q[k + 1].clamp(0.0, 1.0);
+                    }
                 }
             }
         }
-        let up_top = stops.iter().copied().fold(0f32, f32::max);
-        let down_top = stops.iter().copied().fold(0f32, |a, v| a.max(-v));
-        let tn = if want_tint { col.iter().map(|c| [c[2], c[3]]).collect() } else { Vec::new() };
-        let px = stops.into_iter().zip(&col).map(|(a, c)| [a, c[0], c[1]]).collect();
+        let (up_top, down_top) =
+            stops.par_iter().fold(|| (0f32, 0f32), |(u, d), v| (u.max(*v), d.max(-*v))).reduce(|| (0.0, 0.0), |a, b| (a.0.max(b.0), a.1.max(b.1)));
+        let tn = if want_tint { col.par_iter().map(|c| [c[2], c[3]]).collect() } else { Vec::new() };
+        let px = stops.par_iter().zip(&col).map(|(a, c)| [*a, c[0], c[1]]).collect();
         Shading { width: w, height: h, px, tn, up_top, down_top, tilt_up, tilt_down, tint_up, tint_down }
     }
-}
-
-/// The summed-area table of `p` (`w × h`): `(w + 1) × (h + 1)` sums, in f64 (exact enough for any window).
-fn sat(p: &[f32], w: usize, h: usize) -> Vec<f64> {
-    let stride = w + 1;
-    let mut t = vec![0f64; stride * (h + 1)];
-    // each row's running sum, then each row adds the one above it
-    t.par_chunks_mut(stride).skip(1).enumerate().for_each(|(y, row)| {
-        let mut acc = 0f64;
-        for (x, v) in row.iter_mut().skip(1).enumerate() {
-            acc += f64::from(p.get(y * w + x).copied().unwrap_or(0.0));
-            *v = acc;
-        }
-    });
-    for y in 1..=h {
-        let (above, rest) = t.split_at_mut(y * stride);
-        if let (Some(prev), Some(row)) = (above.get((y - 1) * stride..), rest.get_mut(..stride)) {
-            row.iter_mut().zip(prev).for_each(|(v, a)| *v += a);
-        }
-    }
-    t
 }
 
 /// The light's planes over a render: for each pixel, its gain in stops and the light's share.

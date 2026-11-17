@@ -72,7 +72,7 @@ fn edges_blur_with_the_distance_past_the_gobo() {
 fn a_lights_depth_crossing_the_scenes_mean_moves_no_pattern_to_the_other_side() {
     // the probe of the audit of #309: blinds on a scene whose left half is near (log depth −0.6) and right half far (0);
     // light depth 0.75 → 0.80 used to move the pattern from the far half to the near half in one step (the other half
-    // flat); now each half keeps its pattern's contrast, and a small step moves the stripes a little
+    // flat); now each half keeps its pattern's contrast, and a small step slides the stripes a little
     let f = flat(|x, _| if x < W / 2 { -0.6 } else { 0.0 });
     let e = Effects { pattern: Pattern::Blinds, softness: 0.1, ..Effects::default() };
     let contrast = |plane: &[f32], xs: std::ops::Range<usize>| {
@@ -88,7 +88,8 @@ fn a_lights_depth_crossing_the_scenes_mean_moves_no_pattern_to_the_other_side() 
     }
     let flipped = |p: &[f32], q: &[f32]| p.iter().zip(q).filter(|(p, q)| (*p - *q).abs() > 0.5).count() as f32 / p.len() as f32;
     let step = flipped(&at(0.77), &at(0.78));
-    assert!(step < 0.01, "depth 0.77 → 0.78: {:.1} % of the pixels flip", 100.0 * step);
+    // (the window follows the light's pool, so the stripes slide a little; the old jump changed half the photo)
+    assert!(step < 0.02, "depth 0.77 → 0.78: {:.1} % of the pixels flip", 100.0 * step);
 }
 
 #[test]
@@ -116,5 +117,57 @@ fn opening_the_blinds_lets_more_through_and_shade_is_never_black() {
     for pattern in ALL {
         let (light, through) = crate::pattern::mean_passed(pattern, 0.5, 0.01);
         assert!(light > 0.08 && light < 0.9 && through > 0.003, "{pattern:?}: light {light}, through {through}");
+    }
+}
+
+/// A wall at log depth 0.3 with a near box (−0.5) in the middle, its depth blending into the wall over `halo` pixels
+/// round it, as a depth model's map does.
+fn subject(halo: f32) -> Field {
+    let (x0, x1, y0, y1) = (84.0, 108.0, 40.0, 104.0);
+    flat(|x, y| {
+        let (x, y) = (x as f32 + 0.5, y as f32 + 0.5);
+        let d = (x0 - x).max(x - x1).max(0.0).hypot((y0 - y).max(y - y1).max(0.0));
+        let t = if halo > 0.0 {
+            (1.0 - d / halo).clamp(0.0, 1.0)
+        } else if d <= 0.0 {
+            1.0
+        } else {
+            0.0
+        };
+        0.3 - 0.8 * t
+    })
+}
+
+fn sun() -> Light {
+    Light { kind: LightKind::Sun(crate::kinds::Sun { azimuth: -40.0, elevation: 45.0 }), ..light() }
+}
+
+#[test]
+fn the_pattern_lands_on_a_near_subject_in_front_of_the_wall() {
+    // the first surface the light reaches takes the pattern: the box in front of the wall is striped too, from a lamp and
+    // from the sun (the sun's slanted parallel rays used to move the box out of the window: it got none)
+    let f = subject(0.0);
+    let e = Effects { pattern: Pattern::Blinds, scale: 0.8, softness: 0.1, ..Effects::default() };
+    for (name, l) in [("lamp", light()), ("sun", sun())] {
+        let plane = light_plane(&f, &l, &e);
+        let on_box: Vec<f32> = (44..100).flat_map(|y| (88..104).map(move |x| (x, y))).map(|(x, y)| plane[y * W + x]).collect();
+        let (lit, shade) = (on_box.iter().filter(|v| **v > 0.6).count(), on_box.iter().filter(|v| **v < 0.3).count());
+        assert!(lit > on_box.len() / 5 && shade > on_box.len() / 5, "{name}: {lit} lit, {shade} shaded of {}", on_box.len());
+    }
+}
+
+#[test]
+fn stripes_run_straight_across_the_wall_beside_a_subject() {
+    // the box's depth blends into the wall over 14 pixels: the stripes on the wall just beside it are where they are
+    // far from it (they used to bend round its outline into a halo, the depth map's blur turned into a shift)
+    let f = subject(14.0);
+    let e = Effects { pattern: Pattern::Blinds, scale: 0.8, softness: 0.0, ..Effects::default() };
+    for (name, l) in [("lamp", light()), ("sun", sun())] {
+        let plane = light_plane(&f, &l, &e);
+        let (beside, away) = (edges(&plane, 77), edges(&plane, 60));
+        // (the projector sits a little in front of the camera, so depth shifts the stripes gently: a step in depth still
+        // moves them, a blurred outline by a row or two)
+        let near = |a: &[usize], b: &[usize]| a.len() == b.len() && a.iter().zip(b).all(|(p, q)| p.abs_diff(*q) <= 2);
+        assert!(beside.len() >= 4 && near(&beside, &away), "{name}: beside the box {beside:?}, away from it {away:?}");
     }
 }

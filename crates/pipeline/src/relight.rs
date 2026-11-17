@@ -279,9 +279,13 @@ fn shadow_amount(light: &Light, effects: &Effects) -> Option<f64> {
 /// The key naming `light`'s shadow visibility on `input`'s field: only what the march reads. A point and a spot: the
 /// place, depth and Softness (the size); a sun: its direction and Softness, not a place; a softbox: the place, depth and
 /// rectangle, not Softness. Not Amount, a spot's cone or the shadow amount. `coarse`: the drag's march.
-fn shadow_key(input: &Input, light: &Light, coarse: bool) -> u64 {
+fn shadow_key(input: &Input, light: &Light, coarse: bool, far: bool) -> u64 {
     hashed(|h| {
         std::hash::Hash::hash(&(2u8, input.key, coarse), h);
+        // (a patterned lamp's shadows are marched from its far source, `Field::pattern_rig`)
+        if far {
+            std::hash::Hash::hash(&b'f', h);
+        }
         let bits = |v: f64| v.to_bits();
         match light.kind {
             LightKind::Sun(s) => std::hash::Hash::hash(&(b'u', bits(s.azimuth), bits(s.elevation), bits(light.softness)), h),
@@ -296,12 +300,12 @@ fn shadow_key(input: &Input, light: &Light, coarse: bool) -> u64 {
 /// `light`'s shadow visibility on `input`'s field; made once and kept. A drag (`draft`) takes the full one when it is
 /// kept (the other lights of the scene, a light that is not moving) and else makes a coarse one, so the full ones are
 /// not made again at the release.
-fn shadows_for(input: &Input, light: &Light, rig: &Rig, draft: bool) -> Option<Arc<Visibility>> {
-    let full = shadow_key(input, light, false);
+fn shadows_for(input: &Input, light: &Light, rig: &Rig, draft: bool, far: bool) -> Option<Arc<Visibility>> {
+    let full = shadow_key(input, light, false, far);
     if let Some(v) = SHADOWS.get(full) {
         return Some(v);
     }
-    let key = shadow_key(input, light, draft);
+    let key = shadow_key(input, light, draft, far);
     if draft && let Some(v) = SHADOWS.get(key) {
         return Some(v);
     }
@@ -327,10 +331,14 @@ fn lobe_for(input: &Input, light: &Light, effects: &Effects, rig: &Rig, ev: f64,
         return l;
     }
     let t = crate::profiling().then(std::time::Instant::now);
-    let (mut lobe, mut through) = input.field.patterned(rig, input.field.lobe(rig), effects, coarse);
+    // (a patterned lamp shines from far along its direction, like daylight through a window; the pattern's coordinates
+    // still come from the light as placed)
+    let far = input.field.pattern_rig(rig, effects);
+    let shines = far.as_ref().unwrap_or(rig);
+    let (mut lobe, mut through) = input.field.patterned(rig, input.field.lobe(shines), effects, coarse);
     // (the shadows multiply the lobes before the lights add up)
     if let Some(amount) = shadow_amount(light, effects)
-        && let Some(vis) = shadows_for(input, light, rig, coarse)
+        && let Some(vis) = shadows_for(input, light, shines, coarse, far.is_some())
     {
         lobe = input.field.shadowed(lobe, &vis, amount);
         through = through.map(|t| input.field.shadowed(t, &vis, amount));

@@ -96,7 +96,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let probe = |u: f32, v: f32| field.depth_plane().data.get((v * h as f32) as usize * w + (u * w as f32) as usize).copied().unwrap_or(0.0);
     eprintln!("near {:.2} far {:.2}; under the light {:.2}", field.near, field.far, probe(light.x as f32, light.y as f32));
     let effects = pattern_from_env();
-    let (lobe, through) = field.patterned(&rig, field.lobe(&rig), &effects, draft);
+    let far = field.pattern_rig(&rig, &effects);
+    let shines = far.as_ref().unwrap_or(&rig);
+    let (lobe, through) = field.patterned(&rig, field.lobe(shines), &effects, draft);
     if std::env::var_os("LC_PATPIC").is_some()
         && let Some(p) = field.pattern_planes(&rig, &effects, draft)
     {
@@ -110,7 +112,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let t_lobe = t.elapsed().as_secs_f64() * 1e3;
     let lobe = if shadows > 0.0 && light.kind.takes_shadows() {
-        let vis = field.visibility(&rig, &light, draft).ok_or("no shadow for this light")?;
+        let vis = field.visibility(shines, &light, draft).ok_or("no shadow for this light")?;
         let t_vis = t.elapsed().as_secs_f64() * 1e3;
         if std::env::var_os("LC_VISPIC").is_some() {
             let plane = field.visibility_plane(&vis);
@@ -140,12 +142,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(t) = &through {
         parts.push(Part { lobe: t, gain: rig.gain(), tilt: ttilt, tint: ttint });
     }
+    let t0 = t.elapsed().as_secs_f64() * 1e3;
     let shading = field.shading_of(&parts, lightcraft_relight::ambient(darken), 0.0);
     let t1 = t.elapsed().as_secs_f64() * 1e3;
     let planes = shading.planes(w, h, &|x, y| (x / w as f64, y / h as f64));
     let split = shading.split(w, h, &|x, y| (x / w as f64, y / h as f64));
     let plane = |p: &Option<Vec<f32>>, i: usize| p.as_ref().and_then(|v| v.get(i).copied()).unwrap_or(0.0);
-    eprintln!("shading {t1:.1} ms, planes {:.1} ms", t.elapsed().as_secs_f64() * 1e3 - t1);
+    // (each stage's own time; the whole step is the sum)
+    eprintln!("shading {:.1} ms, planes {:.1} ms, step {t1:.1} ms", t1 - t0, t.elapsed().as_secs_f64() * 1e3 - t1);
     let mut before = image::RgbImage::new(w as u32, h as u32);
     let mut after = image::RgbImage::new(w as u32, h as u32);
     let mut gain = image::GrayImage::new(w as u32, h as u32);

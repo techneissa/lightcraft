@@ -3,11 +3,15 @@
 //!
 //! - **Where the projector sits.** A point light (and a softbox, a rim, a fill) throws its pattern from a projector on the
 //!   camera's ray through the middle of the light's pool (where its light falls, which moves smoothly with the light),
-//!   looking along that ray, from in front of everything the photo shows (behind the camera, [`FRONT`], like a window
-//!   behind the photographer). So the window sits where the light lands, the pattern falls on everything there, and
-//!   there is no side of the scene it flips to as the light's depth moves. A spot throws it along its
-//!   own cone from its own place; a sun throws it with parallel rays along its direction (stripes from one window stay
-//!   parallel; they don't converge on a point).
+//!   looking along that ray, from just behind the camera ([`FRONT`]). So the window sits where the light lands, the
+//!   pattern falls on the first surface the light reaches (a subject and the wall behind it alike, its stripes straight
+//!   across both; the subject's shadow is cut out of it by the shadow march), and there is no side of the scene it
+//!   flips to as the light's depth moves. A spot throws it along its
+//!   own cone from its own place. A sun's pattern is thrown the same way, centred on its handle: its slanted parallel
+//!   rays turned every error of the depth map into a bend of the stripes, and moved a near subject out of the window.
+//! - **Where the light comes from.** Light through a window comes from far away, so a patterned point light or softbox
+//!   shines from far along its own direction ([`Field::pattern_rig`], [`FAR_SOURCE`]): the window is evenly lit, and
+//!   the subject's shadow, marched from there, falls in the light's direction across the pattern.
 //! - **Size.** A cell of the pattern is a fixed share of the frame at the scene's median distance from the projector
 //!   ([`CELLS`]), so Scale looks the same wherever the light sits; nearer things take smaller cells, farther ones larger,
 //!   as a projected slide does.
@@ -25,10 +29,11 @@ use crate::field::{Field, LENS};
 use crate::kinds::Shape;
 use crate::light::Rig;
 
-/// Where the projector sits on the camera's ray through the light: this share of the nearest thing's depth (the field's
-/// near depth); below 0 it is behind the camera, like a window behind the photographer, so a near thing takes cells
-/// about half the size of the scene's middle (closer would cut a near subject's pattern off at its outline).
-pub(crate) const FRONT: f32 = -0.5;
+/// Where the projector sits on the camera's ray through the middle of the light's pool: this share of the nearest
+/// thing's depth (the field's near depth), just behind the camera. Close to the camera's own centre the pattern hardly
+/// shifts with depth, so a depth map's blurred outline doesn't bend the stripes round a subject; a little behind it, a
+/// real step in depth still moves them.
+pub(crate) const FRONT: f32 = -0.25;
 /// The gobo's distance from the projector, a share of the scene's median distance from it.
 pub(crate) const GOBO: f32 = 0.3;
 /// Cells across the frame's long side at the scene's median depth at Scale 0 (Scale 1: a tenth of it).
@@ -37,8 +42,8 @@ pub(crate) const CELLS: f32 = 34.0;
 pub(crate) const WINDOW: (f32, f32) = (0.24, 0.3);
 /// A canopy gap's radius (leaves, dapple), the same way, and how much of it fades (a share of the radius).
 pub(crate) const CANOPY: (f32, f32) = (0.46, 0.45);
-/// For a sun (parallel rays): the window's distance in front of the handle's point, a share of the median depth.
-const SUN_GOBO: f32 = 0.5;
+/// How far a patterned lamp's light comes from: at least this many times the depth of the middle of its pool.
+pub(crate) const FAR_SOURCE: f32 = 2.0;
 
 /// The opening a pattern lives in, in cells about the projector's axis (in the pattern's turned frame).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -64,17 +69,16 @@ pub(crate) struct Sample {
 /// A light's projector set up on a field, for one pattern.
 #[derive(Clone, Debug)]
 pub(crate) struct Projector {
-    /// Parallel rays (a sun): `origin` is the point the window's middle lands on, else the projector's place.
-    parallel: bool,
+    /// The projector's place.
     origin: [f32; 3],
     axis: [f32; 3],
     e1: [f32; 3],
     e2: [f32; 3],
-    /// Cells per unit of tangent (a projector) or of length (parallel rays).
+    /// Cells per unit of tangent.
     freq: f32,
     sin: f32,
     cos: f32,
-    /// The gobo's distance from the projector (or, for parallel rays, in front of `origin`).
+    /// The gobo's distance from the projector.
     gobo: f32,
     /// The light's radius seen from the gobo (tangent units).
     alpha: f32,
@@ -177,55 +181,26 @@ impl Projector {
             _ => Opening::Rect { hx: WINDOW.0 * cells, hy: WINDOW.1 * cells },
         };
         let px = LENS / long;
-        if let Shape::Sun { to, .. } = rig.shape {
-            // parallel rays travel away from the sun; the window's middle lands on the handle's ray at the median depth
-            let axis = norm([-to[0], -to[1], -to[2]], [0.0, 0.0, 1.0]);
-            let (e1, e2) = across(axis);
-            let origin = if pos[2] > 1e-9 { pos.map(|c| c * z_med / pos[2]) } else { [0.0, 0.0, z_med] };
-            return Projector {
-                parallel: true,
-                origin,
-                axis,
-                e1,
-                e2,
-                freq: 1.0 / cell,
-                sin,
-                cos,
-                gobo: SUN_GOBO * z_med,
-                // (the sun's own disc is 0.0047 radians across its radius; haze and the pattern's Softness widen it)
-                alpha: (0.0047 + 0.08 * ps * ps) * size,
-                d_min: 0.0,
-                px,
-                opening,
-            };
-        }
         let (origin, axis) = match rig.shape {
             // a spot throws it along its cone from its place
             Shape::Spot { dir, .. } => (pos, dir),
             _ => {
-                // looking at the middle of the light's pool, from in front of everything (whatever the light's depth)
-                let axis = norm(pool(field, rig), [0.0, 0.0, 1.0]);
+                // looking at the middle of the light's pool (a sun's: the handle), from in front of everything, near the
+                // camera's own axis: so the pattern lands on the first surface the light reaches, a subject as well as
+                // the wall behind it, its stripes straight across both (the subject's shadow is cut out of it by the
+                // shadow march from the light's own direction); slanted rays would turn every error of the depth map
+                // into a bend of the stripes
+                let target = if matches!(rig.shape, Shape::Sun { .. }) { pos } else { pool(field, rig) };
+                let axis = norm(target, [0.0, 0.0, 1.0]);
                 let k = if axis[2] > 1e-6 { FRONT * field.near.exp() / axis[2] } else { 0.0 };
                 (axis.map(|c| c * k), axis)
             }
         };
+        // (the sun's own disc is 0.0047 radians across its radius; haze and the pattern's Softness widen it)
+        let alpha = if matches!(rig.shape, Shape::Sun { .. }) { (0.0047 + 0.06 * ps * ps) * size } else { (0.002 + 0.08 * ps * ps) * size };
         let (e1, e2) = across(axis);
         let d_med = median(points.iter().map(|p| dot(sub(*p, origin), axis)).filter(|d| *d > 0.0).collect()).unwrap_or(z_med).max(1e-6);
-        Projector {
-            parallel: false,
-            origin,
-            axis,
-            e1,
-            e2,
-            freq: d_med / cell,
-            sin,
-            cos,
-            gobo: GOBO * d_med,
-            alpha: (0.002 + 0.08 * ps * ps) * size,
-            d_min: 0.05 * d_med,
-            px,
-            opening,
-        }
+        Projector { origin, axis, e1, e2, freq: d_med / cell, sin, cos, gobo: GOBO * d_med, alpha, d_min: 0.05 * d_med, px, opening }
     }
 
     /// Where the field point `p` (normal `n`) lands on the pattern.
@@ -233,16 +208,11 @@ impl Projector {
     pub(crate) fn sample(&self, p: [f32; 3], n: [f32; 3]) -> Sample {
         let d = sub(p, self.origin);
         let s = dot(d, self.axis);
-        let (tx, ty, blur, dir) = if self.parallel {
-            let past = (s + self.gobo).max(0.0);
-            (dot(d, self.e1), dot(d, self.e2), self.alpha * past + 0.5 * self.px * p[2], self.axis)
-        } else {
-            let dist = s.max(self.d_min);
-            let past = (1.0 - self.gobo / dist).max(0.0);
-            // (in tangent units: the penumbra over the distance, and a pixel's footprint)
-            let blur = self.alpha * past + 0.5 * self.px * p[2] / dist;
-            (dot(d, self.e1) / dist, dot(d, self.e2) / dist, blur, norm(d, self.axis))
-        };
+        let dist = s.max(self.d_min);
+        let past = (1.0 - self.gobo / dist).max(0.0);
+        // (in tangent units: the penumbra over the distance, and a pixel's footprint)
+        let blur = self.alpha * past + 0.5 * self.px * p[2] / dist;
+        let (tx, ty, dir) = (dot(d, self.e1) / dist, dot(d, self.e2) / dist, norm(d, self.axis));
         // (a surface seen at a grazing angle smears the pattern: its edges widen; gently, as the depth's normals are
         // never that sure)
         let incidence = dot(n, dir).abs().clamp(0.35, 1.0).sqrt();
@@ -250,5 +220,34 @@ impl Projector {
         let blur = blur * self.freq / incidence;
         let clean = |x: f32, d: f32| if x.is_finite() { x.clamp(-1e5, 1e5) } else { d };
         Sample { u: clean(u, 1e5), v: clean(v, 1e5), blur: clean(blur, 0.0).max(1e-4) }
+    }
+}
+
+impl Field {
+    /// The light `rig` shines as when it throws pattern `e` (issue #316): a point light or a softbox shines from far along
+    /// its own direction from the middle of its pool (at least [`FAR_SOURCE`] times that point's depth away, the same
+    /// angular size), like daylight through a window, so the window is evenly lit and its shadows fall the light's way.
+    /// `None` for no pattern or another type (a spot is its own projector, a sun is far already, a rim and a fill have no
+    /// place). Its lobe and shadows are made from this; the pattern's coordinates from `rig`.
+    pub fn pattern_rig(&self, rig: &Rig, e: &Effects) -> Option<Rig> {
+        if e.pattern == Pattern::None || !matches!(rig.shape, Shape::Point | Shape::Box { .. }) {
+            return None;
+        }
+        let pool = pool(self, rig);
+        let z = pool[2].max(1e-6);
+        let (pos, len) = (rig.position(), dot(sub(rig.position(), pool), sub(rig.position(), pool)).sqrt());
+        // (towards the light; leaning a little towards the camera, so a light on its own pool still has a direction)
+        let towards = norm(pool, [0.0, 0.0, 1.0]);
+        let d = sub(pos, pool);
+        let dir = norm([d[0] - 0.05 * z * towards[0], d[1] - 0.05 * z * towards[1], d[2] - 0.05 * z * towards[2]], [0.0, 0.0, -1.0]);
+        let reach = len.max(FAR_SOURCE * z);
+        let mut far = rig.clone();
+        far.pos = [pool[0] + dir[0] * reach, pool[1] + dir[1] * reach, pool[2] + dir[2] * reach];
+        // (as large as it looked from the pool)
+        let grow = reach / len.max(0.2 * z);
+        far.r2 = rig.r2 * grow * grow;
+        far.shape = Shape::Point;
+        far.peak = self.peak_of(&far);
+        Some(far)
     }
 }
