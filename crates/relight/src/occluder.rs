@@ -25,9 +25,11 @@ use crate::field::{Field, LENS};
 
 /// How far (a share of the picture's long side) a line is walked from a pixel to find farther stuff on each side.
 const REACH: f32 = 0.5;
-/// A pixel on the line is past the thing's outline once its log depth is this much farther than the pixel's own (a
-/// tenth: a body's own curve and the depth model's ripples are less).
+/// A pixel on the line is past the thing's outline where its log depth is this much farther than the pixel's own and
+/// rises by [`JUMP`] over the last two steps: a step in depth, not the thing's own curve (the depth model makes a face
+/// near the camera a quarter of its depth deep, rising slowly to its sides).
 const OUTLINE: f32 = 0.1;
+const JUMP: f32 = 0.1;
 /// Past the outline, the background's depth is the farthest of this many pixels (the depth model blurs an outline
 /// over a few pixels).
 const BLUR: usize = 3;
@@ -113,8 +115,8 @@ pub(crate) fn blockers(lz: &[f32], w: usize, h: usize) -> Vec<Blocker> {
     (0..w * h).into_par_iter().map(|i| blocker(lz, w, h, i % w, i / w, reach, per_px)).collect()
 }
 
-/// Walking from `(x, y)` by `(dx, dy)`, at most `steps` steps: the first step whose log depth is [`OUTLINE`] farther than
-/// `own`, and the background's log depth there; `None` when the walk leaves the picture first.
+/// Walking from `(x, y)` by `(dx, dy)`, at most `steps` steps: the first step past an outline ([`OUTLINE`], [`JUMP`]),
+/// and the background's log depth there; `None` when the walk leaves the picture first.
 fn outline(lz: &[f32], w: usize, h: usize, (x, y): (usize, usize), (dx, dy): (isize, isize), steps: usize, own: f32) -> Option<(usize, f32)> {
     let at = |k: usize| -> Option<f32> {
         let qx = x.checked_add_signed(dx.checked_mul(k as isize)?)?;
@@ -124,9 +126,12 @@ fn outline(lz: &[f32], w: usize, h: usize, (x, y): (usize, usize), (dx, dy): (is
         }
         lz.get(qy * w + qx).copied()
     };
+    let mut before = [own, own];
     for k in 1..=steps {
         let v = at(k)?;
-        if v - own > OUTLINE {
+        let steep = v - before[0] > JUMP;
+        before = [before[1], v];
+        if steep && v - own > OUTLINE {
             let bg = (k..k + BLUR).filter_map(at).fold(v, f32::max);
             return Some((k, bg));
         }

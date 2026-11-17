@@ -152,6 +152,14 @@ fn noise(x: usize, y: usize, salt: u32) -> f32 {
     (h >> 8) as f32 / 16_777_216.0
 }
 
+/// A number in 0..1 from a pixel's place that differs as much as it can between neighbours (interleaved gradient noise): each
+/// pixel of a 3 × 3 block turns its rays a different way, so the smoothing ([`smoothed`]) averages the turns out and a wide
+/// penumbra is not grainy.
+fn spread_noise(x: usize, y: usize) -> f32 {
+    let g = 0.067_110_56 * x as f32 + 0.005_837_15 * y as f32;
+    (52.982_918 * (g - g.floor())).fract()
+}
+
 /// The golden angle (radians): successive points of a sunflower spread round a disc evenly.
 const GOLDEN: f32 = 2.399_963;
 
@@ -305,7 +313,7 @@ impl March<'_> {
         let (fw, fh) = (r.w * f, r.h * f);
         let (u, v) = (((x * f + f / 2) as f32 + 0.5) / fw as f32, ((y * f + f / 2) as f32 + 0.5) / fh as f32);
         let p = [(u - 0.5) * self.kx * z, (v - 0.5) * self.ky * z, z];
-        let turn = noise(x, y, 1) * std::f32::consts::TAU;
+        let turn = spread_noise(x, y) * std::f32::consts::TAU;
         let jit = noise(x, y, 2);
         let rays: Vec<f32> = (0..FIRST).map(|k| self.ray(p, k, turn, jit)).collect();
         let (first, lo, hi) = (rays.iter().sum::<f32>(), rays.iter().copied().fold(1.0, f32::min), rays.iter().copied().fold(0.0, f32::max));
@@ -394,7 +402,10 @@ impl Field {
                 *o = if s.is_finite() { s.clamp(0.0, 1.0) } else { 1.0 };
             }
         });
-        Some(Visibility { w: r.w, h: r.h, v: smoothed(r, &v), draft })
+        // (the full one twice: a wide penumbra's rays differ most, and two passes leave no grain)
+        let v = smoothed(r, &v);
+        let v = if draft { v } else { smoothed(r, &v) };
+        Some(Visibility { w: r.w, h: r.h, v, draft })
     }
 
     /// What blocks light, on the reduced field of the full march (pictures): its width and height, and for each pixel how sure
