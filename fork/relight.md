@@ -31,6 +31,8 @@ History is in the PRs: #288 (the feature), #294 (⌥ overlay), #299 (several lig
 - **Presets (#301):** a Light Presets flyout lists ten built-ins (Rembrandt, Butterfly, Split, Rim + Fill, Golden-Hour Window, Neon Two-Tone, Candle and the three stage ones, #334) and your own.
   Presets are written for a face and placed round the photo's subject (`Subject::place`, depth from `Field::depth_in`). Applying is one undo step. Yours live in the library's `presets.json` (`relightPresets`), read entry by entry.
   `relight.applyPreset` returns `{applied: false, finding: true}` while depth is still found.
+  #342: Save This Light as Preset… (`relight.saveLightPreset`) and Add to Lights (`applyPreset {add}`, caps at 8, keeps Darken; a full photo changes nothing).
+  `LightPreset.lights.water` on = the preset sets Underwater, off = leaves the photo's. A one-light preset with Darken 0 keeps the photo's Darken.
 - **⌥ view (#294):** holding ⌥ while dragging a Relight control shows where the light reaches (Crosses or Contours, `UiState::relight_look`, synced as `relightLook`). It is drawn on a worker from the render's shading (`lightcraft_relight::overlay`) and never changes the render.
 - **Depth:** found off the UI thread by one worker, shown in the top-bar ring, cancellable. Fields are kept in memory (300 MB, most recently used first), never on disk.
   The model is Depth Anything 3 Mono Large, in pure Rust with candle, downloaded into the models folder and never in the repo. The web build has no Relight.
