@@ -1,7 +1,7 @@
-//! The ring in the top bar (issues #198, #276): the work the app does for the photo in front of you (previews, faces,
-//! focus points, the full-size view, AI model work and its loading, short checks…) is `background` in the engine's
-//! registry, so it takes no row in the activity stack. A small ring beside the top bar's icons fills with the tasks' combined progress instead, and sweeps while no
-//! task knows its total yet. Hovering it lists each task with its name, percentage and count; a click opens the
+//! The ring in the top bar (issues #198, #276, #295): every running task, whether the app started it for the photo in
+//! front of you (previews, faces, AI model work, short checks…) or a person did (import, export, scans…), shows here
+//! and nowhere else. A small ring beside the top bar's icons fills with the tasks' combined progress and sweeps while
+//! no task knows its total yet. Hovering it lists each task with its name, percentage and count; a click opens the
 //! same list with ✕ for the tasks that can stop. With nothing running there is no ring.
 
 use egui::epaint::PathStroke;
@@ -11,7 +11,7 @@ use lightcraft_engine::activity::{TaskInfo, Unit};
 use crate::LightcraftApp;
 use crate::i18n::{tr, tr_format};
 use crate::icons::{Icon, paint};
-use crate::panels::activity::{SHOW_AFTER_MS, count_text};
+use crate::panels::activity::{SHOW_AFTER_MS, count_text, eta_text};
 use crate::theme::Tokens;
 use crate::widgets::register;
 
@@ -19,9 +19,9 @@ use crate::widgets::register;
 const RADIUS: f32 = 7.5;
 const CROSS: f32 = 16.0;
 
-/// The background tasks the ring shows: top-level ones that have run long enough not to flash, oldest first.
+/// The tasks the ring shows: top-level ones that have run long enough not to flash, oldest first.
 pub fn tasks(app: &LightcraftApp) -> Vec<TaskInfo> {
-    app.session.activity.list().into_iter().filter(|t| t.background && t.parent.is_none() && t.age_ms >= SHOW_AFTER_MS).collect()
+    app.session.activity.list().into_iter().filter(|t| t.parent.is_none() && t.age_ms >= SHOW_AFTER_MS).collect()
 }
 
 /// How far along the tasks are together: the mean of the fractions of those that know their total. `None` when none
@@ -49,6 +49,15 @@ pub fn line(t: &TaskInfo) -> String {
         if !count.is_empty() {
             parts.push(count);
         }
+        // a batch: the time left and the failures
+        if t.batch {
+            if let Some(ms) = t.eta_ms {
+                parts.push(eta_text(ms));
+            }
+            if t.failed > 0 {
+                parts.push(tr_format!("{n} failed", n = t.failed));
+            }
+        }
     }
     parts.join(" · ")
 }
@@ -59,7 +68,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, full: Rect, 
     ui.ctx().request_repaint_after(std::time::Duration::from_millis(50));
     let r = Rect::from_center_size(pos2(x, full.center().y), vec2(28.0, 28.0));
     let resp = ui.interact(r, egui::Id::unique(("top", "activity-ring")), Sense::click());
-    let name = tr("Preparing photos in the background");
+    let name = tr("Running tasks");
     crate::widgets::announce(&resp, name);
     register(ui, "icon:activityRing", r);
     paint_ring(ui, t, r.center(), fraction(tasks), resp.hovered());

@@ -1,4 +1,4 @@
-//! Issue #345: the activity stack — one place, top-left, for every long-running task, with ✕ to cancel.
+//! Issues #345, #295: every long-running task is listed by the ring in the top bar, with ✕ to cancel.
 
 use std::time::Duration;
 
@@ -6,7 +6,7 @@ use lightcraft_engine::activity::{Cancel, TaskInfo, Unit};
 use serde_json::json;
 
 use crate::headless::Headless;
-use crate::panels::activity::{WIDTH, count_text};
+use crate::panels::activity::count_text;
 use crate::{LightcraftApp, Services};
 
 // generous: merges and renders run on worker threads that a busy machine (a full workspace test run) slows a lot
@@ -25,15 +25,7 @@ fn has(h: &Headless, id: &str) -> bool {
     h.app.widgets.iter().any(|(w, _)| w == id)
 }
 
-fn rows(h: &Headless) -> usize {
-    h.app.widgets.iter().filter(|(w, _)| w.starts_with("activity:row:")).count()
-}
-
-fn rect(h: &Headless, id: &str) -> egui::Rect {
-    h.app.widgets.iter().find(|(w, _)| w == id).map(|(_, r)| *r).unwrap_or_else(|| panic!("no widget {id}"))
-}
-
-/// Rows show once their task is half a second old.
+/// The ring shows a task once it is half a second old.
 fn wait_visible(h: &mut Headless) {
     std::thread::sleep(Duration::from_millis(600));
     h.step();
@@ -50,18 +42,24 @@ fn click(h: &mut Headless, id: &str) {
     }
 }
 
+/// Click the ring, so its list (with ✕) is open.
+fn open_ring(h: &mut Headless) {
+    click(h, "icon:activityRing");
+}
+
 #[test]
-fn rows_appear_after_half_a_second_and_cancel_by_click() {
+fn the_ring_appears_after_half_a_second_and_cancels_by_click() {
     let mut h = demo();
     let g = h.app.session.activity.start("export", "Exporting", Cancel::Yes);
     g.progress(2, 5);
     h.step();
     // a frame on a loaded machine can outlast the half second: only judge a task still young after it
     if h.app.session.activity.list()[0].age_ms < crate::panels::activity::SHOW_AFTER_MS {
-        assert!(!has(&h, &format!("activity:row:{}", g.id())), "not before 0.5 s");
+        assert!(!has(&h, "icon:activityRing"), "not before 0.5 s");
     }
     wait_visible(&mut h);
-    assert!(has(&h, &format!("activity:row:{}", g.id())));
+    assert!(has(&h, "icon:activityRing"));
+    open_ring(&mut h);
     click(&mut h, &format!("activity:cancel:{}", g.id()));
     assert!(g.is_cancelled());
     let inspect = h.request("ui.inspect", json!({}), T);
@@ -69,31 +67,12 @@ fn rows_appear_after_half_a_second_and_cancel_by_click() {
 }
 
 #[test]
-fn more_than_three_rows_overflow_and_expand() {
-    let mut h = demo();
-    let guards: Vec<_> = (0..5).map(|i| h.app.session.activity.start("export", &format!("Task {i}"), Cancel::Yes)).collect();
-    wait_visible(&mut h);
-    assert_eq!(rows(&h), 3);
-    assert!(has(&h, "activity:more"));
-    click(&mut h, "activity:more");
-    assert_eq!(rows(&h), 5);
-    // expanded, the stack grows to show them all
-    let stack = h.view.ctx.memory(|m| m.area_rect(egui::Id::unique("activity-stack"))).expect("the stack is drawn");
-    for g in &guards {
-        let r = rect(&h, &format!("activity:row:{}", g.id()));
-        assert!(stack.contains_rect(r), "row {} at {r:?} is cut off by the stack at {stack:?}", g.id());
-    }
-    drop(guards);
-    h.step();
-    assert_eq!(rows(&h), 0);
-}
-
-#[test]
-fn not_cancellable_rows_have_no_cross() {
+fn tasks_that_cannot_stop_have_no_cross() {
     let mut h = demo();
     let g = h.app.session.activity.start("faces", "Finding faces", Cancel::No);
     wait_visible(&mut h);
-    assert!(has(&h, &format!("activity:row:{}", g.id())));
+    open_ring(&mut h);
+    assert!(has(&h, "icon:activityRing"));
     assert!(!has(&h, &format!("activity:cancel:{}", g.id())));
 }
 
@@ -125,10 +104,10 @@ fn count_text_by_unit() {
     assert_eq!(count_text(&t), "");
 }
 
-/// a batch is one row with the time left and the failures; its photos fold under it; when it ends,
+/// a batch is one task with the time left and the failures; its photos are not listed; when it ends,
 /// what it did shows once as a message.
 #[test]
-fn a_batch_row_folds_its_photos_and_says_how_it_went() {
+fn a_batch_is_one_line_in_the_ring_and_says_how_it_went() {
     use crate::panels::activity::{eta_text, summary_text};
     assert_eq!(eta_text(20_000), "less than a minute left");
     assert_eq!(eta_text(6 * 60_000), "about 6 min left");
@@ -142,18 +121,10 @@ fn a_batch_row_folds_its_photos_and_says_how_it_went() {
     let photo = b.child("denoise", "AI Denoise");
     photo.detail("IMG_0003.CR3");
     wait_visible(&mut h);
-    let parent = format!("activity:row:{}", b.id());
-    let child = format!("activity:row:{}", photo.id());
-    assert!(has(&h, &parent));
-    assert!(!has(&h, &child), "the photo's row is folded under its batch");
-    let line = crate::panels::activity::detail_line_for_tests(&h.app.session.activity.list()[0]);
-    assert!(line.starts_with("2 of 200 · about ") && line.contains("1 failed"), "{line}");
-    let fold = format!("activity:children:{}", b.id());
-    click(&mut h, &fold);
-    assert!(has(&h, &child), "opened");
-    assert!(rect(&h, &child).left() > rect(&h, &parent).left(), "set in under its batch");
-    click(&mut h, &fold);
-    assert!(!has(&h, &child), "folded again");
+    let ring = crate::panels::activity_ring::tasks(&h.app);
+    assert_eq!(ring.len(), 1, "the photo's task is under its batch: {ring:?}");
+    let line = crate::panels::activity_ring::line(&ring[0]);
+    assert!(line.contains("2 of 200") && line.contains("about ") && line.contains("1 failed"), "{line}");
     // the batch ends: its summary shows once
     drop(photo);
     drop(b);
@@ -185,32 +156,12 @@ fn stale_cancel_is_harmless() {
     assert_eq!(r["ok"], false, "an error result, not a panic: {r}");
     h.step();
     assert!(h.app.ui.toast.is_none(), "{:?}", h.app.ui.toast);
-    // the same through the row's ✕ (clicked in the frame the task ended): no message in the status bar either
+    // the same through the ring's ✕ (clicked in the frame the task ended): no message in the status bar either
     h.app.ui.status = "Ready".into();
     crate::panels::activity::cancel(&mut h.app, id);
     h.step();
     assert_eq!(h.app.ui.status, "Ready");
     assert!(h.app.ui.toast.is_none(), "{:?}", h.app.ui.toast);
-}
-
-#[test]
-fn long_detail_stays_inside_the_stack() {
-    let mut h = demo();
-    let g = h.app.session.activity.start("export", "Exportieren", Cancel::Yes);
-    g.detail(&"IMG_".repeat(75));
-    wait_visible(&mut h);
-    let row = rect(&h, &format!("activity:row:{}", g.id()));
-    assert!(row.width() <= WIDTH + 1.0, "{row:?}");
-}
-
-#[test]
-fn cross_sits_at_the_right_edge_of_its_row() {
-    let mut h = demo();
-    let g = h.app.session.activity.start("export", "Exporting", Cancel::Yes);
-    wait_visible(&mut h);
-    let row = rect(&h, &format!("activity:row:{}", g.id()));
-    let cross = rect(&h, &format!("activity:cancel:{}", g.id()));
-    assert!(cross.right() >= row.right() - 2.0, "the cross is at the right, not after the label: {cross:?} in {row:?}");
 }
 
 #[test]
@@ -607,27 +558,6 @@ fn auto_import_listing_has_no_row() {
 }
 
 #[test]
-fn rows_added_later_grow_the_stack() {
-    let mut h = demo();
-    let a = h.app.session.activity.start("export", "Exporting", Cancel::Yes);
-    a.progress(1, 24);
-    a.detail("LC01347.jpg");
-    wait_visible(&mut h);
-    // two more tasks while the stack already shows one row: it grows to show them, nothing is cut off
-    let b = h.app.session.activity.start("previews", "Building previews", Cancel::Yes);
-    let c = h.app.session.activity.start("lightroom", "Reading Lightroom catalog", Cancel::Yes);
-    wait_visible(&mut h);
-    for _ in 0..5 {
-        h.step();
-    }
-    let stack = h.view.ctx.memory(|m| m.area_rect(egui::Id::unique("activity-stack"))).expect("the stack is drawn");
-    for g in [&a, &b, &c] {
-        let r = rect(&h, &format!("activity:row:{}", g.id()));
-        assert!(stack.contains_rect(r), "row {} at {r:?} is cut off by the stack at {stack:?}", g.id());
-    }
-}
-
-#[test]
 fn immediate_library_commands_and_auto_sync_show_completion() {
     let mut h = demo();
     assert!(h.app.run("library.clearPreviews", json!({})).is_ok());
@@ -646,18 +576,20 @@ fn immediate_library_commands_and_auto_sync_show_completion() {
     assert!(h.app.ui.toast.is_none());
 }
 
-/// Issue #198: work the app starts by itself to prepare photos is a ring in the top bar, not a row in the stack, and
-/// the ring is gone when it ends; a task a person started keeps its row.
+/// Issues #198, #295: every task is listed by the one ring, one a person started (an export) as well as work the app
+/// started by itself; the ring is gone when they end.
 #[test]
-fn background_work_shows_as_the_ring_and_takes_no_row() {
+fn the_ring_lists_every_task_and_goes_when_they_end() {
     let mut h = demo();
     let prep = h.app.session.activity.start_background("previews", "Preparing photos in the background", Cancel::Yes);
     prep.progress(24, 60);
     let export = h.app.session.activity.start("export", "Exporting", Cancel::Yes);
     wait_visible(&mut h);
     assert!(has(&h, "icon:activityRing"), "the ring shows");
-    assert!(!has(&h, &format!("activity:row:{}", prep.id())), "no row for background work");
-    assert!(has(&h, &format!("activity:row:{}", export.id())), "a task a person started keeps its row");
+    let ring = crate::panels::activity_ring::tasks(&h.app);
+    assert_eq!(ring.iter().map(|t| t.kind).collect::<Vec<_>>(), ["previews", "export"], "the export is in the ring too");
+    open_ring(&mut h);
+    assert!(has(&h, &format!("activity:cancel:{}", export.id())), "its ✕ is in the ring's list");
     let inspect = h.request("ui.inspect", json!({}), T);
     let tasks = inspect["result"]["activity"].as_array().expect("activity");
     assert_eq!(tasks.len(), 2, "ui.inspect reports every task");
@@ -668,19 +600,15 @@ fn background_work_shows_as_the_ring_and_takes_no_row() {
     assert!(!has(&h, "icon:activityRing"), "no ring once nothing runs");
 }
 
-/// Issue #276: AI model work for the photo being edited is listed by the ring, with what it is on, and takes no row in
-/// the stack; an export keeps its row.
+/// Issue #276: AI model work for the photo being edited is listed by the ring, with what it is on.
 #[test]
-fn model_work_is_listed_by_the_ring_with_its_detail_and_an_export_is_not() {
+fn model_work_is_listed_by_the_ring_with_its_detail() {
     let mut h = demo();
     let parse = h.app.session.activity.start_background("parsing", "Finding people parts", Cancel::Flag(Default::default()));
     parse.detail("Sapiens2");
-    let export = h.app.session.activity.start("export", "Exporting", Cancel::Yes);
     wait_visible(&mut h);
     let ring = crate::panels::activity_ring::tasks(&h.app);
     assert_eq!(ring.iter().map(|t| t.kind).collect::<Vec<_>>(), ["parsing"]);
     assert!(crate::panels::activity_ring::line(&ring[0]).contains("Sapiens2"), "the ring names what the task is on");
     assert!(ring[0].cancellable, "its ✕ is in the ring's list");
-    assert!(!has(&h, &format!("activity:row:{}", parse.id())), "no row for the model work");
-    assert!(has(&h, &format!("activity:row:{}", export.id())), "the export keeps its row");
 }

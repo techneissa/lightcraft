@@ -561,7 +561,7 @@ impl LightcraftApp {
         crate::macos_colour::job::poll(self, &ctx);
         slideshow_export::poll(self, &ctx);
         animated_gif::poll(self, &ctx);
-        panels::activity::show(self, &ctx);
+        panels::activity::poll(self, &ctx);
         export_task::poll_photos(self, &ctx);
         pick::poll(self, &ctx);
         panels::grid::drag_feedback(self, &ctx);
