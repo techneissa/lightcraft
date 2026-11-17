@@ -11,7 +11,8 @@
 //! - **Softbox**: a rectangle on the photo (place, size as shares of the photo's width and height, rotation) at the
 //!   light's depth, facing into the scene; each pixel sums the light of a grid of points across it, so a bigger box
 //!   is softer and wraps more round shapes.
-//! - **Rim**: no place; the near side of depth edges and the surfaces turning away from the camera there.
+//! - **Rim**: no place; a thin bright edge along the near side of depth steps (the subject's outline), from one side or
+//!   all round ([`crate::rim`]).
 //! - **Fill**: no place; lifts the shadows (by the luminance the photo shows, its exposure included), more on near things
 //!   than far, from the camera's side.
 //!
@@ -58,6 +59,17 @@ pub struct Softbox {
 pub struct Rim {
     /// How far the rim reaches into things, 0 (a thin edge) .. 1 (wide).
     pub width: f64,
+    /// The side of the photo the light comes from, in degrees: 0 from above, 90 from the right, ±180 from below, −90
+    /// from the left. It counts as far as `one_sided` does.
+    pub angle: f64,
+    /// How one-sided the light is, 0 (the whole outline) .. 1 (only the side that faces `angle`).
+    pub one_sided: f64,
+}
+
+impl Default for Rim {
+    fn default() -> Self {
+        Rim { width: 0.5, angle: 90.0, one_sided: 0.0 }
+    }
 }
 
 /// A [`LightKind::Fill`].
@@ -93,7 +105,7 @@ impl LightKind {
             LightKind::Spot(s) => vec![1, b(s.aim_x), b(s.aim_y), b(s.angle), b(s.edge)],
             LightKind::Sun(s) => vec![2, b(s.azimuth), b(s.elevation)],
             LightKind::Softbox(s) => vec![3, b(s.width), b(s.height), b(s.rotation)],
-            LightKind::Rim(r) => vec![4, b(r.width)],
+            LightKind::Rim(r) => vec![4, b(r.width), b(r.angle), b(r.one_sided)],
             LightKind::Fill(f) => vec![5, b(f.near)],
         }
     }
@@ -124,10 +136,8 @@ pub(crate) enum Shape {
         eps2: f32,
     },
     Rim {
-        /// Where the surface counts as turned away (the cosine to the camera under which the term is whole), and how
-        /// far the depth edge is looked for (in long-side units).
-        turned: f32,
-        reach: f32,
+        /// The rim over the field, made once for the light ([`crate::rim`]).
+        map: crate::rim::RimMap,
     },
     Fill {
         near: f32,
@@ -205,7 +215,14 @@ impl Shape {
             }
             LightKind::Rim(r) => {
                 let w = finite(r.width, 0.0, 1.0, 0.5) as f32;
-                Shape::Rim { turned: 0.15 + 0.35 * w, reach: 0.008 + 0.035 * w }
+                let angle = finite(r.angle, -720.0, 720.0, 90.0).to_radians();
+                let setup = crate::rim::Setup {
+                    reach: 0.004 + 0.036 * w,
+                    turned: 0.15 + 0.35 * w,
+                    from: [angle.sin() as f32, -(angle.cos()) as f32],
+                    one_sided: finite(r.one_sided, 0.0, 1.0, 0.0) as f32,
+                };
+                Shape::Rim { map: crate::rim::build(field, &setup) }
             }
             LightKind::Fill(f) => Shape::Fill { near: finite(f.near, 0.0, 1.0, 0.5) as f32, top: 0.5 + 2.0 * softness },
         }
@@ -215,19 +232,10 @@ impl Shape {
 /// Points across a softbox on a side (`BOX_GRID²` samples per pixel).
 const BOX_GRID: usize = 4;
 
-/// The directions the Rim light looks for a farther surface along (eight), turned by half a step on every other ring so
-/// the rings don't line up into rays.
-const H: f32 = std::f32::consts::FRAC_1_SQRT_2;
-const RING: [(f32, f32); 8] = [(1.0, 0.0), (H, H), (0.0, 1.0), (-H, H), (-1.0, 0.0), (-H, -H), (0.0, -1.0), (H, -H)];
-/// The most an edge's weight can be: a step at the nearest ring ([`RINGS`] first radius, `1 − 0.7 r`).
-const RIM_EDGE_MAX: f32 = 0.76;
 /// How much of a pixel's light a fill gives at full Amount: under half the point light's, so the Amount reads about as
 /// strongly as the other types' (a fill spreads over the whole shadow, a point over a pool: at full Amount about 1.5 stops
 /// in the deepest shadows of a flat, face-on wall).
 const FILL_GAIN: f32 = 0.4;
-/// The rings' radii as shares of the reach.
-const RINGS: [f32; 3] = [0.34, 0.67, 1.0];
-
 impl Shape {
     /// Whether the shape is made for a fixed peak (1: a fully lit point) and not the photo's most lit point: a sun, a
     /// rim and a fill have no distance, so the Amount is what a surface that fully faces them gets; normalizing to the
@@ -268,26 +276,8 @@ pub(crate) fn light_at(field: &Field, rig: &Rig, (u, v): (f32, f32), lz: f32, n:
             }
             sum / (BOX_GRID * BOX_GRID) as f32
         }
-        Shape::Rim { turned, reach } => {
-            // how far the surface turns from the camera (1 face on, 0 edge on)
-            let c = -dot(n, norm(p, [0.0, 0.0, 1.0]));
-            let away = 1.0 - smooth(0.05, *turned, c);
-            // whether it is the near side of a step in depth: the largest rise in log depth within the reach
-            let long = field.width.max(field.height).max(1) as f32;
-            let (ru, rv) = (reach / (field.width.max(1) as f32 / long), reach / (field.height.max(1) as f32 / long));
-            // (a step counts for more the nearer it is)
-            let mut edge = 0.0f32;
-            for (k, r) in RINGS.iter().enumerate() {
-                let (sin, cos) = if k % 2 == 1 { (0.382_683_43f32, 0.923_879_5f32) } else { (0.0, 1.0) };
-                for (dx, dy) in RING {
-                    let (dx, dy) = (dx * cos - dy * sin, dx * sin + dy * cos);
-                    let (slz, _, _) = field.at((u + dx * ru * r).clamp(0.0, 1.0), (v + dy * rv * r).clamp(0.0, 1.0));
-                    edge = edge.max(smooth(0.12, 0.45, slz - lz) * (1.0 - 0.7 * r));
-                }
-            }
-            // (the nearest ring's weight is the most a step gives: that is a whole edge)
-            (edge / RIM_EDGE_MAX).min(1.0) * (0.5 + 0.5 * away)
-        }
+        // (the map holds all of it: the depth edge, how the surface turns, which side)
+        Shape::Rim { map } => map.at(u, v),
         Shape::Fill { near, top } => {
             let (_, _, lum) = field.at(u, v);
             // (the pixel's luminance as the photo shows it: the guide's plus the photo's exposure, as the grade reads it)
