@@ -56,10 +56,18 @@ fn set(app: &mut LightcraftApp, ctx: &egui::Context, values: Value) {
     }
 }
 
-/// A drag's start, steps and end on `resp` as one undo step labelled `label`; `step` gets the pointer.
-pub(crate) fn drag(app: &mut LightcraftApp, ui: &egui::Ui, resp: &egui::Response, label: &str, mut step: impl FnMut(&mut LightcraftApp, Pos2)) {
+/// A drag's start, steps and end on `resp` as one undo step labelled `label`; `step` gets the pointer. While it goes
+/// `control` is the dragged control (⌥ then shows where the light reaches).
+pub(crate) fn drag(
+    app: &mut LightcraftApp,
+    ui: &egui::Ui,
+    resp: &egui::Response,
+    (label, control): (&str, &str),
+    mut step: impl FnMut(&mut LightcraftApp, Pos2),
+) {
     if resp.drag_started() {
         let _ = app.run("develop.beginInteraction", json!({"label": label}));
+        app.ui.dragging_control = Some(control.to_string());
     }
     if (resp.dragged() || resp.drag_started() || resp.clicked())
         && let Some(q) = resp.interact_pointer_pos()
@@ -74,6 +82,7 @@ pub(crate) fn drag(app: &mut LightcraftApp, ui: &egui::Ui, resp: &egui::Response
     }
     if resp.drag_stopped() {
         let _ = app.run("develop.endInteraction", json!({}));
+        app.ui.dragging_control = None;
     }
     let _ = ui;
 }
@@ -137,7 +146,7 @@ fn depth_box(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings, id
     let resp = ui.interact(rect, ui.scope_id().with("relightBox"), Sense::click_and_drag());
     let at = pos2(rect.left() + rect.width() * r.x.clamp(0.0, 1.0) as f32, rect.top() + rect.height() * r.y.clamp(0.0, 1.0) as f32);
     let ctx = ui.ctx().clone();
-    drag(app, ui, &resp, "Relight Light", |app, q| {
+    drag(app, ui, &resp, ("Relight Light", "relight.x"), |app, q| {
         let (x, y) = (((q.x - rect.left()) / rect.width()) as f64, ((q.y - rect.top()) / rect.height()) as f64);
         set(app, &ctx, json!({"relight.x": x.clamp(0.0, 1.0), "relight.y": y.clamp(0.0, 1.0)}));
     });
@@ -148,13 +157,26 @@ fn depth_box(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings, id
     register(ui, "relight:light", Rect::from_center_size(at, vec2(16.0, 16.0)));
     ui.add_space(8.0);
     depth_track(app, ui, d, rect.left()..=rect.right());
-    let src = match m.source {
-        lightcraft_engine::relight::Source::File => crate::i18n::tr("Depth from the photo"),
-        lightcraft_engine::relight::Source::Model => crate::i18n::tr("Depth estimated by the AI model"),
-    };
-    ui.add_space(2.0);
-    let label = ui.label(egui::RichText::new(src).size(11.0).color(t.text_dim));
-    register(ui, "relight:source", label.rect);
+    // (a switch under the track: the picture ⌥ shows while a Relight control is dragged)
+    ui.add_space(4.0);
+    look_switch(app, ui);
+    // (only a depth map from the photo itself is named; the model's needs no caption)
+    if m.source == lightcraft_engine::relight::Source::File {
+        ui.add_space(2.0);
+        let label = ui.label(egui::RichText::new(crate::i18n::tr("Depth from the photo")).size(11.0).color(t.text_dim));
+        register(ui, "relight:source", label.rect);
+    }
+}
+
+/// The Crosses / Contours switch under the Near–Far track.
+fn look_switch(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+    use crate::state::RelightLook;
+    let items = [("Crosses", "crosses"), ("Contours", "contours")];
+    let active = Some(usize::from(app.ui.relight_look == RelightLook::Contours));
+    let tips = ["Hold ⌥ while dragging to see small crosses on the surfaces the light reaches", "Hold ⌥ while dragging to see lines of equal light"];
+    if let Some(i) = crate::widgets::segmented_tips(ui, "relightLook", &items, &tips, active, 2) {
+        app.ui.relight_look = if i == 1 { RelightLook::Contours } else { RelightLook::Crosses };
+    }
 }
 
 /// The Near–Far track under the box: where the light is in depth.
@@ -184,7 +206,7 @@ fn depth_track(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings, 
     let hit = Rect::from_min_max(pos2(x0 - 8.0, row.top()), pos2(x1 + 8.0, row.bottom()));
     let resp = ui.interact(hit, ui.scope_id().with("relightDepth"), Sense::click_and_drag());
     let ctx = ui.ctx().clone();
-    drag(app, ui, &resp, "Relight Depth", |app, q| {
+    drag(app, ui, &resp, ("Relight Depth", "relight.depth"), |app, q| {
         let v = (((q.x - x0) / (x1 - x0)) * 100.0).clamp(0.0, 100.0);
         set(app, &ctx, json!({"relight.depth": (v as f64).round()}));
     });

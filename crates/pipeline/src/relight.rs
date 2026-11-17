@@ -76,19 +76,25 @@ pub fn light_of(s: &DevelopSettings) -> Option<Light> {
 pub fn lit(info: &SourceInfo, s: &DevelopSettings) -> Option<Lit> {
     let input = info.relight.as_ref()?;
     let light = light_of(s)?;
-    let ev = s.light.exposure;
+    let (_, shading) = shading_for(input, &light, s.light.exposure);
+    Some(Lit { shading, tilt: lightcraft_relight::warmth_tilt(light.warmth) })
+}
+
+/// The shading of `light` on `input`'s field for a photo at exposure `ev`, and the key naming it (the field and every
+/// number the shading depends on: not the Warmth, which is the colour only). Made once per light and kept: the render
+/// ([`lit`]) and the ⌥-drag preview (`fork/relight.md`) take the same one.
+pub fn shading_for(input: &Input, light: &Light, ev: f64) -> (u64, Arc<Shading>) {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     std::hash::Hash::hash(&input.key, &mut h);
     for v in [light.x, light.y, light.depth, light.amount, light.softness, light.darken, light.wrap, ev] {
         std::hash::Hash::hash(&v.to_bits(), &mut h);
     }
     let key = std::hash::Hasher::finish(&h);
-    let tilt = lightcraft_relight::warmth_tilt(light.warmth);
     if let Some((_, sh)) = MEMO.lock().unwrap_or_else(PoisonError::into_inner).iter().find(|(k, _)| *k == key) {
-        return Some(Lit { shading: sh.clone(), tilt });
+        return (key, sh.clone());
     }
     let t = crate::profiling().then(std::time::Instant::now);
-    let shading = Arc::new(input.field.shading(&input.field.rig(&light, ev)));
+    let shading = Arc::new(input.field.shading(&input.field.rig(light, ev)));
     if let Some(t) = t {
         eprintln!("    relight shading ({} × {}): {:.1} ms", input.field.width, input.field.height, t.elapsed().as_secs_f64() * 1e3);
     }
@@ -96,7 +102,7 @@ pub fn lit(info: &SourceInfo, s: &DevelopSettings) -> Option<Lit> {
     memo.retain(|(k, _)| *k != key);
     memo.insert(0, (key, shading.clone()));
     memo.truncate(KEEP);
-    Some(Lit { shading, tilt })
+    (key, shading)
 }
 
 /// One of the light's planes as a mask the finish stage applies, with `adjust` per unit of it.

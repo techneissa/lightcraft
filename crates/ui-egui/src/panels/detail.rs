@@ -65,6 +65,8 @@ pub(crate) use info::{draw_focus_point, failed_pill, loupe_pill, rendering_overd
 use lens_blur::{lens_blur_brush_overlay, lens_blur_shape_overlay};
 /// Fork (issue #288): Relight's light on the photo.
 mod relight;
+/// Fork (issue #294): what ⌥ shows while a Relight control is dragged.
+mod relight_alt;
 pub use look_ahead::LookAhead;
 pub(crate) use look_ahead::{Prepare, look_ahead};
 use masks::{RegionContext, RegionEdit, color_range_pick, mask_overlay, region_overlay};
@@ -1392,6 +1394,10 @@ struct OverPhoto<'a> {
 /// the transform grid.
 fn photo_overlays(app: &mut LightcraftApp, ui: &mut egui::Ui, p: &egui::Painter, o: &OverPhoto) {
     let (canvas, img_rect) = (o.canvas, o.img_rect);
+    // fork (issue #294): ⌥ while a Relight control is dragged: where the light reaches, over the photo
+    if relight_alt::active(app) {
+        relight_alt::draw(app, ui, p, o.map, o.d, o.photo.id, img_rect.intersect(canvas));
+    }
     // (an Alt-drag preview already is a clipping or greyscale picture: the overlay would mark its own pixels)
     if o.clipping && !o.fullscreen && crate::panels::clipping::alt_overlay(app).is_none() {
         clipping_overlay(app, ui.ctx(), p, img_rect);

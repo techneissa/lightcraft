@@ -16,6 +16,7 @@
 pub mod field;
 pub mod filter;
 pub mod light;
+pub mod overlay;
 
 pub use field::{DepthMap, Field, Kind};
 pub use light::{Light, Planes, Rig, Shade, Shading, Split, warmth_tilt};

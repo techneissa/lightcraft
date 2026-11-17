@@ -101,6 +101,7 @@ pub const SYNCED: &[&str] = &[
     "removeLasso",
     "pointColorVisualize",
     "hdrVisualize",
+    "relightLook",
     "visualizeSpots",
     "spotsThreshold",
     "autoAdvance",

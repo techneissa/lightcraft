@@ -38,6 +38,8 @@ pub(super) fn overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::R
     {
         let _ = app.run("develop.beginInteraction", json!({"label": "Relight Light"}));
         ui.ctx().data_mut(|m| m.insert_temp(dragging_id, true));
+        // (⌥ while it is held shows where the light reaches: `relight_alt`)
+        app.ui.dragging_control = Some("relight.x".into());
         return true;
     }
     if !dragging {
@@ -54,6 +56,7 @@ pub(super) fn overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::R
     }
     if resp.drag_stopped() || !resp.dragged() {
         ui.ctx().data_mut(|m| m.remove::<bool>(dragging_id));
+        app.ui.dragging_control = None;
         let _ = app.run("develop.endInteraction", json!({}));
     }
     true
