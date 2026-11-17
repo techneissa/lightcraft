@@ -92,7 +92,7 @@ fn no_shadow_amount_changes_nothing_and_half_is_half() {
         half.m[i]
     );
     // a rim and a fill take none
-    for k in [LightKind::Rim(crate::Rim { width: 0.5 }), LightKind::Fill(crate::Fill { near: 0.5 })] {
+    for k in [LightKind::Rim(crate::Rim::default()), LightKind::Fill(crate::Fill { near: 0.5 })] {
         let l = light(0.2, k);
         assert!(f.visibility(&f.rig(&l, 0.0, 0.0), &l).is_none());
     }

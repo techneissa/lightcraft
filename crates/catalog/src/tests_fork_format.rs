@@ -593,7 +593,7 @@ fn a_fork_13_log_patch_of_a_light_with_a_gel_is_applied_and_nothing_is_set_aside
     );
 }
 
-/// Fork 15 (#315) made a fork 14 library an older one, but fork 14 already wrote the lights list with types: its log's
+/// Fork 16 (#315) made a fork 14 library an older one, but fork 14 already wrote the lights list with types: its log's
 /// patches name `lights` and replay as they are. A fork 14 snapshot with a spot as the second light and a log patch on that
 /// light opens with the patch applied, the type kept, no shadows, and nothing set aside.
 #[test]

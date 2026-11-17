@@ -33,8 +33,11 @@ pub struct KindSettings {
     pub box_width: f64,
     pub box_height: f64,
     pub box_rotation: f64,
-    /// Rim: how far it reaches into things, 0..100.
+    /// Rim: how far it reaches into things (0..100), the side of the photo it comes from (degrees: 0 from above, 90 from
+    /// the right, −90 from the left) and how one-sided it is (0 the whole outline .. 100 only that side).
     pub rim_width: f64,
+    pub rim_angle: f64,
+    pub rim_side: f64,
     /// Fill: how much more near things get than far ones, 0..100.
     pub fill_near: f64,
 }
@@ -53,13 +56,15 @@ impl Default for KindSettings {
             box_height: 0.2,
             box_rotation: 0.0,
             rim_width: 50.0,
+            rim_angle: 90.0,
+            rim_side: 0.0,
             fill_near: 50.0,
         }
     }
 }
 
 /// `(json key, control field)` of each number, besides `kind`.
-const NUMBERS: [(&str, &str); 11] = [
+const NUMBERS: [(&str, &str); 13] = [
     ("spotAimX", "spotAimX"),
     ("spotAimY", "spotAimY"),
     ("spotAngle", "spotAngle"),
@@ -70,6 +75,8 @@ const NUMBERS: [(&str, &str); 11] = [
     ("boxHeight", "boxHeight"),
     ("boxRotation", "boxRotation"),
     ("rimWidth", "rimWidth"),
+    ("rimAngle", "rimAngle"),
+    ("rimSide", "rimSide"),
     ("fillNear", "fillNear"),
 ];
 
@@ -102,6 +109,8 @@ impl KindSettings {
             "boxHeight" => &mut self.box_height,
             "boxRotation" => &mut self.box_rotation,
             "rimWidth" => &mut self.rim_width,
+            "rimAngle" => &mut self.rim_angle,
+            "rimSide" => &mut self.rim_side,
             "fillNear" => &mut self.fill_near,
             _ => return None,
         })
@@ -183,6 +192,8 @@ pub static SPECS: &[ControlSpec] = &[
     spec("relight.boxHeight", "Box Height", (0.02, 1.5, 0.2), (0.001, 3)),
     spec("relight.boxRotation", "Box Angle", (-180.0, 180.0, 0.0), (1.0, 0)),
     spec("relight.rimWidth", "Rim Width", (0.0, 100.0, 50.0), (1.0, 0)),
+    spec("relight.rimAngle", "Rim Direction", (-180.0, 180.0, 90.0), (1.0, 0)),
+    spec("relight.rimSide", "Rim One-Sided", (0.0, 100.0, 0.0), (1.0, 0)),
     spec("relight.fillNear", "Near Bias", (0.0, 100.0, 50.0), (1.0, 0)),
 ];
 

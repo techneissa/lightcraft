@@ -20,9 +20,12 @@ pub mod filter;
 pub mod kinds;
 pub mod light;
 pub mod overlay;
+mod rim;
 pub mod shadow;
 #[cfg(test)]
 mod tests_kinds;
+#[cfg(test)]
+mod tests_rim;
 #[cfg(test)]
 mod tests_shadow;
 
