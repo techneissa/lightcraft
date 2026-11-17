@@ -18,6 +18,8 @@ History is in the PRs: #288 (the feature), #294 (⌥ overlay), #299 (several lig
   A `Visibility` is kept per light (`SHADOWS`) and upsampled into the lobe. A drag marches coarser; the release and export march in full. A Rim and a Fill take no shadow.
 - **Beams (#317):** Haze shows the light's beams (`beam.rs`). Each line of sight sums single-scattered light, cut by the same blockers as shadows plus a slab for walls, with open sky letting light through.
   Forward Scatter (`scatter`) and Dust (`dust`) shape it. The beam is added on top in the light's colour as extra mask planes (`LocalAdjustments::fork_added`, never saved), not a gain. Shafts are kept until the light moves. A Rim and a Fill make no beam.
+- **Mist and fog (#331):** Low Mist and Mist Height thicken the haze near a ground plane fitted from up-facing normals (`mist.rs`), not by image row.
+  Distance Fade (`c·T + air·(1−T)`) is one per photo: the strongest light's numbers, coloured by the far tenth plus 30 % of the lights with fade on; sent as an exposure plane plus a `fork_added` plane.
 - **Presets (#301):** a Light Presets flyout lists seven built-ins (Rembrandt, Butterfly, Split, Rim + Fill, Golden-Hour Window, Neon Two-Tone, Candle) and your own.
   Presets are written for a face and placed round the photo's subject (`Subject::place`, depth from `Field::depth_in`). Applying is one undo step. Yours live in the library's `presets.json` (`relightPresets`), read entry by entry.
   `relight.applyPreset` returns `{applied: false, finding: true}` while depth is still found.
@@ -41,6 +43,7 @@ History is in the PRs: #288 (the feature), #294 (⌥ overlay), #299 (several lig
 - 16: `shadows`.
 - 17: `patternOpen`.
 - 18: `scatter`, `dust`.
+- 19: `mist`, `mistHeight`, `fade` (#331).
 - If the upgrade snapshot cannot be written, the journal appends nothing (`Journal::upgrade_pending`) and retries before the next append.
 
 ## Own files

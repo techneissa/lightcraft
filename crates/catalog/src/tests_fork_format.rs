@@ -748,7 +748,7 @@ fn a_failed_upgrade_snapshot_leaves_no_log_of_two_formats() {
     assert_eq!(again.photo(id).unwrap().develop.relight.lights[0].amount, 90.0);
 }
 
-/// Fork 22 (#331) made a fork 18 library an older one, but fork 18 already wrote haze, Forward Scatter and Dust per light: its
+/// Fork 19 (#331) made a fork 18 library an older one, but fork 18 already wrote haze, Forward Scatter and Dust per light: its
 /// log's patches replay as they are. A fork 18 snapshot with a hazy light at Forward Scatter 80 and Dust 30 and a log patch on
 /// its haze opens with the patch applied, Scatter and Dust kept, Low Mist, Mist Height and Distance Fade at their defaults, and
 /// nothing set aside.
