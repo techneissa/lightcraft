@@ -38,25 +38,31 @@ impl SubjectSource {
 
 /// The presets read from a library's file: none without an id and a name, none whose id repeats (or is a built-in one's)
 /// or whose name is a built-in preset's or an earlier one's (letter case aside), at most [`MAX_USER`], each as a user preset,
-/// its name cut to [`MAX_NAME`] characters.
-pub fn read_user(list: Vec<LightPreset>) -> Vec<LightPreset> {
+/// its name cut to [`MAX_NAME`] characters. With them, how many presets were left out or cut.
+pub fn read_user(list: Vec<LightPreset>) -> (Vec<LightPreset>, usize) {
     let mut ids: Vec<String> = built_in().iter().map(|p| p.id.clone()).collect();
     let mut names: Vec<String> = built_in().iter().map(|p| p.name.to_lowercase()).collect();
     let mut out = Vec::new();
+    let mut changed = 0usize;
     for mut p in list {
-        let Some(name) = lightcraft_develop::relight_presets::clean_name(&p.name) else { continue };
-        let name: String = name.chars().take(MAX_NAME).collect();
+        let Some(clean) = lightcraft_develop::relight_presets::clean_name(&p.name) else {
+            changed += 1;
+            continue;
+        };
+        let name: String = clean.chars().take(MAX_NAME).collect();
         let name = name.trim().to_string();
         if p.id.trim().is_empty() || ids.contains(&p.id) || names.contains(&name.to_lowercase()) || out.len() >= MAX_USER {
+            changed += 1;
             continue;
         }
+        changed += usize::from(name.chars().count() < clean.chars().count());
         p.name = name;
         p.builtin = false;
         ids.push(p.id.clone());
         names.push(p.name.to_lowercase());
         out.push(p);
     }
-    out
+    (out, changed)
 }
 
 /// The union of boxes (`[x0, y0, x1, y1]`).

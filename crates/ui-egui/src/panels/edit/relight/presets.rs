@@ -25,7 +25,7 @@ struct Edit {
     naming: Option<String>,
     renaming: Option<(String, String)>,
     /// A preset clicked while the photo's depth was still being found: applied once it is.
-    pending: Option<(PhotoId, String)>,
+    pending: Option<(PhotoId, String, u64)>,
 }
 
 fn state_id() -> egui::Id {
@@ -70,7 +70,7 @@ pub(super) fn presets(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSet
 fn apply(app: &mut LightcraftApp, ctx: &egui::Context, edit: &mut Edit, photo: PhotoId, preset: &str) {
     match app.run("relight.applyPreset", json!({"preset": preset})) {
         Ok(r) if r["finding"].as_bool() == Some(true) => {
-            edit.pending = Some((photo, preset.to_string()));
+            edit.pending = Some((photo, preset.to_string(), app.session.library_generation()));
             app.toast(ctx, crate::i18n::tr("Finding the photo's depth… the preset applies when it is found"));
         }
         Ok(_) => {}
@@ -80,13 +80,14 @@ fn apply(app: &mut LightcraftApp, ctx: &egui::Context, edit: &mut Edit, photo: P
 
 /// The preset clicked while the depth was being found, once it is (or can't be): applied then; dropped on another photo.
 fn apply_pending(app: &mut LightcraftApp, ctx: &egui::Context, edit: &mut Edit, photo: PhotoId) {
-    let Some((on, preset)) = edit.pending.clone() else { return };
+    let Some((on, preset, library)) = edit.pending.clone() else { return };
     edit.pending = None;
-    if on != photo {
+    // (another photo, or another library whose active photo has the same id, is not the one clicked on)
+    if on != photo || library != app.session.library_generation() {
         return;
     }
     if app.session.relight_status(photo)["finding"].as_bool() == Some(true) {
-        edit.pending = Some((on, preset));
+        edit.pending = Some((on, preset, library));
         ctx.request_repaint_after(std::time::Duration::from_millis(250));
         return;
     }

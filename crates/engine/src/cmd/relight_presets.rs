@@ -92,7 +92,7 @@ fn save(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     let subject = s.relight_subject(id);
-    // (an id no preset has, kept stable when others are deleted; one that would overflow is not counted)
+    // (an id no preset has, kept stable when others are deleted; one that would overflow is an error)
     let next = s
         .relight_presets
         .iter()
@@ -146,7 +146,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Apply Light Preset",
             [],
             None,
-            "{preset: a preset's id or name} → {preset: {id, name}, lights, subject} — replace the active photo's lights (and Darken Surroundings) with the preset's, placed round the photo's face and at its depth, and turn the Relight section on; one undo step. While the photo's depth is still being found nothing is applied and `{applied: false, finding: true}` comes back at once (apply again when `relight.status` says ready); a depth that was cancelled or failed is not tried again and the lights take their depth as written The photo's other settings are not touched",
+            "{preset: a preset's id or name} → {preset: {id, name}, lights, subject} — replace the active photo's lights (and Darken Surroundings) with the preset's, placed round the photo's face and at its depth, and turn the Relight section on; one undo step. While the photo's depth is still being found nothing is applied and `{applied: false, finding: true}` comes back at once (apply again when `relight.status` says ready); a depth that was cancelled or failed is not tried again and the lights take their depth as written. The photo's other settings are not touched",
             has_active,
             apply
         ),

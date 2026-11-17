@@ -172,7 +172,8 @@ fn a_damaged_list_of_saved_presets_reads_what_it_can() {
         LightPreset { id: "user-2".into(), name: "  ".into(), ..LightPreset::default() },
         LightPreset { id: "rembrandt".into(), name: "Takes A Built-In Id".into(), ..LightPreset::default() },
     ];
-    assert_eq!(super::read_user(list), vec![good]);
+    let (kept, changed) = super::read_user(list);
+    assert_eq!((kept, changed), (vec![good], 4));
 }
 
 #[test]
@@ -207,9 +208,11 @@ fn a_new_ids_number_that_would_overflow_is_an_error_not_a_panic() {
 fn names_from_the_file_are_cut_and_a_built_in_or_repeated_name_is_left_out() {
     use lightcraft_develop::relight_presets::{LightPreset, MAX_NAME};
     let named = |id: &str, name: &str| LightPreset { id: id.into(), name: name.into(), ..LightPreset::default() };
-    let list =
+    let (list, changed) =
         super::read_user(vec![named("user-1", &"x".repeat(90)), named("user-2", " RemBrandt "), named("user-3", "Mine"), named("user-4", "mine")]);
     assert_eq!(list.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(), ["user-1", "user-3"]);
+    // (one cut, two left out)
+    assert_eq!(changed, 3);
     assert_eq!(list[0].name.chars().count(), MAX_NAME);
 }
 
@@ -247,7 +250,7 @@ fn one_bad_entry_of_presets_json_costs_only_itself() {
     assert!(s.presets.iter().all(|p| p.id != "mine-2"));
     assert_eq!(s.relight_presets.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), ["Good"]);
     let aside = std::fs::read_dir(&dir).unwrap().filter_map(|e| e.ok()).any(|e| e.file_name().to_string_lossy().contains("presets.json.corrupt"));
-    assert!(!aside, "nothing is set aside");
+    assert!(aside, "a copy of the file is kept before the next save writes it without the bad ones");
     drop(s);
     let _ = std::fs::remove_dir_all(&dir);
 }

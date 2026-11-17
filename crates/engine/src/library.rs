@@ -818,11 +818,12 @@ impl Session {
             self.profile_favorites = strings(f.profile_favorites).into_iter().filter(known).collect();
             self.profile_recent = strings(f.profile_recent).into_iter().filter(known).take(crate::presets::RECENT_PROFILES).collect();
             let (light, bad_light) = read_each::<lightcraft_develop::relight_presets::LightPreset>(f.relight_presets);
-            self.relight_presets = crate::relight_presets::read_user(light);
-            let bad = bad_user + bad_light;
+            let (light, bad_names) = crate::relight_presets::read_user(light);
+            self.relight_presets = light;
+            // (what is left out or cut is kept in a copy of the file, as for the saved locations: the next save writes the good ones only)
+            let bad = bad_user + bad_light + bad_names;
             if bad > 0 {
-                log::error!("library: presets.json: {bad} preset(s) in it aren't valid and were left out");
-                settings.warnings.push(format!("presets.json: {bad} preset(s) in it aren't valid and were left out."));
+                settings.set_aside(files.as_mut(), "presets.json", &format!("{bad} preset(s) in it aren't valid or were left out or cut"));
             }
         }
         // view state
