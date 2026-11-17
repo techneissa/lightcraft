@@ -36,13 +36,24 @@ const FIRST: usize = 4;
 const MORE: usize = 12;
 /// A ray point is behind a surface when its depth is more than this ratio of the surface's (a little over: the
 /// surface it starts on, and the depth model's small ripples, don't shadow it) ...
-/// (a ray behind a surface is blocked only once it runs through more than this share of the surface's thickness, and in full when it
-/// runs through all of it: see [`March::let_through`])
-const THROUGH_FROM: f32 = 0.6;
 const BIAS: f32 = 1.08;
 /// ... and a thing blocks the light only so far behind its visible surface: this ratio of the surface's depth is the
 /// thickness a thing is taken to have (about 0.4 in log depth), since the photo shows nothing behind a thing's front.
 const THICK: f32 = 1.5;
+/// The share of a band's near and far edges over which a ray sample counts as in it by degrees (the near one is narrow: a light just
+/// behind a person's front must still be hidden from the floor in front of them).
+const EDGE_FADE: (f32, f32) = (0.07, 0.06);
+/// A ray behind a surface is blocked only once it runs through more than this share of the surface's thickness, and in full when it
+/// runs through all of it (see [`March::let_through`]).
+const THROUGH_FROM: f32 = 0.6;
+/// A ray with an end in front of the surface's band is blocked in full; the block fades out above the band's near edge over this share of
+/// it for the receiver (an end at 1.08 to 1.08 · (1 + this) times the surface's depth) and over `.1` for the light, so a surface a little
+/// deeper than the subject, or a light a little behind its front, makes no visible line (the light's is the narrower: a light at 1.2
+/// times the subject's depth, inside its band, should hardly dim what lies behind it).
+const FRONT_FADE: (f32, f32) = (0.15, 0.08);
+/// How far apart the first rays of a pixel may be before the penumbra pass runs (they agree on a partial value where a light is hidden in
+/// part: nothing to refine).
+const SPREAD: f32 = 0.05;
 /// Only a thing that stands out of its surroundings blocks: its log depth is this much nearer than the farthest of the pixels
 /// within [`STAND_REACH`] of the picture's width to its left or right ([`Reduced::stand`]). A receding floor, a staircase's treads and the depth model's ripples and
 /// terraces (a few to 20 % of depth) stand out of nothing, so rays grazing along them are not blocked and no speckle shows; a
@@ -237,21 +248,23 @@ impl March<'_> {
     /// How much of the light a surface of depth `zs` lets a ray through whose depth runs from `z0` to `z1` and which is in the
     /// surface's band (a thing is taken to reach from [`BIAS`] to [`THICK`] times `zs`) at a sample: 1 all of it, 0 none.
     ///
-    /// A ray that starts in front of the surface (`z0` under the band) hits its front, wherever its light lies behind it: it
-    /// is blocked. One that starts behind the surface (a wall behind a person) is blocked by the share of the surface's thickness
-    /// it runs through beyond [`THROUGH_FROM`] of it, squared: a light inside the thing's band is hidden from what lies behind it only
-    /// in part, and not at all when the band's far edge is where it is. So the shadow changes smoothly as a light's depth crosses a
-    /// band's edge (a light just behind a person still shades the floor in front of them; a light a little behind a near subject
-    /// does not shade the whole wall).
+    /// - A ray with an end in front of the band (the floor in front of a person, a light in front of the subject) crosses the surface's
+    ///   front, wherever its other end lies: it is blocked, and the block fades out over [`FRONT_FADE`] above the band's near edge
+    ///   (each end by its own), so the shadow has no line where a surface or a light passes 1.08 times the subject's depth.
+    /// - One with both ends in or behind the band (a wall behind a person, a light inside the band) is blocked by the share of the
+    ///   thickness it runs through beyond [`THROUGH_FROM`] of it, squared: a light inside the thing's band is hidden from what lies
+    ///   behind it only in part, and not at all when the band's far edge is where it is.
+    ///
+    /// So the shadow changes smoothly as a light's or a surface's depth crosses a band's edge: a light just behind a person still
+    /// shades the floor in front of them; a light a little behind a near subject does not shade the whole wall.
     fn let_through(zs: f32, z0: f32, z1: f32) -> f32 {
         let (lo, hi) = (zs * BIAS, zs * THICK);
-        if z0 < lo {
-            return 0.0;
-        }
+        let fade = |z: f32, share: f32| ((lo * (1.0 + share) - z) / (lo * share)).clamp(0.0, 1.0);
+        let front = fade(z0, FRONT_FADE.0).max(fade(z1, FRONT_FADE.1));
         let overlap = (z0.max(z1).min(hi) - z0.min(z1).max(lo)).max(0.0);
         let through = (overlap / (hi - lo).max(1e-6)).clamp(0.0, 1.0);
         let g = ((through - THROUGH_FROM) / (1.0 - THROUGH_FROM)).clamp(0.0, 1.0);
-        1.0 - g * g
+        1.0 - front.max(g * g)
     }
 
     /// How much of the light the ray from `p` along `d` (`d` spans the whole way to the light when `whole`, else it is a direction)
@@ -281,8 +294,12 @@ impl March<'_> {
             if r.stand.get(iy * r.w + ix).is_none_or(|s| *s < STAND) {
                 continue;
             }
-            if q[2] > zs * BIAS && q[2] < zs * THICK {
-                through = through.min(Self::let_through(*zs, z0, z1));
+            // (the sample counts as in the band by degrees over the first and last [`EDGE_FADE`] of it: a ray whose crossing of the subject
+            // passes the band's edge makes no line)
+            let (lo, hi) = (zs * BIAS, zs * THICK);
+            let inside = ((q[2] - lo) / (lo * EDGE_FADE.0)).clamp(0.0, 1.0).min(((hi - q[2]) / (hi * EDGE_FADE.1)).clamp(0.0, 1.0));
+            if inside > 0.0 {
+                through = through.min(1.0 - inside * (1.0 - Self::let_through(*zs, z0, z1)));
                 if through <= 0.0 {
                     break;
                 }
@@ -324,8 +341,9 @@ impl March<'_> {
         let p = [(u - 0.5) * self.kx * z, (v - 0.5) * self.ky * z, z];
         let turn = noise(x, y, 1) * std::f32::consts::TAU;
         let jit = noise(x, y, 2);
-        let first: f32 = (0..FIRST).map(|k| self.ray(p, k, turn, jit)).sum();
-        if draft || first < 1e-3 || first > FIRST as f32 - 1e-3 {
+        let rays: Vec<f32> = (0..FIRST).map(|k| self.ray(p, k, turn, jit)).collect();
+        let (first, lo, hi) = (rays.iter().sum::<f32>(), rays.iter().copied().fold(1.0, f32::min), rays.iter().copied().fold(0.0, f32::max));
+        if draft || hi - lo < SPREAD {
             return first / FIRST as f32;
         }
         // (a pixel in a penumbra: more rays across the whole light)

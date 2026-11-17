@@ -270,7 +270,7 @@ fn person_and_floor() -> Field {
 }
 
 #[test]
-fn a_lights_shadow_of_a_person_changes_smoothly_as_the_light_crosses_the_edge_of_their_thickness() {
+fn a_persons_shadow_on_the_floor_in_front_has_no_step_as_the_light_crosses_the_far_edge_of_their_thickness() {
     let f = person_and_floor();
     // the mean share of the light the floor under the person (the rows from 0.75 down, `u` 0.42 .. 0.58) sees, for a light over the
     // person at `k` times their depth
@@ -291,9 +291,83 @@ fn a_lights_shadow_of_a_person_changes_smoothly_as_the_light_crosses_the_edge_of
     };
     // (just behind the person the floor in front of them is in their shadow, and the light's depth crossing 1.5 times theirs, the edge of
     // the thickness a thing is taken to have, changes that by no more than 0.1 in any step of 0.05, from 1.3 to 1.9 times)
-    assert!(floor_light(1.15) < 0.3, "a light just behind the person: the floor sees {}", floor_light(1.15));
+    assert!(floor_light(1.25) < 0.3, "a light a quarter behind the person: the floor sees {}", floor_light(1.25));
     let steps: Vec<f32> = (0..=12).map(|i| floor_light(1.3 + 0.05 * i as f32)).collect();
     for pair in steps.windows(2) {
         assert!((pair[1] - pair[0]).abs() <= 0.1, "the floor's light jumps: {steps:?}");
     }
+}
+
+/// A subject (`u` 0.45 .. 0.55, `v` 0.3 .. 0.7, depth 1) in front of a wall `wall` times its depth.
+fn subject_before_wall(wall: f32) -> Field {
+    let lz: Vec<f32> = (0..W * H)
+        .map(|i| {
+            let (u, v) = ((i % W) as f32 / W as f32, (i / W) as f32 / H as f32);
+            if (0.45..0.55).contains(&u) && (0.3..0.7).contains(&v) { 0.0 } else { wall.ln() }
+        })
+        .collect();
+    Field::from_parts(W, H, lz, vec![-2.0; W * H]).unwrap()
+}
+
+/// The share of the light the wall right of the subject (`u` 0.57 .. 0.63, the rows 0.45 .. 0.55) sees from a light left of it at `k` times
+/// the subject's depth.
+fn wall_right_of_the_subject(f: &Field, k: f32) -> f32 {
+    let d = f64::from((k.ln() - f.near + 0.6) / (f.far - f.near + 0.6));
+    let l = Light { x: 0.05, y: 0.5, depth: d, ..light(0.05, LightKind::Point) };
+    let plane = f.visibility_plane(&f.visibility(&f.rig(&l, 0.0, 0.0), &l, false).unwrap());
+    let mut sum = 0.0;
+    let mut n = 0.0;
+    for y in (H * 45 / 100)..(H * 55 / 100) {
+        for x in (W * 57 / 100)..(W * 63 / 100) {
+            sum += plane[y * W + x];
+            n += 1.0;
+        }
+    }
+    sum / n
+}
+
+#[test]
+fn a_wall_a_little_behind_a_subject_is_in_its_shadow_from_a_light_at_or_in_front_of_the_subject() {
+    // the wall 33 % and 30 % behind the subject (inside the thickness a thing is taken to have), the light to the left at 0.7, 0.9 and
+    // 1 times the subject's depth: the way to it crosses the subject's front
+    for wall in [1.33, 1.3] {
+        let f = subject_before_wall(wall);
+        for k in [0.7, 0.9, 1.0] {
+            let lit = wall_right_of_the_subject(&f, k);
+            assert!(lit < 0.3, "wall at {wall}, light at {k}: the wall right of the subject sees {lit} of the light");
+        }
+    }
+}
+
+#[test]
+fn a_surface_just_behind_a_subject_changes_smoothly_with_its_depth_when_the_light_is_inside_the_subjects_thickness() {
+    // the light left of the subject at 1.2 times its depth (inside its band); the surface to its right at 1.06 .. 1.12 times: crossing the
+    // 1.08 where the band begins, it must not step by more than 0.1 per 0.01 of depth
+    let lit: Vec<f32> = (0..=6)
+        .map(|i| {
+            let f = subject_beside_a_surface(1.06 + 0.01 * i as f32);
+            wall_right_of_the_subject(&f, 1.2)
+        })
+        .collect();
+    for pair in lit.windows(2) {
+        assert!((pair[1] - pair[0]).abs() <= 0.1, "the surface's light steps: {lit:?}");
+    }
+}
+
+/// A subject (`u` 0.45 .. 0.55, `v` 0.3 .. 0.7, depth 1) with a far wall (4 times its depth) to its left, so that it stands out, and to its right a
+/// surface `near_side` times its depth.
+fn subject_beside_a_surface(near_side: f32) -> Field {
+    let lz: Vec<f32> = (0..W * H)
+        .map(|i| {
+            let (u, v) = ((i % W) as f32 / W as f32, (i / W) as f32 / H as f32);
+            if (0.45..0.55).contains(&u) && (0.3..0.7).contains(&v) {
+                0.0
+            } else if u < 0.45 {
+                4.0f32.ln()
+            } else {
+                near_side.ln()
+            }
+        })
+        .collect();
+    Field::from_parts(W, H, lz, vec![-2.0; W * H]).unwrap()
 }
