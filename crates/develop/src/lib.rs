@@ -235,6 +235,8 @@ impl DevelopSettings {
             }
             // and the per-face settings with them
             Section::Portrait => self.retouch = Default::default(),
+            // (fork, issue #299: all the lights, not just the first)
+            Section::Relight => self.relight = Default::default(),
             _ => {}
         }
     }

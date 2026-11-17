@@ -466,10 +466,10 @@ mod tests {
         let ramp: Vec<f32> = (0..w * h).map(|i| 0.01 * (h - i / w) as f32).collect();
         let terraces: Vec<f32> = (0..w * h).map(|i| 0.08 * ((h - i / w) / 8) as f32 + 0.04).collect();
         let lum = vec![-1.0; w * h];
-        let light = Light { x: 0.3, y: 0.4, depth: 0.2, amount: 1.0, softness: 0.6, warmth: 0.5, darken: 0.0, wrap: 0.3 };
+        let light = Light { x: 0.3, y: 0.4, depth: 0.2, amount: 1.0, softness: 0.6, warmth: 0.5, wrap: 0.3 };
         let lit = |lz: Vec<f32>| {
             let f = Field::from_parts(w, h, lz, lum.clone()).unwrap();
-            let sh = f.shading(&f.rig(&light, 0.0));
+            let sh = f.shading(&f.rig(&light, 0.0, 0.0));
             sh.planes(w, h, &|x, y| (x / w as f64, y / h as f64))
         };
         let (a, b) = (lit(ramp), lit(terraces));

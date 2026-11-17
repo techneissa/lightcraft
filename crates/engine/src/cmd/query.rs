@@ -211,14 +211,15 @@ pub fn specs() -> Vec<CommandSpec> {
                         v["value"] = json!(controls::get(&d, c.id));
                         v
                     }))
-                    // Relight (fork, issue #288)
+                    // Relight (fork, issue #288; `relight.amount` … read the selected light, issue #299)
                     .chain(lightcraft_develop::relight::specs().filter(|c| sec.is_none_or(|x| x == c.section)).map(|c| {
                         let mut v = serde_json::to_value(c).unwrap_or_default();
-                        v["value"] = json!(controls::get(&d, c.id));
+                        let own = s.active().and_then(|id| lightcraft_develop::relight::for_light(c.id, s.relight_selected(id)));
+                        v["value"] = json!(controls::get(&d, own.as_deref().unwrap_or(c.id)));
                         v
                     }))
                     // indexed controls of the list elements that exist (`pointColor.0.hueShift`, …)
-                    .chain(controls::indexed_instances(&d).into_iter().chain(lightcraft_develop::retouch::face_instances(&d)).filter(|(_, c)| sec.is_none_or(|x| x == c.section)).map(|(id, c)| {
+                    .chain(controls::indexed_instances(&d).into_iter().chain(lightcraft_develop::retouch::face_instances(&d)).chain(lightcraft_develop::relight::light_instances(&d)).filter(|(_, c)| sec.is_none_or(|x| x == c.section)).map(|(id, c)| {
                         let mut v = serde_json::to_value(c).unwrap_or_default();
                         v["value"] = json!(controls::get(&d, &id));
                         v["id"] = json!(id);

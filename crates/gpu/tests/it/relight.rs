@@ -4,6 +4,7 @@
 
 use std::sync::Arc;
 
+use lightcraft_develop::relight::LightSettings;
 use lightcraft_develop::{DevelopSettings, LocalAdjustments, Mask, MaskComponent, MaskOp, MaskShape};
 use lightcraft_geom::{Point, Rect};
 use lightcraft_pipeline::{RenderRequest, SourceInfo, relight, render};
@@ -34,11 +35,7 @@ fn source() -> (Arc<Rgb32f>, SourceInfo) {
 
 fn lit(warmth: f64, darken: f64) -> DevelopSettings {
     let mut s = DevelopSettings::default();
-    s.relight.amount = 80.0;
-    s.relight.x = 0.3;
-    s.relight.y = 0.45;
-    s.relight.depth = 15.0;
-    s.relight.warmth = warmth;
+    s.relight.lights[0] = LightSettings { amount: 80.0, x: 0.3, y: 0.45, depth: 15.0, warmth, ..LightSettings::default() };
     s.relight.darken = darken;
     s
 }
@@ -64,8 +61,13 @@ fn relight_matches_cpu() {
         adjust: LocalAdjustments { exposure: -0.5, ..LocalAdjustments::default() },
         ..Mask::default()
     }];
+    // a warm key and a cool fill together (the colour goes up as two planes)
+    let mut pair = lit(70.0, 20.0);
+    pair.relight.lights.push(LightSettings { amount: 60.0, warmth: -80.0, x: 0.8, y: 0.3, depth: 40.0, softness: 30.0, ..LightSettings::default() });
     let req = RenderRequest::fit(720, 720);
-    for (name, s) in [("white light", lit(0.0, 0.0)), ("warm, darkened", warm), ("cool, cropped", cropped), ("after a mask", masked)] {
+    for (name, s) in
+        [("white light", lit(0.0, 0.0)), ("warm, darkened", warm), ("cool, cropped", cropped), ("after a mask", masked), ("warm and cool", pair)]
+    {
         let cpu = render(&src, &info, &s, &req).image;
         let off = render(&src, &SourceInfo { relight: None, ..info.clone() }, &s, &req).image;
         assert_ne!(cpu.data, off.data, "{name}: the light changed nothing");

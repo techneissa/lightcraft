@@ -325,6 +325,13 @@ pub fn specs() -> Vec<CommandSpec> {
                 if vals.is_empty() {
                     return Err(bad("develop.set", "give `control`+`value` or `values`"));
                 }
+                // (fork, issue #299: `relight.amount` … act on the selected light)
+                let selected = s.active().map_or(0, |id| s.relight_selected(id));
+                for (k, _) in &mut vals {
+                    if let Some(own) = lightcraft_develop::relight::for_light(k, selected) {
+                        *k = own;
+                    }
+                }
                 for (k, _) in &vals {
                     if controls::find(k).is_none() {
                         return Err(bad("develop.set", format!("unknown control `{k}`")));
@@ -374,6 +381,8 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         cmd!("develop.adjust", "Nudge Develop Value", [], None, "{control, delta}", has_active, |s, p| {
             let c = str_param(p, "control").ok_or_else(|| bad("develop.adjust", "missing control"))?.to_string();
+            // (fork, issue #299: `relight.amount` … act on the selected light)
+            let c = lightcraft_develop::relight::for_light(&c, s.active().map_or(0, |id| s.relight_selected(id))).unwrap_or(c);
             let spec = controls::find(&c).ok_or_else(|| bad("develop.adjust", "unknown control"))?;
             let delta = f64_req(p, "delta", "develop.adjust")?;
             let id = active(s, "develop.adjust")?;
