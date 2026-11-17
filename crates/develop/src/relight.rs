@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::controls::{ControlSpec, Section, Track};
+pub use crate::relight_kinds::KindSettings;
 
 /// The settings' JSON key (a namespace of this fork's own: a build without it ignores it).
 pub const KEY: &str = "fork_relight";
@@ -38,11 +39,14 @@ pub struct LightSettings {
     pub depth: f64,
     /// Advanced: how far the light wraps around shapes, 0 (follows them closely) .. 100 (ignores them).
     pub wrap: f64,
+    /// What the light is and the numbers of its type (issue #300; a Point, as before, by default).
+    #[serde(flatten)]
+    pub kind: KindSettings,
 }
 
 impl Default for LightSettings {
     fn default() -> Self {
-        Self { amount: 0.0, softness: 50.0, warmth: 0.0, x: 0.35, y: 0.3, depth: 30.0, wrap: 40.0 }
+        Self { amount: 0.0, softness: 50.0, warmth: 0.0, x: 0.35, y: 0.3, depth: 30.0, wrap: 40.0, kind: KindSettings::default() }
     }
 }
 
@@ -85,7 +89,8 @@ impl Default for Stored {
 }
 
 impl Stored {
-    fn light(&self) -> LightSettings {
+    /// The light these numbers and `stored`'s type fields make.
+    fn light(&self, stored: &Value) -> LightSettings {
         let mut l = LightSettings {
             amount: self.amount,
             softness: self.softness,
@@ -94,6 +99,7 @@ impl Stored {
             y: self.y,
             depth: self.depth,
             wrap: self.wrap,
+            kind: KindSettings::read(stored),
         };
         l.sanitize();
         l
@@ -111,13 +117,13 @@ impl<'de> Deserialize<'de> for Relight {
         let mut r = match object.get("lights") {
             None => {
                 let Ok(s) = serde_json::from_value::<Stored>(v.clone()) else { return Ok(Relight::default()) };
-                Relight { lights: vec![s.light()], darken: s.darken }
+                Relight { lights: vec![s.light(&v)], darken: s.darken }
             }
             Some(Value::Array(list)) => {
                 let lights: Vec<LightSettings> = list
                     .iter()
                     .take(MAX_LIGHTS)
-                    .map(|l| serde_json::from_value::<Stored>(l.clone()).map(|s| s.light()).unwrap_or_default())
+                    .map(|l| serde_json::from_value::<Stored>(l.clone()).map(|s| s.light(l)).unwrap_or_default())
                     .collect();
                 let darken = match object.get("darken") {
                     None => 0.0,
@@ -135,11 +141,12 @@ impl<'de> Deserialize<'de> for Relight {
 impl LightSettings {
     /// Every number within its control's range.
     pub fn sanitize(&mut self) {
-        for spec in SPECS.iter().filter(|c| c.id != "relight.darken") {
+        for spec in all().filter(|c| c.id != "relight.darken") {
             if let Some(v) = spec.id.strip_prefix("relight.").and_then(|f| self.field(f)) {
                 *v = spec.clamp(*v);
             }
         }
+        self.kind.which = self.kind.which.round();
     }
 
     fn value(&self, field: &str) -> Option<f64> {
@@ -156,7 +163,7 @@ impl LightSettings {
             "y" => &mut self.y,
             "depth" => &mut self.depth,
             "wrap" => &mut self.wrap,
-            _ => return None,
+            _ => return self.kind.field(field),
         })
     }
 }
@@ -222,7 +229,12 @@ pub static SPECS: &[ControlSpec] = &[
 /// Relight's control specs: the per-light ones (`relight.amount` …, templates of `relight.<n>.amount` …) and
 /// `relight.darken`.
 pub fn specs() -> impl Iterator<Item = &'static ControlSpec> {
-    SPECS.iter()
+    all()
+}
+
+/// The per-light specs and `relight.darken`, then the light type's (issue #300).
+fn all() -> impl Iterator<Item = &'static ControlSpec> {
+    SPECS.iter().chain(crate::relight_kinds::SPECS)
 }
 
 /// The spec of control `id`, when it is one of Relight's: `relight.amount` (the first light's; the engine's commands
@@ -233,7 +245,7 @@ pub fn find(id: &str) -> Option<&'static ControlSpec> {
     if field == "darken" && n.is_some() {
         return None;
     }
-    SPECS.iter().find(|c| c.id.strip_prefix("relight.") == Some(field))
+    all().find(|c| c.id.strip_prefix("relight.") == Some(field))
 }
 
 /// A per-light control id read for light `selected`: `relight.amount` → `relight.<selected>.amount`; `None` for any
@@ -249,7 +261,7 @@ pub fn for_light(id: &str, selected: usize) -> Option<String> {
 pub fn light_instances(s: &crate::DevelopSettings) -> Vec<(String, &'static ControlSpec)> {
     let mut out = Vec::new();
     for n in 0..s.relight.lights.len() {
-        for spec in SPECS.iter().filter(|c| c.id != "relight.darken") {
+        for spec in all().filter(|c| c.id != "relight.darken") {
             if let Some(field) = spec.id.strip_prefix("relight.") {
                 out.push((format!("relight.{n}.{field}"), spec));
             }
@@ -272,7 +284,8 @@ pub fn set(s: &mut crate::DevelopSettings, id: &str, v: f64) -> bool {
     let Some(spec) = find(id) else { return false };
     match s.relight.field(id) {
         Some(f) => {
-            *f = spec.clamp(v);
+            // (the light's type is a whole number)
+            *f = if spec.id == "relight.kind" { spec.clamp(v).round() } else { spec.clamp(v) };
             true
         }
         None => false,
@@ -308,7 +321,7 @@ mod tests {
         // what builds before issue #299 wrote: one light's numbers and Darken Surroundings in one object
         let v = json!({"fork_relight": {"amount": 70.0, "softness": 20.0, "warmth": 15.0, "x": 0.6, "y": 0.4, "depth": 55.0, "darken": 35.0, "wrap": 10.0}});
         let r = DevelopSettings::from_json(&v).unwrap().relight;
-        let one = LightSettings { amount: 70.0, softness: 20.0, warmth: 15.0, x: 0.6, y: 0.4, depth: 55.0, wrap: 10.0 };
+        let one = LightSettings { amount: 70.0, softness: 20.0, warmth: 15.0, x: 0.6, y: 0.4, depth: 55.0, wrap: 10.0, ..LightSettings::default() };
         assert_eq!(r, Relight { lights: vec![one], darken: 35.0 });
         // a field that was left out keeps its default
         let r = DevelopSettings::from_json(&json!({"fork_relight": {"amount": 70.0}})).unwrap().relight;
@@ -358,7 +371,7 @@ mod tests {
         assert_eq!((get(&s, "relight.0.warmth"), get(&s, "relight.1.warmth")), (Some(-50.0), Some(0.0)));
         assert_eq!(for_light("relight.amount", 2).as_deref(), Some("relight.2.amount"));
         assert_eq!((for_light("relight.darken", 2), for_light("relight.1.amount", 2)), (None, None));
-        assert_eq!(light_instances(&s).len(), 14);
+        assert_eq!(light_instances(&s).len(), 38);
         assert_eq!(crate::controls::find("relight.1.wrap").map(|c| c.id), Some("relight.wrap"));
         assert!(crate::controls::find("relight.x.wrap").is_none() && crate::controls::find("relight.0.darken").is_none());
         // a section reset puts all the lights back

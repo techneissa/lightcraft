@@ -146,7 +146,7 @@ fn a_warm_light_warms_a_neutral_wall_and_a_cool_one_cools_it() {
     };
     for warmth in [-100.0, -67.0, 67.0, 100.0] {
         let mut s = DevelopSettings::default();
-        s.relight.lights[0] = LightSettings { amount: 48.0, softness: 84.0, wrap: 28.0, x: 0.5, y: 0.5, depth: 10.0, warmth };
+        s.relight.lights[0] = LightSettings { amount: 48.0, softness: 84.0, wrap: 28.0, x: 0.5, y: 0.5, depth: 10.0, warmth, ..LightSettings::default() };
         let img = render(&src, &wall, &s, &RenderRequest::fit(W, H)).image;
         for (name, b) in [("left", (0.1, 0.4, 0.2, 0.6)), ("middle", (0.45, 0.4, 0.55, 0.6)), ("right", (0.8, 0.4, 0.9, 0.6))] {
             let [r, g, b] = mean_rgb(&img, b);
@@ -165,7 +165,7 @@ fn a_warm_light_warms_a_neutral_wall_and_a_cool_one_cools_it() {
 fn wall_with(lights: &[(f64, f64)]) -> DevelopSettings {
     let mut s = DevelopSettings::default();
     s.relight.lights =
-        lights.iter().map(|&(x, warmth)| LightSettings { amount: 60.0, softness: 30.0, wrap: 28.0, x, y: 0.5, depth: 10.0, warmth }).collect();
+        lights.iter().map(|&(x, warmth)| LightSettings { amount: 60.0, softness: 30.0, wrap: 28.0, x, y: 0.5, depth: 10.0, warmth, ..LightSettings::default() }).collect();
     s
 }
 
@@ -183,7 +183,7 @@ fn a_block_saved_with_one_light_renders_as_that_light() {
     let old = serde_json::json!({"fork_relight": {"amount": 70.0, "softness": 35.0, "warmth": 40.0, "x": 0.3, "y": 0.45, "depth": 10.0, "darken": 25.0, "wrap": 30.0}});
     let read = DevelopSettings { relight: DevelopSettings::from_json(&old).unwrap().relight, ..DevelopSettings::default() };
     let mut built = DevelopSettings::default();
-    built.relight.lights[0] = LightSettings { amount: 70.0, softness: 35.0, warmth: 40.0, x: 0.3, y: 0.45, depth: 10.0, wrap: 30.0 };
+    built.relight.lights[0] = LightSettings { amount: 70.0, softness: 35.0, warmth: 40.0, x: 0.3, y: 0.45, depth: 10.0, wrap: 30.0, ..LightSettings::default() };
     built.relight.darken = 25.0;
     let req = RenderRequest::fit(W, H);
     let (a, b) = (render(&src, &info, &read, &req).image, render(&src, &info, &built, &req).image);
@@ -220,4 +220,32 @@ fn two_lights_add_up_and_a_warm_and_a_cool_one_each_colour_their_side() {
     let (one, eight) = (alone(0.5, 0.0), render(&src, &info, &wall_with(&[(0.5, 0.0); 8]), &req).image);
     let [r, g, b] = mean_rgb(&eight, (0.45, 0.4, 0.55, 0.6));
     assert!(mean(&eight, (0.45, 0.4, 0.55, 0.6)) > mean(&one, (0.45, 0.4, 0.55, 0.6)) && (r - g).abs() < 2.0 && (g - b).abs() < 2.0, "{r} {g} {b}");
+}
+
+#[test]
+fn each_light_type_goes_through_the_render_and_a_point_stays_what_it_was() {
+    let (src, info) = (scene(W, H), info());
+    let render_of = |s: &DevelopSettings| render(&src, &info, s, &RenderRequest::fit(W, H)).image;
+    let point = render_of(&lit(60.0));
+    // a spot aimed at the wall to the right of the square lights it, and leaves the left of the photo as it was
+    let mut spot = lit(100.0);
+    let l = &mut spot.relight.lights[0];
+    (l.x, l.y, l.depth) = (0.55, 0.5, 5.0);
+    for (id, v) in [("relight.kind", 1.0), ("relight.spotAimX", 0.85), ("relight.spotAimY", 0.5), ("relight.spotAngle", 14.0)] {
+        assert!(lightcraft_develop::relight::set(&mut spot, id, v));
+    }
+    let off = render_of(&DevelopSettings::default());
+    let spot = render_of(&spot);
+    let (lit_box, dark_box) = ((0.78, 0.4, 0.92, 0.6), (0.02, 0.8, 0.12, 0.95));
+    assert!(mean(&spot, lit_box) > mean(&off, lit_box) + 20.0, "{} {}", mean(&spot, lit_box), mean(&off, lit_box));
+    assert!((mean(&spot, dark_box) - mean(&off, dark_box)).abs() < 2.0);
+    // and every other type changes the photo, none like the point (the settings read back as saved)
+    for kind in [2.0, 3.0, 4.0, 5.0] {
+        let mut s = lit(100.0);
+        assert!(lightcraft_develop::relight::set(&mut s, "relight.kind", kind));
+        let back = DevelopSettings::from_json(&s.to_json()).unwrap();
+        assert_eq!(back.relight, s.relight);
+        let img = render_of(&s);
+        assert!(img.data != off.data && img.data != point.data, "kind {kind}");
+    }
 }

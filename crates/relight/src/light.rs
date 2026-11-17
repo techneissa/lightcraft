@@ -17,6 +17,7 @@
 use rayon::prelude::*;
 
 use crate::field::Field;
+use crate::kinds::{LightKind, Shape};
 
 /// The light's settings, as plain numbers (the develop settings convert to this).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -34,6 +35,8 @@ pub struct Light {
     pub warmth: f64,
     /// How far light wraps around shapes, 0 (follows them closely) .. 1 (ignores them).
     pub wrap: f64,
+    /// What the light is (issue #300): a point, a spot, a sun, a softbox, a rim or a fill.
+    pub kind: LightKind,
 }
 
 impl Light {
@@ -73,20 +76,41 @@ pub fn ambient(darken: f64) -> f32 {
 /// and the photo's exposure come with it, so one light can be asked about a point ([`Field::shade`]).
 #[derive(Clone, Debug)]
 pub struct Rig {
-    pos: [f32; 3],
+    pub(crate) pos: [f32; 3],
     /// The source's radius, squared.
-    r2: f32,
+    pub(crate) r2: f32,
     /// How fast the light falls off past the radius (an exponent: a tight light falls off faster than a broad one).
-    tail: f32,
+    pub(crate) tail: f32,
     amount: f32,
     ambient: f32,
     /// How much of the light the facing term decides, and how far it wraps past 90°.
-    face: f32,
-    wrap: f32,
+    pub(crate) face: f32,
+    pub(crate) wrap: f32,
+    /// What kind of light it is, set up on the field (issue #300).
+    pub(crate) shape: Shape,
     /// The largest `falloff · facing` of the photo (the Amount is given to it).
     peak: f32,
     /// The photo's exposure (stops): the guide's luminance plus this is the pixel's.
     ev: f32,
+}
+
+/// How much of a surface's light its facing decides: `cos` is the cosine between its normal and the direction to the light.
+#[inline]
+pub(crate) fn facing(face: f32, wrap: f32, cos: f32) -> f32 {
+    let t = ((cos + wrap) / (1.0 + wrap)).clamp(0.0, 1.0);
+    1.0 - face + face * t * t * t
+}
+
+/// A round source's `falloff · facing` at camera-space point `p` with normal `n` (the point light's, and the spot's
+/// before its cone).
+#[inline]
+pub(crate) fn point_term(rig: &Rig, p: [f32; 3], n: [f32; 3]) -> f32 {
+    let d = [rig.pos[0] - p[0], rig.pos[1] - p[1], rig.pos[2] - p[2]];
+    let r2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+    let falloff = (rig.r2 / (rig.r2 + r2)).powf(rig.tail);
+    let r = r2.sqrt().max(1e-9);
+    let cos = (n[0] * d[0] + n[1] * d[1] + n[2] * d[2]) / r;
+    falloff * facing(rig.face, rig.wrap, cos)
 }
 
 /// What the light does at a pixel.
@@ -117,6 +141,7 @@ impl Field {
         let soft = f(light.softness, 0.0, 1.0, 0.5);
         let radius = zl * (0.03 + 1.4 * soft * soft);
         let wrap = f(light.wrap, 0.0, 1.0, 0.4);
+        let shape = Shape::new(&light.kind, self, pos, lz, soft);
         let mut rig = Rig {
             pos,
             r2: radius * radius,
@@ -126,6 +151,7 @@ impl Field {
             face: 1.0 - wrap,
             wrap: 0.1 + 0.9 * wrap,
             peak: 1.0,
+            shape,
             ev: if ev.is_finite() { ev.clamp(-10.0, 10.0) as f32 } else { 0.0 },
         };
         // the most lit point, on a grid of the photo
@@ -145,15 +171,10 @@ impl Field {
     /// `falloff · facing` at `(u, v)` with log depth `lz` and normal `n`, before the peak's normalization.
     #[inline]
     fn light_at(&self, rig: &Rig, u: f32, v: f32, lz: f32, n: [f32; 3]) -> f32 {
-        let p = self.point(u, v, lz);
-        let d = [rig.pos[0] - p[0], rig.pos[1] - p[1], rig.pos[2] - p[2]];
-        let r2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
-        let falloff = (rig.r2 / (rig.r2 + r2)).powf(rig.tail);
-        let r = r2.sqrt().max(1e-9);
-        let cos = (n[0] * d[0] + n[1] * d[1] + n[2] * d[2]) / r;
-        let t = ((cos + rig.wrap) / (1.0 + rig.wrap)).clamp(0.0, 1.0);
-        let facing = 1.0 - rig.face + rig.face * t * t * t;
-        let v = falloff * facing;
+        if !matches!(rig.shape, Shape::Point) {
+            return crate::kinds::light_at(self, rig, (u, v), lz, n);
+        }
+        let v = point_term(rig, self.point(u, v, lz), n);
         if v.is_finite() { v } else { 0.0 }
     }
 
@@ -541,7 +562,7 @@ mod tests {
     use super::*;
 
     fn light() -> Light {
-        Light { x: 0.5, y: 0.5, depth: 0.0, amount: 1.0, softness: 0.4, warmth: 0.0, wrap: 0.0 }
+        Light { x: 0.5, y: 0.5, depth: 0.0, amount: 1.0, softness: 0.4, warmth: 0.0, wrap: 0.0, kind: LightKind::Point }
     }
 
     /// A wall facing the camera (log depth 0) with the left half `near` nearer.
@@ -647,7 +668,7 @@ mod tests {
     fn hostile_numbers_give_finite_planes() {
         let f = two_planes(0.5);
         let rig =
-            f.rig(&Light { x: f64::NAN, y: f64::INFINITY, depth: -5.0, amount: 1e9, softness: f64::NAN, warmth: 9.0, wrap: 7.0 }, -3.0, f64::NAN);
+            f.rig(&Light { x: f64::NAN, y: f64::INFINITY, depth: -5.0, amount: 1e9, softness: f64::NAN, warmth: 9.0, wrap: 7.0, kind: LightKind::Point }, -3.0, f64::NAN);
         let sh = f.shading(&rig);
         let p = sh.planes(7, 5, &|x, y| (x / 7.0, y / 5.0));
         assert!(p.stops.iter().chain(&p.share).all(|v| v.is_finite()));
@@ -699,5 +720,27 @@ mod tests {
         // a lobe of another size adds nothing
         let small = Field::from_parts(8, 8, vec![0.0; 64], vec![-2.0; 64]).unwrap();
         assert_eq!(small.shading_of(&[Part { lobe: &lobe, gain: 7.0, tilt: 0.0 }], 1.0, 0.0).up_top, 0.0);
+    }
+
+    #[test]
+    fn a_point_light_is_the_formula_it_always_was() {
+        // (the point light's `falloff · facing` written out as it was before light types: its lobe matches it to the bit)
+        let f = two_planes(0.5);
+        let rig = f.rig(&Light { softness: 0.3, wrap: 0.4, ..light() }, 0.0, 0.0);
+        let lobe = f.lobe(&rig);
+        let mut worst = 0u32;
+        for i in (0..96 * 64).step_by(7) {
+            let (u, v) = (((i % 96) as f32 + 0.5) / 96.0, ((i / 96) as f32 + 0.5) / 64.0);
+            let (lz, n, _) = f.at_px(i);
+            let p = f.point(u, v, lz);
+            let d = [rig.pos[0] - p[0], rig.pos[1] - p[1], rig.pos[2] - p[2]];
+            let r2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
+            let falloff = (rig.r2 / (rig.r2 + r2)).powf(rig.tail);
+            let cos = (n[0] * d[0] + n[1] * d[1] + n[2] * d[2]) / r2.sqrt().max(1e-9);
+            let t = ((cos + rig.wrap) / (1.0 + rig.wrap)).clamp(0.0, 1.0);
+            let want = (falloff * (1.0 - rig.face + rig.face * t * t * t) / rig.peak).min(1.0);
+            worst = worst.max(want.to_bits().abs_diff(lobe.m[i].to_bits()));
+        }
+        assert_eq!(worst, 0);
     }
 }

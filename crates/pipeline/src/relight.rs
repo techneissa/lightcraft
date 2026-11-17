@@ -11,10 +11,11 @@
 
 use std::sync::{Arc, Mutex, PoisonError};
 
+use lightcraft_develop::relight::KindSettings;
 use lightcraft_develop::{DevelopSettings, LocalAdjustments};
 use lightcraft_geom::Point;
 use lightcraft_raster::Plane;
-use lightcraft_relight::{Field, Light, Lobe, MAX_LIGHTS, Part, Rig, Shading, warmth_tilt};
+use lightcraft_relight::{Field, Fill, Light, LightKind, Lobe, MAX_LIGHTS, Part, Rig, Rim, Shading, Softbox, Spot, Sun, warmth_tilt};
 
 use crate::masks::{Evaluated, MaskAlpha};
 use crate::{Plan, SourceInfo};
@@ -89,9 +90,22 @@ pub fn scene_of(s: &DevelopSettings) -> Option<Scene> {
             softness: l.softness / 100.0,
             warmth: l.warmth / 100.0,
             wrap: l.wrap / 100.0,
+            kind: kind_of(&l.kind),
         })
         .collect();
     Some(Scene { lights, darken: r.darken / 100.0 })
+}
+
+/// The type of light `k` names, with its numbers in the units the relight crate takes (issue #300).
+fn kind_of(k: &KindSettings) -> LightKind {
+    match k.index() {
+        1 => LightKind::Spot(Spot { aim_x: k.spot_aim_x, aim_y: k.spot_aim_y, angle: k.spot_angle, edge: k.spot_edge / 100.0 }),
+        2 => LightKind::Sun(Sun { azimuth: k.sun_azimuth, elevation: k.sun_elevation }),
+        3 => LightKind::Softbox(Softbox { width: k.box_width, height: k.box_height, rotation: k.box_rotation }),
+        4 => LightKind::Rim(Rim { width: k.rim_width / 100.0 }),
+        5 => LightKind::Fill(Fill { near: k.fill_near / 100.0 }),
+        _ => LightKind::Point,
+    }
 }
 
 /// The light of a render of `info` with settings `s` (`None`: off, or the photo has no field yet).
@@ -116,6 +130,7 @@ fn lobe_key(input: &Input, light: &Light) -> u64 {
         for v in [light.x, light.y, light.depth, light.softness, light.wrap] {
             std::hash::Hash::hash(&v.to_bits(), h);
         }
+        std::hash::Hash::hash(&light.kind.key_bits(), h);
     })
 }
 
@@ -128,6 +143,7 @@ pub fn shading_key(input: &Input, scene: &Scene, ev: f64) -> u64 {
             for v in [l.x, l.y, l.depth, l.amount, l.softness, l.warmth, l.wrap] {
                 std::hash::Hash::hash(&v.to_bits(), h);
             }
+            std::hash::Hash::hash(&l.kind.key_bits(), h);
         }
     })
 }

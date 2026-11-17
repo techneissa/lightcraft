@@ -16,10 +16,14 @@
 
 pub mod field;
 pub mod filter;
+pub mod kinds;
 pub mod light;
 pub mod overlay;
+#[cfg(test)]
+mod tests_kinds;
 
 pub use field::{DepthMap, Field, Kind};
+pub use kinds::{Fill, LightKind, Rim, Softbox, Spot, Sun};
 pub use light::{Light, Lobe, MAX_LIGHTS, Part, Planes, Rig, Shade, Shading, Split, ambient, warmth_tilt};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
