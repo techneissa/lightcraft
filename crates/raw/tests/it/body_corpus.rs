@@ -16,7 +16,10 @@ fn corpus() -> PathBuf {
 
 /// Green of the decoded mosaic against the camera's embedded JPEG on a `gw × gh` grid of the active area.
 fn green_vs_camera_jpeg(raw: &lightcraft_raw::RawImage, jpeg: &[u8], gw: usize, gh: usize) -> f64 {
-    let img = craft_image_codecs::decode_as_with(craft_image_codecs::Format::Jpeg, jpeg, &craft_image_codecs::DecodeOptions::default()).unwrap();
+    // the mosaic is in sensor order, so the JPEG stays so too: a camera that stores a portrait shot as a rotated
+    // landscape file (the X100VI) would otherwise come back turned upright and match nothing
+    let opts = craft_image_codecs::DecodeOptions { keep_orientation: true, ..Default::default() };
+    let img = craft_image_codecs::decode_as_with(craft_image_codecs::Format::Jpeg, jpeg, &opts).unwrap();
     let (jw, jh) = (img.width() as usize, img.height() as usize);
     let px = img.as_u8().unwrap();
     let mean = |sum: Vec<f64>, n: Vec<f64>| sum.iter().zip(&n).map(|(s, n)| s / n.max(1.0)).collect::<Vec<f64>>();
