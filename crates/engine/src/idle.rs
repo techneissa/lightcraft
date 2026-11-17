@@ -158,6 +158,7 @@ impl Registry {
                 }
                 Unload::Nothing => lock(&e.state).armed = false,
                 Unload::Busy => {
+                    log::debug!("{} is in use: asked again after {idle:?}", e.name);
                     lock(&e.state).last_used = now;
                     soonest(now + idle, &mut out.next);
                 }
