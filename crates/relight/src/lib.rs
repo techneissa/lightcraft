@@ -4,22 +4,25 @@
 //! - [`Field`]: what no control changes, made once per photo from its depth map (the file's own, or a depth
 //!   model's) and a guide picture of it, and kept: depth brought to the guide's size edge-aware, smoothed normals,
 //!   the guide's luminance.
-//! - [`Light`], [`Field::rig`] and [`Field::shading`]: the light, and what it does to each pixel of the field: a
-//!   gain on scene-linear light in stops and the share of the pixel's light that is the new light's (which takes its
-//!   colour). A drag of the light or a slider makes one [`Shading`]; each render reads its [`Planes`] from it.
+//! - [`Light`], [`Field::rig`], [`Field::lobe`] and [`Field::shading_of`]: up to [`MAX_LIGHTS`] lights, and what they do
+//!   to each pixel of the field: a gain on scene-linear light in stops and the share of the pixel's light that is the
+//!   new lights' (which takes their colours). A drag of a light makes one [`Lobe`] and one [`Shading`]; each render
+//!   reads its planes ([`Shading::split`]) from the shading.
 //!
 //! Positions are normalized photo coordinates (before the crop and the lens corrections) plus a depth between the
 //! photo's nearest and farthest, so a draft, the loupe and an export make the same picture.
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod effects;
 pub mod field;
 pub mod filter;
 pub mod light;
 pub mod overlay;
 
+pub use effects::{Effects, HAZE_GAIN, Pattern};
 pub use field::{DepthMap, Field, Kind};
-pub use light::{Light, Planes, Rig, Shade, Shading, Split, warmth_tilt};
+pub use light::{Light, Lobe, MAX_LIGHTS, Part, Planes, Rig, Shade, Shading, Split, ambient, warmth_tilt};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {

@@ -178,7 +178,12 @@ impl Shared {
             Err(std::sync::TryLockError::Poisoned(p)) => all_but_newest(&mut p.into_inner()),
             Err(std::sync::TryLockError::WouldBlock) => return Unload::Busy,
         };
-        if old.is_empty() { Unload::Nothing } else { Unload::Freed }
+        if old.is_empty() {
+            return Unload::Nothing;
+        }
+        // (what the pipeline kept of the fields let go: their lobes and shadings, made again when needed)
+        lightcraft_pipeline::relight::forget();
+        Unload::Freed
     }
 
     fn flag(&self, f: Flag) -> &AtomicBool {
@@ -265,6 +270,7 @@ impl RelightStore {
     /// Keep field `key`, or why it could not be made.
     fn put(&self, key: &str, result: Result<Made, String>) {
         self.shared.fields_idle().touch();
+        let mut dropped = false;
         let mut st = self.lock();
         st.busy.retain(|k| k != key);
         st.failed.retain(|(k, _)| k != key);
@@ -283,11 +289,16 @@ impl RelightStore {
                     used <= budget
                 });
                 let keep = keep.count().max(1);
+                dropped = st.made.len() > keep;
                 st.made.truncate(keep);
             }
             Err(e) => st.failed.push((key.to_string(), e)),
         }
         drop(st);
+        if dropped {
+            // (what the pipeline kept of the fields it let go: their lobes and shadings, made again when needed)
+            lightcraft_pipeline::relight::forget();
+        }
         self.shared.done.notify_all();
     }
 
@@ -598,7 +609,7 @@ impl Session {
     /// off: every other render keeps its key) and the field for its `SourceInfo`. Starts making the field when the
     /// light is on and it is not there.
     pub(crate) fn relight_for(&mut self, p: &Photo, s: &DevelopSettings) -> (u64, Option<Input>) {
-        if self.relight.is(Flag::Building) || lightcraft_pipeline::relight::light_of(s).is_none() {
+        if self.relight.is(Flag::Building) || lightcraft_pipeline::relight::scene_of(s).is_none() {
             return (0, None);
         }
         let key = self.relight_key(p);
@@ -615,7 +626,7 @@ impl Session {
 
     /// [`Self::relight_for`]'s salt alone, starting nothing (the keys of the loupe's kept views).
     pub(crate) fn relight_salt(&self, p: &Photo, s: &DevelopSettings) -> u64 {
-        if lightcraft_pipeline::relight::light_of(s).is_none() {
+        if lightcraft_pipeline::relight::scene_of(s).is_none() {
             return 0;
         }
         let key = self.relight_key(p);
@@ -653,7 +664,7 @@ impl Session {
     /// light is off (no model run, no kept field pushed out).
     pub fn relight_retry(&mut self, id: PhotoId) {
         let Some(p) = self.catalog.photo(id).cloned() else { return };
-        if lightcraft_pipeline::relight::light_of(&p.develop).is_none() {
+        if lightcraft_pipeline::relight::scene_of(&p.develop).is_none() {
             return;
         }
         let key = self.relight_key(&p);
@@ -680,7 +691,7 @@ impl Session {
     /// ([`ExportRelight::fill`]). `None` when the photo's light is off.
     pub(crate) fn relight_export(&mut self, id: PhotoId) -> Option<ExportRelight> {
         let p = self.catalog.photo(id)?.clone();
-        lightcraft_pipeline::relight::light_of(&p.develop)?;
+        lightcraft_pipeline::relight::scene_of(&p.develop)?;
         let key = self.relight_key(&p);
         let made = self.relight.get(&key);
         let maker = if made.is_some() { None } else { self.relight_maker(&p).ok() };
@@ -782,7 +793,7 @@ mod tests {
         let ids: Vec<PhotoId> = s.catalog.photos().take(n).map(|p| p.id).collect();
         for &id in &ids {
             let mut d = s.catalog.photo(id).unwrap().develop.as_ref().clone();
-            d.relight.amount = 60.0;
+            d.relight.lights[0].amount = 60.0;
             let op = lightcraft_catalog::Op::SetDevelop { id, settings: Arc::new(d), label: "Relight".into(), edited: None };
             s.catalog.apply(op).unwrap();
         }

@@ -4,6 +4,7 @@
 use std::sync::Arc;
 
 use lightcraft_develop::DevelopSettings;
+use lightcraft_develop::relight::LightSettings;
 use lightcraft_raster::{Rgb32f, Rgba8};
 use lightcraft_relight::Field;
 
@@ -35,10 +36,7 @@ fn info() -> SourceInfo {
 
 fn lit(amount: f64) -> DevelopSettings {
     let mut s = DevelopSettings::default();
-    s.relight.amount = amount;
-    s.relight.x = 0.3;
-    s.relight.y = 0.45;
-    s.relight.depth = 10.0;
+    s.relight.lights[0] = LightSettings { amount, x: 0.3, y: 0.45, depth: 10.0, ..LightSettings::default() };
     s
 }
 
@@ -81,7 +79,7 @@ fn a_draft_and_an_export_make_the_same_light() {
     let src = scene(W, H);
     let info = info();
     let mut s = lit(80.0);
-    s.relight.warmth = 60.0;
+    s.relight.lights[0].warmth = 60.0;
     s.relight.darken = 30.0;
     let check = |s: &DevelopSettings| {
         let small = render(&src, &info, s, &RenderRequest::fit(W / 4, H / 4)).image;
@@ -148,13 +146,8 @@ fn a_warm_light_warms_a_neutral_wall_and_a_cool_one_cools_it() {
     };
     for warmth in [-100.0, -67.0, 67.0, 100.0] {
         let mut s = DevelopSettings::default();
-        s.relight.amount = 48.0;
-        s.relight.softness = 84.0;
-        s.relight.wrap = 28.0;
-        s.relight.x = 0.5;
-        s.relight.y = 0.5;
-        s.relight.depth = 10.0;
-        s.relight.warmth = warmth;
+        s.relight.lights[0] =
+            LightSettings { amount: 48.0, softness: 84.0, wrap: 28.0, x: 0.5, y: 0.5, depth: 10.0, warmth, ..LightSettings::default() };
         let img = render(&src, &wall, &s, &RenderRequest::fit(W, H)).image;
         for (name, b) in [("left", (0.1, 0.4, 0.2, 0.6)), ("middle", (0.45, 0.4, 0.55, 0.6)), ("right", (0.8, 0.4, 0.9, 0.6))] {
             let [r, g, b] = mean_rgb(&img, b);
@@ -167,4 +160,149 @@ fn a_warm_light_warms_a_neutral_wall_and_a_cool_one_cools_it() {
             }
         }
     }
+}
+
+/// A flat grey wall field, lit by `lights` (place; Warmth), each at Amount 60.
+fn wall_with(lights: &[(f64, f64)]) -> DevelopSettings {
+    let mut s = DevelopSettings::default();
+    s.relight.lights = lights
+        .iter()
+        .map(|&(x, warmth)| LightSettings { amount: 60.0, softness: 30.0, wrap: 28.0, x, y: 0.5, depth: 10.0, warmth, ..LightSettings::default() })
+        .collect();
+    s
+}
+
+fn wall() -> (Rgb32f, SourceInfo) {
+    let src = Rgb32f::from_fn(W, H, |_, _| [0.06; 3]);
+    let (fw, fh) = (240, 160);
+    let field = Field::from_parts(fw, fh, vec![0.0; fw * fh], vec![-2.0; fw * fh]).unwrap();
+    (src, SourceInfo { relight: Some(relight::Input { field: Arc::new(field), key: 21 }), ..SourceInfo::default() })
+}
+
+#[test]
+fn a_block_saved_with_one_light_renders_as_that_light() {
+    // (the shape before issue #299: one light's numbers and Darken Surroundings in one object)
+    let (src, info) = (scene(W, H), info());
+    let old = serde_json::json!({"fork_relight": {"amount": 70.0, "softness": 35.0, "warmth": 40.0, "x": 0.3, "y": 0.45, "depth": 10.0, "darken": 25.0, "wrap": 30.0}});
+    let read = DevelopSettings { relight: DevelopSettings::from_json(&old).unwrap().relight, ..DevelopSettings::default() };
+    let mut built = DevelopSettings::default();
+    built.relight.lights[0] =
+        LightSettings { amount: 70.0, softness: 35.0, warmth: 40.0, x: 0.3, y: 0.45, depth: 10.0, wrap: 30.0, ..LightSettings::default() };
+    built.relight.darken = 25.0;
+    let req = RenderRequest::fit(W, H);
+    let (a, b) = (render(&src, &info, &read, &req).image, render(&src, &info, &built, &req).image);
+    assert!(a.data == b.data, "the old block and the one light built by hand render differently");
+    assert!(a.data != render(&src, &SourceInfo::default(), &read, &req).image.data, "the light does something");
+    // and saved again it reads back to the same picture
+    let again = DevelopSettings::from_json(&read.to_json()).unwrap();
+    assert!(render(&src, &info, &again, &req).image.data == a.data, "saved and read again, the light renders differently");
+}
+
+#[test]
+fn two_lights_add_up_and_a_warm_and_a_cool_one_each_colour_their_side() {
+    let (src, info) = wall();
+    let req = RenderRequest::fit(W, H);
+    let alone = |x: f64, w: f64| render(&src, &info, &wall_with(&[(x, w)]), &req).image;
+    let (left, right) = (alone(0.2, 100.0), alone(0.8, -100.0));
+    let both = render(&src, &info, &wall_with(&[(0.2, 100.0), (0.8, -100.0)]), &req).image;
+    let plain = render(&src, &SourceInfo::default(), &DevelopSettings::default(), &req).image;
+    // between the two lights, both together are brighter than either alone
+    let middle = (0.45, 0.4, 0.55, 0.6);
+    let (b, l, r, p) = (mean(&both, middle), mean(&left, middle), mean(&right, middle), mean(&plain, middle));
+    assert!(b > l.max(r) + 2.0 && l > p && r > p, "both {b}, left {l}, right {r}, plain {p}");
+    // the warm light's side is warm and the cool one's cool, as when each is alone
+    let (near_warm, near_cool) = ((0.15, 0.4, 0.25, 0.6), (0.75, 0.4, 0.85, 0.6));
+    let [wr, _, wb] = mean_rgb(&both, near_warm);
+    let [cr, _, cb] = mean_rgb(&both, near_cool);
+    assert!(wr > wb + 6.0, "near the warm light: {wr} {wb}");
+    assert!(cb > cr + 3.0, "near the cool light: {cr} {cb}");
+    // a light with no Amount adds nothing: the picture is the other light's
+    let mut dead = wall_with(&[(0.2, 100.0), (0.8, -100.0)]);
+    dead.relight.lights[1].amount = 0.0;
+    assert!(render(&src, &info, &dead, &req).image.data == left.data, "a light with no Amount changed the picture");
+    // eight lights on one spot are brighter than one, and the grey wall stays a neutral grey
+    let (one, eight) = (alone(0.5, 0.0), render(&src, &info, &wall_with(&[(0.5, 0.0); 8]), &req).image);
+    let [r, g, b] = mean_rgb(&eight, (0.45, 0.4, 0.55, 0.6));
+    assert!(mean(&eight, (0.45, 0.4, 0.55, 0.6)) > mean(&one, (0.45, 0.4, 0.55, 0.6)) && (r - g).abs() < 2.0 && (g - b).abs() < 2.0, "{r} {g} {b}");
+}
+
+/// Light 0 of the wall with the effects `f` set on it (Amount 70, in the middle).
+fn effect(f: impl FnOnce(&mut lightcraft_develop::relight_effects::LightEffects)) -> DevelopSettings {
+    let mut s = wall_with(&[(0.5, 0.0)]);
+    s.relight.lights[0].amount = 70.0;
+    f(&mut s.relight.lights[0].effects);
+    s
+}
+
+#[test]
+fn a_red_gel_reddens_a_grey_wall_and_a_wall_without_one_is_as_it_was() {
+    let (src, info) = wall();
+    let req = RenderRequest::fit(W, H);
+    let plain = render(&src, &info, &effect(|_| {}), &req).image;
+    let red = render(&src, &info, &effect(|e| (e.gel_hue, e.gel_strength) = (0.0, 100.0)), &req).image;
+    let [r, g, b] = mean_rgb(&red, (0.4, 0.4, 0.6, 0.6));
+    assert!(red.data.iter().all(|p| p[3] == 255) && r > 2.0 * g.max(b), "{r} {g} {b}");
+    let [pr, pg, pb] = mean_rgb(&plain, (0.4, 0.4, 0.6, 0.6));
+    assert!((pr - pg).abs() < 2.0 && (pg - pb).abs() < 2.0, "{pr} {pg} {pb}");
+    // a gel at no strength is no gel: the same picture, to the byte
+    let none = render(&src, &info, &effect(|e| (e.gel_hue, e.gel_strength) = (200.0, 0.0)), &req).image;
+    assert!(none.data == plain.data);
+    // teal and magenta go to their sides
+    let teal = mean_rgb(&render(&src, &info, &effect(|e| (e.gel_hue, e.gel_strength) = (178.0, 80.0)), &req).image, (0.4, 0.4, 0.6, 0.6));
+    assert!(teal[0] < teal[1] && teal[0] < teal[2], "{teal:?}");
+    let magenta = mean_rgb(&render(&src, &info, &effect(|e| (e.gel_hue, e.gel_strength) = (305.0, 80.0)), &req).image, (0.4, 0.4, 0.6, 0.6));
+    assert!(magenta[1] < magenta[0] && magenta[1] < magenta[2], "{magenta:?}");
+}
+
+#[test]
+fn a_pattern_stripes_the_wall_and_haze_brightens_around_the_light() {
+    let (photo, field) = (scene(W, H), info());
+    let (src, info) = wall();
+    let req = RenderRequest::fit(W, H);
+    let plain = render(&src, &info, &effect(|_| {}), &req).image;
+    let blinds = render(&src, &info, &effect(|e| (e.pattern, e.pattern_scale, e.pattern_softness) = (1.0, 60.0, 10.0)), &req).image;
+    // down a column the light goes on and off (the wall under no light is about 70)
+    let col: Vec<f32> = (0..H).map(|y| luma(blinds.get(W / 2, y))).collect();
+    let flips = col.windows(2).filter(|p| (p[0] > 85.0) != (p[1] > 85.0)).count();
+    assert!(flips >= 4, "{flips} edges");
+    assert!(blinds.data != plain.data);
+    // haze adds light, more over the far wall than over the near square at the same distance from the light (a wall
+    // with no depth to it has no haze: nothing is farther than anything)
+    let (plain, hazy) = (render(&photo, &field, &effect(|_| {}), &req).image, render(&photo, &field, &effect(|e| e.haze = 100.0), &req).image);
+    let (far, near) = ((0.65, 0.4, 0.75, 0.6), (0.25, 0.4, 0.35, 0.6));
+    assert!(mean(&hazy, far) > mean(&plain, far) + 1.0, "{} {}", mean(&hazy, far), mean(&plain, far));
+    assert!(mean(&hazy, far) - mean(&plain, far) > mean(&hazy, near) - mean(&plain, near), "haze is no stronger over what is far");
+}
+
+#[test]
+fn the_same_effect_on_another_light_is_another_scene() {
+    // two lights, a red gel on the first or on the second: the shading key names which, and the render puts the colour
+    // on the right side
+    let (src, info) = wall();
+    let req = RenderRequest::fit(W, H);
+    let with_gel_on = |i: usize| {
+        let mut s = wall_with(&[(0.2, 0.0), (0.8, 0.0)]);
+        (s.relight.lights[i].effects.gel_hue, s.relight.lights[i].effects.gel_strength) = (0.0, 100.0);
+        s
+    };
+    let (first, second) = (with_gel_on(0), with_gel_on(1));
+    let input = info.relight.as_ref().unwrap();
+    let key = |s: &DevelopSettings| relight::shading_key(input, &relight::scene_of(s).unwrap(), 0.0);
+    assert_ne!(key(&first), key(&second), "the key doesn't say which light has the gel");
+    // (and shading_for, asked in turn, gives each its own)
+    for _ in 0..2 {
+        for s in [&first, &second] {
+            let (k, _) = relight::shading_for(input, &relight::scene_of(s).unwrap(), 0.0);
+            assert_eq!(k, key(s));
+        }
+    }
+    let redness = |img: &Rgba8, b: (f32, f32, f32, f32)| {
+        let [r, g, _] = mean_rgb(img, b);
+        r / g.max(1.0)
+    };
+    let (left, right) = ((0.1, 0.4, 0.3, 0.6), (0.7, 0.4, 0.9, 0.6));
+    let a = render(&src, &info, &first, &req).image;
+    assert!(redness(&a, left) > 1.5 * redness(&a, right), "the gel on the first light isn't on the left");
+    let b = render(&src, &info, &second, &req).image;
+    assert!(redness(&b, right) > 1.5 * redness(&b, left), "the gel on the second light isn't on the right");
 }

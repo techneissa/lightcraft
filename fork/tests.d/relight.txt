@@ -1,9 +1,9 @@
-# Relight (issues #288, #293)
+# Relight (issues #288, #293, #299, #302)
 cargo test -p lightcraft-relight --lib
 cargo test -p lightcraft-depth --lib
 cargo test -p lightcraft-develop --lib -- relight
-cargo test -p lightcraft-pipeline --lib -- tests_relight
+cargo test -p lightcraft-pipeline --lib -- tests_relight relight::tests
 cargo test -p lightcraft-gpu --test it -- relight
 cargo test -p lightcraft-engine --features sam --lib -- relight
-cargo test -p lightcraft-ui-egui --lib -- edit_sections settings_sync
-cargo test -p lightcraft-catalog --lib -- fork_format tests_format_version
+cargo test -p lightcraft-ui-egui --lib -- relight alt_preview edit_sections settings_sync
+cargo test -p lightcraft-catalog --lib -- fork_format tests_format_version history_serde journal

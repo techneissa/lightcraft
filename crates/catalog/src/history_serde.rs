@@ -171,4 +171,15 @@ mod tests {
         let back: Photo = serde_json::from_value(v).unwrap();
         assert!(back.history.is_empty());
     }
+
+    /// A History written before several lights (#299): its first step holds Relight's block in the first form and
+    /// the next steps are patches of it, which read as they were written.
+    #[test]
+    fn a_history_of_the_first_form_of_relight_reads_as_one_light() {
+        let first = serde_json::json!({"label": "Relight", "settings": {"fork_relight": {"amount": 60.0, "darken": 10.0}}});
+        let next = serde_json::json!({"label": "Relight", "patch": {"o": {"s": {"fork_relight": {"o": {"s": {"amount": {"v": 70.0}}}}}}}});
+        let steps: Vec<HistoryStep> = deserialize(serde_json::json!([first, next])).unwrap();
+        let amounts: Vec<_> = steps.iter().map(|s| (s.settings.relight.lights[0].amount, s.settings.relight.darken)).collect();
+        assert_eq!(amounts, vec![(60.0, 10.0), (70.0, 10.0)]);
+    }
 }
