@@ -137,11 +137,34 @@ impl Progress {
     }
 }
 
-/// The loaded model, loading it first when it is not (kept for the next photo).
+/// The denoise models in memory, let go after a while without use (`crate::idle`, issue #304): the tracker and the
+/// slots it empties (one per model chosen so far, those no longer used dropped from the list).
+fn idle_tracker(slot: &ModelSlot) -> &'static crate::idle::Tracker {
+    static SLOTS: Mutex<Vec<std::sync::Weak<Mutex<Option<Arc<dyn Model>>>>>> = Mutex::new(Vec::new());
+    static TRACKER: OnceLock<crate::idle::Tracker> = OnceLock::new();
+    {
+        let mut slots = SLOTS.lock().unwrap_or_else(PoisonError::into_inner);
+        slots.retain(|w| w.strong_count() > 0);
+        if !slots.iter().any(|w| std::ptr::eq(w.as_ptr(), Arc::as_ptr(slot))) {
+            slots.push(Arc::downgrade(slot));
+        }
+    }
+    TRACKER.get_or_init(|| {
+        crate::idle::register("Denoise model", || {
+            let slots: Vec<_> = SLOTS.lock().unwrap_or_else(PoisonError::into_inner).iter().filter_map(std::sync::Weak::upgrade).collect();
+            // (a photo being made keeps its own copy until it is done)
+            let old: Vec<_> = slots.iter().filter_map(|s| s.lock().unwrap_or_else(PoisonError::into_inner).take()).collect();
+            if old.is_empty() { crate::idle::Unload::Nothing } else { crate::idle::Unload::Freed }
+        })
+    })
+}
+
+/// The loaded model, loading it first when it is not (kept for the next photos while they follow each other).
 pub(super) fn loaded(spec: &JobSpec) -> Result<Arc<dyn Model>, MakeError> {
     if spec.manifest.id == lightcraft_denoise::builtin::ID {
         return Ok(Arc::new(BuiltinModel::new(&builtin_marker(&spec.onnx))));
     }
+    idle_tracker(&spec.model).touch();
     if let Some(m) = spec.model.lock().unwrap_or_else(PoisonError::into_inner).clone() {
         return Ok(m);
     }
@@ -159,6 +182,8 @@ fn layout_of(cfa: &lightcraft_raw::Cfa) -> Option<Layout> {
 /// `Ok(true)` when it was made now, `Ok(false)` when it already existed.
 pub(crate) fn make_product(spec: &JobSpec, progress: Option<&Progress>) -> Result<bool, MakeError> {
     let _slot = Slot::enter(&spec.product);
+    // (the model is not let go while a photo is made, and its idle time counts from the end)
+    let _in_use = idle_tracker(&spec.model).using();
     if product::is_current(&spec.product, &spec.key) {
         return Ok(false);
     }

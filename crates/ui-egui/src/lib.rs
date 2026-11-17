@@ -16,6 +16,7 @@ pub const UPDATE_APP: craft_update::app::App = craft_update::app::App {
 };
 
 pub mod auto_import_watch;
+pub mod background;
 pub mod brush_live;
 pub mod canvas_keys;
 mod command_error;
@@ -459,6 +460,8 @@ pub struct LightcraftApp {
     /// and when it was last read (egui time, s).
     pub(crate) screen_profile: Option<Vec<u8>>,
     pub(crate) screen_profile_read: Option<f64>,
+    /// How long the window has been in the background, and whether its caches were released (issue #304).
+    pub(crate) background: background::Background,
     /// The library failed to open at launch: the blocking window, then the temporary-session
     /// banner (issue #100). Cleared once a library opens.
     pub library_problem: Option<panels::library_problem::LibraryProblem>,

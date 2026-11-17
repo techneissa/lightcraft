@@ -748,12 +748,12 @@ pub fn pump_background(app: &mut LightcraftApp, ctx: &egui::Context, now: f64) {
     app.caches.faces_peak = v["peak"].as_u64().unwrap_or(0);
     // Frames are drawn only when something asks for one, so nothing here wakes the window needlessly: while there is work it
     // asks to be called again in 50 ms (the progress in Settings, the next photos for the workers); with recognition on and
-    // nothing to do it looks again every few seconds (a few wake-ups a minute); with recognition off it asks for nothing
+    // nothing to do it looks again every 30 s (new photos make frames on their own; issue #304); with recognition off it asks for nothing
     // (and is called on every frame, which is cheap: whatever makes a frame, such as switching recognition on, is seen at once).
     let busy = app.caches.faces_active && (app.caches.faces_pending > 0 || v["inFlight"].as_u64().unwrap_or(0) > 0);
     let wait = match (busy, app.caches.faces_active) {
         (true, _) => Some(0.05),
-        (false, true) => Some(5.0),
+        (false, true) => Some(30.0),
         (false, false) => None,
     };
     app.caches.faces_next_pump = now

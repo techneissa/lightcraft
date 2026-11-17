@@ -15,7 +15,6 @@
 use std::collections::VecDeque;
 use std::hash::{DefaultHasher, Hasher};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -31,8 +30,6 @@ pub use download::{DOWNLOAD_BYTES, DOWNLOAD_URL, Download};
 /// The model's file name.
 pub const MODEL_FILE: &str = "big-lama.pt";
 
-/// How long the model stays loaded after its last use.
-const KEEP_LOADED: Duration = Duration::from_secs(60);
 /// How long [`LamaFill::term`] trusts what it read from the model's file.
 const TERM_EVERY: Duration = Duration::from_secs(2);
 /// What the fills kept are allowed to take together, bytes (the newest stay).
@@ -59,7 +56,6 @@ struct Loaded {
     model: Arc<lightcraft_lama::Lama>,
     /// The file's size and time when it was read: a file replaced meanwhile is read again.
     stamp: (u64, Option<std::time::SystemTime>),
-    last_used: Instant,
 }
 
 #[derive(Default)]
@@ -78,7 +74,9 @@ struct Inner {
     cache: Mutex<Cache>,
     message: Mutex<Option<String>>,
     download: Mutex<Download>,
-    watcher: AtomicBool,
+    /// Lets the loaded model go after a while without use.
+    #[cfg(not(target_arch = "wasm32"))]
+    idle: std::sync::OnceLock<crate::idle::Tracker>,
     /// [`LamaFill::term`], read from the file at most every [`TERM_EVERY`].
     term: Mutex<(Option<Instant>, u64)>,
     /// The engine choice and the Core ML model (`coreml`).
@@ -104,7 +102,8 @@ impl LamaFill {
                 cache: Mutex::new(Cache::default()),
                 message: Mutex::new(None),
                 download: Mutex::new(Download::Idle),
-                watcher: AtomicBool::new(false),
+                #[cfg(not(target_arch = "wasm32"))]
+                idle: std::sync::OnceLock::new(),
                 term: Mutex::new((None, 0)),
                 #[cfg(not(target_arch = "wasm32"))]
                 coreml: Mutex::new(coreml::CoreMl::default()),
@@ -208,40 +207,36 @@ impl LamaFill {
         let stamp = (meta.len(), meta.modified().ok());
         let mut slot = self.inner.model.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(l) = slot.as_mut().filter(|l| l.stamp == stamp) {
-            l.last_used = Instant::now();
-            return Ok(l.model.clone());
+            let model = l.model.clone();
+            drop(slot);
+            self.idle().touch();
+            return Ok(model);
         }
         let model = lightcraft_lama::Lama::load(&path, &lightcraft_lama::best_device()).map_err(|e| format!("could not read the LaMa model: {e}"))?;
         let model = Arc::new(model);
-        *slot = Some(Loaded { model: model.clone(), stamp, last_used: Instant::now() });
+        *slot = Some(Loaded { model: model.clone(), stamp });
         drop(slot);
-        self.watch();
+        self.idle().touch();
         Ok(model)
     }
 
-    /// Drop the loaded model once it has been idle for [`KEEP_LOADED`] (one watcher thread at a time).
+    /// The shared idle rule's handle (`crate::idle`): the loaded model is let go after a while without use (a fill
+    /// running keeps its own copy until it ends).
     #[cfg(not(target_arch = "wasm32"))]
-    fn watch(&self) {
-        if self.inner.watcher.swap(true, Ordering::AcqRel) {
-            return;
-        }
-        let weak = Arc::downgrade(&self.inner);
-        let spawned = std::thread::Builder::new().name("lama-idle".into()).spawn(move || {
-            loop {
-                std::thread::sleep(Duration::from_secs(10));
-                let Some(inner) = weak.upgrade() else { return };
-                let mut slot = inner.model.lock().unwrap_or_else(PoisonError::into_inner);
-                let idle = slot.as_ref().is_none_or(|l| l.last_used.elapsed() >= KEEP_LOADED);
-                if idle {
-                    *slot = None;
-                    inner.watcher.store(false, Ordering::Release);
-                    return;
-                }
-            }
-        });
-        if spawned.is_err() {
-            self.inner.watcher.store(false, Ordering::Release);
-        }
+    fn idle(&self) -> &crate::idle::Tracker {
+        self.inner.idle.get_or_init(|| {
+            let weak = Arc::downgrade(&self.inner);
+            crate::idle::register("LaMa", move || {
+                let Some(inner) = weak.upgrade() else { return crate::idle::Unload::Nothing };
+                // (a load holds the lock for seconds: not waited behind)
+                let old = match inner.model.try_lock() {
+                    Ok(mut slot) => slot.take(),
+                    Err(std::sync::TryLockError::Poisoned(p)) => p.into_inner().take(),
+                    Err(std::sync::TryLockError::WouldBlock) => return crate::idle::Unload::Busy,
+                };
+                if old.is_some() { crate::idle::Unload::Freed } else { crate::idle::Unload::Nothing }
+            })
+        })
     }
 
     #[cfg(not(target_arch = "wasm32"))]

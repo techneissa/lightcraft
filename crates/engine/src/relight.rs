@@ -41,6 +41,9 @@ pub const QUEUE: usize = 12;
 pub const MODEL_LONG: usize = 504;
 /// The folder of the depth model under the models folder.
 pub const MODEL_DIR: &str = "da3-mono-large";
+/// How long [`RelightStore::model_installed`] trusts what it found in the models folder (a download that finishes is
+/// seen within it).
+const INSTALLED_MEMO: std::time::Duration = std::time::Duration::from_secs(3);
 /// The depth box's picture (pixels on its long side).
 pub const THUMB: usize = 240;
 /// What Relight says on the web build.
@@ -122,6 +125,14 @@ struct Shared {
     /// The session is setting up an export's render ([`Session::relight_held`]): it takes a kept field and starts
     /// none (the export's worker makes it).
     hold: AtomicBool,
+    /// The shared idle rule (`crate::idle`, issue #304): the depth model, and all fields but the newest.
+    #[cfg(feature = "sam")]
+    model_idle: std::sync::OnceLock<crate::idle::Tracker>,
+    fields_idle: std::sync::OnceLock<crate::idle::Tracker>,
+    /// The key of the field last asked for by a render (a render of the same photo again is no new use).
+    last_asked: Mutex<String>,
+    /// What [`RelightStore::model_installed`] last found, and when.
+    installed: Mutex<Option<(web_time::Instant, bool)>>,
 }
 
 /// One of the store's flags while the session sets up renders.
@@ -132,12 +143,76 @@ enum Flag {
 }
 
 impl Shared {
+    /// The depth model's handle on the shared idle rule (`crate::idle`, issue #304): about 3.4 GB of GPU buffers while
+    /// it is loaded, let go after a while without a run.
+    #[cfg(feature = "sam")]
+    fn model_idle(self: &Arc<Self>) -> &crate::idle::Tracker {
+        self.model_idle.get_or_init(|| {
+            let weak = Arc::downgrade(self);
+            crate::idle::register("Relight depth model", move || {
+                use crate::idle::Unload;
+                let Some(s) = weak.upgrade() else { return Unload::Nothing };
+                // (dropped after its lock is released)
+                let old = match s.model.try_lock() {
+                    Ok(mut m) => m.take(),
+                    Err(std::sync::TryLockError::Poisoned(p)) => p.into_inner().take(),
+                    Err(std::sync::TryLockError::WouldBlock) => return Unload::Busy,
+                };
+                if old.is_some() { Unload::Freed } else { Unload::Nothing }
+            })
+        })
+    }
+
+    /// The kept fields' handle: every field but the newest (the photo in front: its light keeps its field) goes after
+    /// a while in which no other photo's field was asked for.
+    fn fields_idle(self: &Arc<Self>) -> &crate::idle::Tracker {
+        self.fields_idle.get_or_init(|| {
+            let weak = Arc::downgrade(self);
+            crate::idle::register("Relight fields", move || {
+                use crate::idle::Unload;
+                weak.upgrade().map_or(Unload::Nothing, |s| s.drop_old_fields())
+            })
+        })
+    }
+
+    /// Drop every kept field but the newest and the one asked for last; `Busy` when the store is in use.
+    fn drop_old_fields(&self) -> crate::idle::Unload {
+        use crate::idle::Unload;
+        let keep = self.last_asked.lock().unwrap_or_else(PoisonError::into_inner).clone();
+        let old = match self.state.try_lock() {
+            Ok(mut st) => all_but_newest(&mut st, &keep),
+            Err(std::sync::TryLockError::Poisoned(p)) => all_but_newest(&mut p.into_inner(), &keep),
+            Err(std::sync::TryLockError::WouldBlock) => return Unload::Busy,
+        };
+        if old.is_empty() {
+            return Unload::Nothing;
+        }
+        // (what the pipeline kept of the fields let go: their lobes and shadings, made again when needed)
+        lightcraft_pipeline::relight::forget();
+        Unload::Freed
+    }
+
     fn flag(&self, f: Flag) -> &AtomicBool {
         match f {
             Flag::Building => &self.building,
             Flag::Hold => &self.hold,
         }
     }
+}
+
+/// Take every kept field out of `st` but the newest and the one a render asked for last (`keep`): the worker lands a
+/// flick through photos newest-first, so the photo in front is not always at the top.
+fn all_but_newest(st: &mut State, keep: &str) -> Vec<(String, Arc<Made>)> {
+    let mut old = Vec::new();
+    let mut i = 1;
+    while i < st.made.len() {
+        if st.made.get(i).is_some_and(|(k, _)| k != keep) {
+            old.push(st.made.remove(i));
+        } else {
+            i += 1;
+        }
+    }
+    old
 }
 
 /// A flag set by [`RelightStore::raise`], put back as it was when dropped, also when a panic unwinds past it (a
@@ -187,6 +262,16 @@ impl RelightStore {
         self.shared.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
+    /// A render asked for field `key`: a different photo than the last one is a use of the kept fields.
+    fn asked(&self, key: &str) {
+        let mut last = self.shared.last_asked.lock().unwrap_or_else(PoisonError::into_inner);
+        if last.as_str() != key {
+            *last = key.to_string();
+            drop(last);
+            self.shared.fields_idle().touch();
+        }
+    }
+
     /// Field `key`, when it is kept (it becomes the most recently used).
     fn get(&self, key: &str) -> Option<Arc<Made>> {
         let mut st = self.lock();
@@ -199,6 +284,7 @@ impl RelightStore {
 
     /// Keep field `key`, or why it could not be made.
     fn put(&self, key: &str, result: Result<Made, String>) {
+        self.shared.fields_idle().touch();
         let mut dropped = false;
         let mut st = self.lock();
         st.busy.retain(|k| k != key);
@@ -364,13 +450,22 @@ impl RelightStore {
         self.root.as_ref().map(|r| r.join(MODEL_DIR))
     }
 
-    /// Whether the depth model is in place (and this build runs it).
+    /// Whether the depth model is in place (and this build runs it). Looked at the file system at most every
+    /// [`INSTALLED_MEMO`]: the Relight section asks on every frame.
     pub fn model_installed(&self) -> bool {
-        #[cfg(feature = "sam")]
-        if let Some(dir) = self.model_dir() {
-            return lightcraft_depth::is_model_dir(&dir);
+        let now = web_time::Instant::now();
+        let mut memo = self.shared.installed.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some((at, yes)) = *memo
+            && now.duration_since(at) < INSTALLED_MEMO
+        {
+            return yes;
         }
-        false
+        #[cfg(feature = "sam")]
+        let yes = self.model_dir().is_some_and(|dir| lightcraft_depth::is_model_dir(&dir));
+        #[cfg(not(feature = "sam"))]
+        let yes = false;
+        *memo = Some((now, yes));
+        yes
     }
 
     /// Forget every failure (the model was installed: photos are tried again).
@@ -437,6 +532,8 @@ fn model_depth(store: &RelightStore, img: &Rgba8, cancel: Option<Arc<AtomicBool>
         return Ok(tests::fake_depth(img));
     }
     let dir = store.model_dir().filter(|d| lightcraft_depth::is_model_dir(d)).ok_or(MISSING)?;
+    // (the model is not let go while it runs, and its idle time counts from the end)
+    let _in_use = store.shared.model_idle().using();
     let mut slot = store.shared.model.lock().unwrap_or_else(PoisonError::into_inner);
     if slot.is_none() {
         *slot = Some(lightcraft_depth::DepthModel::load(&dir).map_err(|e| e.to_string())?);
@@ -541,6 +638,8 @@ impl Session {
         }
         let key = self.relight_key(p);
         if let Some(m) = self.relight.get(&key) {
+            // (another photo's field asked for is a use; frames asking for the same one again are not)
+            self.relight.asked(&key);
             return (m.input.key, Some(m.input.clone()));
         }
         if !self.relight.is(Flag::Hold) {
@@ -753,6 +852,38 @@ mod tests {
         store.lock().budget = Some(1);
         store.put("k4", Ok(field_made("k4")));
         assert_eq!(store.lock().made.len(), 1);
+    }
+
+    #[test]
+    fn letting_go_after_a_while_keeps_only_the_newest_field_and_never_one_in_use() {
+        use crate::idle::Unload;
+        let store = RelightStore::default();
+        for i in 0..3 {
+            store.put(&format!("k{i}"), Ok(field_made(&format!("k{i}"))));
+        }
+        // a job holding the state lock is in the middle of using it: not touched, asked again later
+        {
+            let _held = store.lock();
+            assert_eq!(store.shared.drop_old_fields(), Unload::Busy);
+        }
+        assert!(store.get("k0").is_some());
+        assert_eq!(store.shared.drop_old_fields(), Unload::Freed);
+        let keys: Vec<String> = store.lock().made.iter().map(|(k, _)| k.clone()).collect();
+        assert_eq!(keys, ["k0"], "the photo in front keeps its field");
+        assert_eq!(store.shared.drop_old_fields(), Unload::Nothing);
+    }
+
+    #[test]
+    fn letting_go_keeps_the_field_a_render_asked_for_last_even_when_it_is_not_the_newest() {
+        let store = RelightStore::default();
+        for k in ["a", "b", "c"] {
+            store.put(k, Ok(field_made(k)));
+        }
+        // a flick through photos: the field of the photo in front (a) is older than c's
+        store.asked("a");
+        assert_eq!(store.shared.drop_old_fields(), crate::idle::Unload::Freed);
+        let keys: Vec<String> = store.lock().made.iter().map(|(k, _)| k.clone()).collect();
+        assert_eq!(keys, ["c", "a"], "the newest and the one in front stay; b goes");
     }
 
     #[test]

@@ -170,6 +170,8 @@ impl Drop for Permit<'_> {
         g.0 = g.0.saturating_sub(self.bytes as u128);
         drop(g);
         self.gate.cv.notify_all();
+        // a decode's memory was just let go: the allocator keeps those pages, so they are asked back once quiet (#304)
+        crate::idle::note_work();
     }
 }
 

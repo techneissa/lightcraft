@@ -36,7 +36,7 @@ use super::{Input, Prompt, Tag};
 use crate::media::RenderJob;
 
 /// Unload the model after this long without a request.
-pub const IDLE_UNLOAD: Duration = Duration::from_secs(10 * 60);
+pub const IDLE_UNLOAD: Duration = crate::idle::MODEL_IDLE;
 
 /// What to compute.
 #[derive(Clone)]
@@ -385,7 +385,13 @@ fn run(rx: &mpsc::Receiver<Job>, shared: &Shared, idle: Duration, mut placement:
         if queue.is_empty() {
             let left = idle.saturating_sub(last.elapsed());
             let warming = state.warm.as_ref().is_some_and(|(s, _)| !s.done());
-            match rx.recv_timeout(if warming { left.min(WARM_RETRY) } else { left }) {
+            // (with nothing loaded and nothing warming there is no deadline: it sleeps until a request comes)
+            let got = if state.loaded() || warming {
+                rx.recv_timeout(if warming { left.min(WARM_RETRY) } else { left })
+            } else {
+                rx.recv().map_err(|_| RecvTimeoutError::Disconnected)
+            };
+            match got {
                 Ok(j) => queue.push_back(j),
                 Err(RecvTimeoutError::Timeout) if last.elapsed() < idle => {
                     warm_if_idle(&mut state, shared);
