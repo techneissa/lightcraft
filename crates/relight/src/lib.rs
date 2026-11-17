@@ -29,6 +29,8 @@ mod projector;
 mod rim;
 pub mod shadow;
 #[cfg(test)]
+mod tests_aim;
+#[cfg(test)]
 mod tests_beam;
 #[cfg(test)]
 mod tests_edge;

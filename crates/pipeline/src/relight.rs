@@ -212,7 +212,9 @@ fn kind_of(k: &KindSettings) -> LightKind {
     match k.index() {
         1 => LightKind::Spot(Spot { aim_x: k.spot_aim_x, aim_y: k.spot_aim_y, angle: k.spot_angle, edge: k.spot_edge / 100.0 }),
         2 => LightKind::Sun(Sun { azimuth: k.sun_azimuth, elevation: k.sun_elevation }),
-        3 => LightKind::Softbox(Softbox { width: k.box_width, height: k.box_height, rotation: k.box_rotation }),
+        3 => {
+            LightKind::Softbox(Softbox { width: k.box_width, height: k.box_height, rotation: k.box_rotation, aim_h: k.box_aim_h, aim_v: k.box_aim_v })
+        }
         4 => LightKind::Rim(Rim { width: k.rim_width / 100.0, angle: k.rim_angle, one_sided: k.rim_side / 100.0 }),
         5 => LightKind::Fill(Fill { near: k.fill_near / 100.0 }),
         _ => LightKind::Point,
@@ -314,7 +316,7 @@ fn shadow_amount(light: &Light, effects: &Effects) -> Option<f64> {
 
 /// The key naming `light`'s shadow visibility on `input`'s field: only what the march reads. A point and a spot: the
 /// place, depth and Softness (the size); a sun: its direction and Softness, not a place; a softbox: the place, depth and
-/// rectangle, not Softness; a patterned lamp (`far`, marched from `Field::pattern_rig`) adds its Wrap and Softness. Not
+/// rectangle and aim, not Softness; a patterned lamp (`far`, marched from `Field::pattern_rig`) adds its Wrap and Softness. Not
 /// Amount, a spot's cone or the shadow amount. `coarse`: the drag's march.
 fn shadow_key(input: &Input, light: &Light, coarse: bool, far: bool) -> u64 {
     hashed(|h| {
@@ -328,7 +330,12 @@ fn shadow_key(input: &Input, light: &Light, coarse: bool, far: bool) -> u64 {
         match light.kind {
             LightKind::Sun(s) => std::hash::Hash::hash(&(b'u', bits(s.azimuth), bits(s.elevation), bits(light.softness)), h),
             LightKind::Softbox(b) => {
-                std::hash::Hash::hash(&(b'b', bits(light.x), bits(light.y), bits(light.depth), (bits(b.width), bits(b.height), bits(b.rotation))), h)
+                std::hash::Hash::hash(&(b'b', bits(light.x), bits(light.y), bits(light.depth), (bits(b.width), bits(b.height), bits(b.rotation))), h);
+                // (an aimed box turns its rectangle, and a patterned one marches from along its aim, issue #335; an unaimed one
+                // hashes as it did before)
+                if b.aim_h != 0.0 || b.aim_v != 0.0 {
+                    std::hash::Hash::hash(&(b'a', bits(b.aim_h), bits(b.aim_v)), h);
+                }
             }
             _ => std::hash::Hash::hash(&(b'p', bits(light.x), bits(light.y), bits(light.depth), bits(light.softness)), h),
         }

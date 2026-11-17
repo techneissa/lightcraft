@@ -5,7 +5,7 @@
 //! [x y depth amount softness warmth darken wrap]` with, from the environment, `LC_KIND=sun|softbox|spot` (anything else is a point light: this tool has no rim or fill),
 //! `LC_SPOT=aim_x,aim_y,angle,edge`, `LC_HAZE=haze,scatter,dust` (0..1 each: the light's beam through haze, issue #317; the time of
 //! the rays, their weighing and the upsample is printed, and with `LC_VISPIC=1` the beam alone goes to `<prefix>-beam.png`),
-//! `LC_SUN=azimuth,elevation`, `LC_BOX=width,height,rotation` and `LC_SHADOWS=0..1` and `LC_DRAFT=1` (the coarse shadows of a drag) and `LC_PATPIC=1` (also write `<prefix>-pattern.png`, the pattern alone) and `LC_VISPIC=1` (also write `<prefix>-vis.png`, the shadow's visibility, and `<prefix>-blockers.png`, what blocks: red how sure, green how deep, a share of 0.5 at full) (issue #315: how much the photo's own things
+//! `LC_SUN=azimuth,elevation`, `LC_BOX=width,height,rotation,aim_h,aim_v` (the aim: tilts in degrees from straight in, issue #335) and `LC_SHADOWS=0..1` and `LC_DRAFT=1` (the coarse shadows of a drag) and `LC_PATPIC=1` (also write `<prefix>-pattern.png`, the pattern alone) and `LC_VISPIC=1` (also write `<prefix>-vis.png`, the shadow's visibility, and `<prefix>-blockers.png`, what blocks: red how sure, green how deep, a share of 0.5 at full) (issue #315: how much the photo's own things
 //! block the light; the time of each stage of one drag step is printed) (the dump dir is `lightcraft-depth`'s example `--dump`: `depth.f32`
 //! and `size.txt`). Writes `<prefix>-before.png`, `<prefix>-after.png`, `<prefix>-gain.png`, `<prefix>-normals.png`, `<prefix>-depth.png` (the field's depth, near light).
 
@@ -38,7 +38,13 @@ fn kind_from_env() -> LightKind {
             angle: n("LC_SPOT", 2, 25.0),
             edge: n("LC_SPOT", 3, 0.4),
         }),
-        Ok("softbox") => LightKind::Softbox(Softbox { width: n("LC_BOX", 0, 0.3), height: n("LC_BOX", 1, 0.2), rotation: n("LC_BOX", 2, 0.0) }),
+        Ok("softbox") => LightKind::Softbox(Softbox {
+            width: n("LC_BOX", 0, 0.3),
+            height: n("LC_BOX", 1, 0.2),
+            rotation: n("LC_BOX", 2, 0.0),
+            aim_h: n("LC_BOX", 3, 0.0),
+            aim_v: n("LC_BOX", 4, 0.0),
+        }),
         _ => LightKind::Point,
     }
 }

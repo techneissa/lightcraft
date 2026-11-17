@@ -7,7 +7,8 @@
 //!   length the height (the longest arrow is a sun overhead, a short one a low sun in front of the scene). A hollow tip: the sun is
 //!   behind the scene.
 //! - **Softbox:** the rectangle (the handle is its middle), a corner grip that resizes it and a knob above its top
-//!   edge that turns it.
+//!   edge that turns it, and a tip on an arrow from its middle: the way it shines (issue #335; like the sun's arrow, its
+//!   direction on the photo is the direction the box leans to and its length how far; hollow while it shines straight in).
 //! - **Rim, Fill:** no place, so no handle (the row in the list selects them).
 //!
 //! A drag of one of these is one undo step; ⌥ while it is held shows where the light reaches (`relight_alt`).
@@ -28,6 +29,9 @@ const SUN_LEN: f32 = 110.0;
 const SUN_MIN: f32 = 26.0;
 /// How far the softbox's turning knob sits above its top edge (points).
 const KNOB: f32 = 26.0;
+/// How far the softbox's aim arrow reaches at a box turned fully side on, and the shortest it is drawn (points).
+const AIM_LEN: f32 = 110.0;
+const AIM_MIN: f32 = 30.0;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Handle {
@@ -36,6 +40,7 @@ enum Handle {
     SunTip,
     BoxSize,
     BoxTurn,
+    BoxAim,
 }
 
 fn grab_id() -> egui::Id {
@@ -87,6 +92,21 @@ fn sun_tip(l: &LightSettings, c: Pos2) -> Pos2 {
     }
 }
 
+/// The tip of the softbox's aim arrow on the screen: the box's axis seen from the camera times [`AIM_LEN`], kept a little off
+/// the handle so a box shining straight in still has a tip to take (a hollow one, below its middle).
+fn aim_tip(l: &LightSettings, c: Pos2) -> Pos2 {
+    let n = lightcraft_relight::kinds::box_normal(l.kind.box_aim_h, l.kind.box_aim_v);
+    let arrow = vec2(n[0], n[1]) * AIM_LEN;
+    let len = arrow.length();
+    if len >= AIM_MIN {
+        c + arrow
+    } else if len > 1e-3 {
+        c + arrow / len * AIM_MIN
+    } else {
+        c + vec2(0.0, AIM_MIN)
+    }
+}
+
 /// The softbox's half-sizes on the screen, and its corner, turning knob and stem on it.
 fn box_frame(map: &CanvasMap, l: &LightSettings, c: Pos2) -> (egui::Vec2, [Pos2; 4], Pos2) {
     let (w, h) = photo_size(map);
@@ -110,7 +130,7 @@ fn handles(map: &CanvasMap, l: &LightSettings, c: Pos2) -> Vec<(Handle, Pos2)> {
         2 => vec![(Handle::SunTip, sun_tip(l, c))],
         3 => {
             let (_, corners, knob) = box_frame(map, l, c);
-            vec![(Handle::BoxSize, corners[2]), (Handle::BoxTurn, knob)]
+            vec![(Handle::BoxSize, corners[2]), (Handle::BoxTurn, knob), (Handle::BoxAim, aim_tip(l, c))]
         }
         _ => Vec::new(),
     }
@@ -178,6 +198,12 @@ fn paint(p: &egui::Painter, map: &CanvasMap, l: &LightSettings, c: Pos2, hot: Op
             let top = corners[0].lerp(corners[1], 0.5);
             p.line_segment([top, knob], Stroke::new(1.0, tint.gamma_multiply(0.6)));
             grip(p, knob, tint, on(Handle::BoxTurn), false);
+            let tip = aim_tip(l, c);
+            let straight = l.kind.box_aim_h == 0.0 && l.kind.box_aim_v == 0.0;
+            if !straight {
+                halo(p, vec![c, tip], tint.gamma_multiply(0.85), false);
+            }
+            grip(p, tip, tint, on(Handle::BoxAim), straight);
             let g = corners[2];
             p.rect_filled(Rect::from_center_size(g, vec2(11.0, 11.0)), 2.0, Color32::from_black_alpha(140));
             p.rect_filled(Rect::from_center_size(g, vec2(8.0, 8.0)), 1.5, tint);
@@ -227,6 +253,17 @@ fn values(map: &CanvasMap, l: &LightSettings, c: Pos2, h: Handle, q: Pos2) -> se
                 "relight.boxHeight": (f64::from(2.0 * local.y.abs() / h) * 1000.0).round().clamp(20.0, 1500.0) / 1000.0,
             })
         }
+        Handle::BoxAim => {
+            // (the point under the pointer as the box's axis seen from the camera: its x and y, and the rest of the unit vector)
+            let mut p = (q - c) / AIM_LEN;
+            let reach = lightcraft_relight::kinds::AIM_MAX.to_radians().sin() as f32;
+            if p.length() > reach {
+                p *= reach / p.length();
+            }
+            let z = (1.0 - p.length_sq()).max(0.0).sqrt();
+            let deg = |a: f32| f64::from(a.atan2(z).to_degrees()).round().clamp(-80.0, 80.0);
+            json!({"relight.boxAimH": deg(p.x), "relight.boxAimV": deg(p.y)})
+        }
         Handle::BoxTurn => {
             let v = q - c;
             json!({"relight.boxRotation": f64::from(v.x.atan2(-v.y).to_degrees()).round().clamp(-180.0, 180.0)})
@@ -241,6 +278,7 @@ fn control_of(h: Handle) -> &'static str {
         Handle::SunTip => "relight.sunAzimuth",
         Handle::BoxSize => "relight.boxWidth",
         Handle::BoxTurn => "relight.boxRotation",
+        Handle::BoxAim => "relight.boxAimH",
     }
 }
 
@@ -251,6 +289,7 @@ fn label_of(h: Handle) -> &'static str {
         Handle::SunTip => "Relight Sun",
         Handle::BoxSize => "Relight Box Size",
         Handle::BoxTurn => "Relight Box Turn",
+        Handle::BoxAim => "Relight Box Aim",
     }
 }
 

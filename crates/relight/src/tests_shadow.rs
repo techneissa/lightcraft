@@ -74,7 +74,7 @@ fn a_bigger_light_gives_a_wider_penumbra() {
     assert!(big > small + 6, "small light {small} pixels, big light {big}");
     // a softbox is a light with a size too: a big one is softer than a small one
     let boxed = |w: f64, h: f64| {
-        let k = LightKind::Softbox(Softbox { width: w, height: h, rotation: 0.0 });
+        let k = LightKind::Softbox(Softbox { width: w, height: h, rotation: 0.0, aim_h: 0.0, aim_v: 0.0 });
         row(&f, &light(0.5, k), 0.5).iter().filter(|v| **v > 0.05 && **v < 0.95).count()
     };
     assert!(boxed(0.5, 0.5) > boxed(0.03, 0.03) + 6);
@@ -120,7 +120,7 @@ fn a_sun_casts_parallel_shadows_and_hostile_numbers_give_finite_planes() {
     for kind in [
         LightKind::Point,
         LightKind::Sun(Sun { azimuth: f64::NAN, elevation: f64::INFINITY }),
-        LightKind::Softbox(Softbox { width: f64::NAN, height: -1.0, rotation: f64::INFINITY }),
+        LightKind::Softbox(Softbox { width: f64::NAN, height: -1.0, rotation: f64::INFINITY, aim_h: 0.0, aim_v: 0.0 }),
     ] {
         let l = Light { kind, ..bad };
         let rig = f.rig(&l, f64::NAN, f64::NAN);
@@ -158,7 +158,7 @@ fn a_light_a_little_behind_the_subject_does_not_shade_the_whole_wall() {
     // the light at depth 0.6 lies inside the near box's assumed thickness at its own pixel (the box is 0.55 deep, the light
     // 0.70): every ray to it ran behind that surface and the whole wall went dark
     let f = box_before_wall();
-    for kind in [LightKind::Point, LightKind::Softbox(Softbox { width: 0.2, height: 0.2, rotation: 0.0 })] {
+    for kind in [LightKind::Point, LightKind::Softbox(Softbox { width: 0.2, height: 0.2, rotation: 0.0, aim_h: 0.0, aim_v: 0.0 })] {
         let l = Light { x: 0.5, y: 0.5, depth: 0.6, ..light(0.2, kind) };
         for draft in [false, true] {
             let lit = lit_wall(&f, &l, draft);
@@ -414,7 +414,7 @@ fn a_things_shadow_from_a_small_light_is_dark_in_full() {
         let depth = f64::from(((0.6f32).ln() - 0.6 - f.near + 0.6) / (f.far - f.near + 0.6));
         for kind in [
             LightKind::Point,
-            LightKind::Softbox(Softbox { width: 0.03, height: 0.03, rotation: 0.0 }),
+            LightKind::Softbox(Softbox { width: 0.03, height: 0.03, rotation: 0.0, aim_h: 0.0, aim_v: 0.0 }),
             LightKind::Sun(Sun { azimuth: -40.0, elevation: 0.0 }),
         ] {
             let l = Light { depth, ..light(0.05, kind) };

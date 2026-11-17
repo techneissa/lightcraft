@@ -247,6 +247,11 @@ impl Field {
         let towards = norm(pool, [0.0, 0.0, 1.0]);
         let d = sub(pos, pool);
         let dir = norm([d[0] - 0.05 * z * towards[0], d[1] - 0.05 * z * towards[1], d[2] - 0.05 * z * towards[2]], [0.0, 0.0, -1.0]);
+        // (an aimed softbox's light travels along its aim, issue #335: the shaft, the pattern's slant and the shadows follow it)
+        let dir = match rig.shape {
+            Shape::Box { n, .. } if n != [0.0, 0.0, 1.0] => [-n[0], -n[1], -n[2]],
+            _ => dir,
+        };
         let reach = len.max(FAR_SOURCE * z);
         let mut far = rig.clone();
         far.pos = [pool[0] + dir[0] * reach, pool[1] + dir[1] * reach, pool[2] + dir[2] * reach];

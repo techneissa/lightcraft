@@ -250,7 +250,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Add Light",
             [],
             None,
-            "{amount?: 0..100 (default 50), x?, y?: normalized place, kind?: point (default), spot, sun, softbox, rim or fill (or 0..5)} → {index, count} — add a light (at most 8) on the active photo, in a free spot, and select it; one undo step. A light's type and its numbers are controls: relight.<n>.kind and .spotAimX, .spotAimY, .spotAngle, .spotEdge, .sunAzimuth, .sunElevation, .boxWidth, .boxHeight, .boxRotation, .rimWidth, .rimAngle, .rimSide, .fillNear",
+            "{amount?: 0..100 (default 50), x?, y?: normalized place, kind?: point (default), spot, sun, softbox, rim or fill (or 0..5)} → {index, count} — add a light (at most 8) on the active photo, in a free spot, and select it; one undo step. A light's type and its numbers are controls: relight.<n>.kind and .spotAimX, .spotAimY, .spotAngle, .spotEdge, .sunAzimuth, .sunElevation, .boxWidth, .boxHeight, .boxRotation, .boxAimH, .boxAimV (a softbox's aim: tilt from straight in, degrees −80..80, towards the right and towards the bottom; 0 and 0 shines straight in), .rimWidth, .rimAngle, .rimSide, .fillNear",
             has_active,
             add
         ),

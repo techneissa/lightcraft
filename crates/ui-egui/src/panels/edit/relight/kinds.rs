@@ -17,7 +17,7 @@ pub(super) fn fields(kind: usize) -> &'static [&'static str] {
     match kind {
         1 => &["amount", "softness", "warmth", "spotAngle", "spotEdge"],
         2 => &["amount", "softness", "warmth", "sunAzimuth", "sunElevation"],
-        3 => &["amount", "warmth", "boxWidth", "boxHeight", "boxRotation"],
+        3 => &["amount", "warmth", "boxWidth", "boxHeight", "boxRotation", "boxAimH", "boxAimV"],
         4 => &["amount", "warmth", "rimWidth", "rimAngle", "rimSide"],
         5 => &["amount", "softness", "warmth", "fillNear"],
         _ => &["amount", "softness", "warmth"],
