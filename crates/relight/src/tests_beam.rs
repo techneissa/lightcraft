@@ -310,3 +310,36 @@ fn a_drags_beam_matches_the_releases_and_stays_on_its_side_of_an_outline() {
     assert!(wall_edge < 0.035 * mean_wall, "the wall along the outline is off by {wall_edge} (beam {mean_wall})");
     assert!(subject_edge < 0.035 * mean_wall, "the subject along the outline is off by {subject_edge} (beam {mean_wall})");
 }
+
+#[test]
+fn a_patterned_softboxs_beam_is_about_as_bright_as_the_plain_ones_where_the_window_is_open() {
+    // (issue #335, fix round) a guard: the window only cuts the shaft into panes, so where its beam is bright the haze is as lit
+    // as an unpatterned softbox's at the same pixels, straight in or aimed. The air of a far source is as strong as the light the
+    // surfaces get (about 1 of the lit surfaces' share, as a sun's), so nothing dims it; the beam is faint where it is cut
+    // by the bars, and faint in absolute terms on a bright scene, not per open pane
+    let f = scene(Some((0.0..0.0, 0.0..0.0, -0.6)));
+    let boxed = |aim_h: f64, aim_v: f64| Light {
+        kind: LightKind::Softbox(crate::Softbox { width: 0.3, height: 0.3, rotation: 0.0, aim_h, aim_v }),
+        softness: 0.4,
+        ..point(0.5, 0.2, 0.5)
+    };
+    // (the median of the beam over the pixels the panes' beam reaches, and the plain beam's over the same pixels)
+    let medians = |l: &Light, e: &Effects| {
+        let (_, _, through) = whole(&f, l, e);
+        let (_, _, plain) = whole(&f, l, &haze(e.haze));
+        let top = through.iter().copied().fold(0f32, f32::max);
+        let mut pairs: Vec<(f32, f32)> = through.iter().zip(&plain).filter(|(t, _)| **t > 0.3 * top).map(|(t, p)| (*t, *p)).collect();
+        let n = pairs.len();
+        pairs.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let m1 = pairs.get(n / 2).map_or(0.0, |p| p.0);
+        pairs.sort_by(|a, b| a.1.total_cmp(&b.1));
+        (m1, pairs.get(n / 2).map_or(0.0, |p| p.1), n)
+    };
+    let panes = Effects { pattern: crate::Pattern::Panes, scale: 0.5, softness: 0.1, ..haze(0.5) };
+    for (aim_h, aim_v) in [(0.0, 0.0), (30.0, 15.0)] {
+        let l = boxed(aim_h, aim_v);
+        let (through, plain, n) = medians(&l, &panes);
+
+        assert!(plain > 0.0 && through >= 0.5 * plain, "aim {aim_h}, {aim_v}: through panes {through}, plain {plain}");
+    }
+}
