@@ -350,6 +350,19 @@ fn adding_a_preset_appends_to_the_lights_caps_at_eight_and_is_one_undo_step() {
     let r = s.execute("relight.applyPreset", &json!({"preset": "neon-two-tone", "add": true})).unwrap();
     assert_eq!((r["applied"].as_bool(), r["added"].as_u64(), r["leftOut"].as_u64()), (Some(false), Some(0), Some(neon as u64)));
     assert_eq!(s.develop_of(id).unwrap(), full, "a full photo is left as it is");
+    // not even the water of a preset that has some, and no undo step
+    s.execute("develop.set", &json!({"control": "relight.water", "value": 70})).unwrap();
+    let wet = s.execute("relight.savePreset", &json!({"name": "Wet"})).unwrap();
+    s.execute("develop.set", &json!({"control": "relight.water", "value": 0})).unwrap();
+    let full = s.develop_of(id).unwrap().clone();
+    let r = s.execute("relight.applyPreset", &json!({"preset": wet["id"], "add": true})).unwrap();
+    assert_eq!((r["applied"].as_bool(), r["added"].as_u64()), (Some(false), Some(0)));
+    assert!(r["leftOut"].as_u64().unwrap() > 0);
+    assert_eq!(s.develop_of(id).unwrap(), full, "a full photo's water is left as it is");
+    // `add` that isn't true or false is an error, not a replace
+    let e = s.execute("relight.applyPreset", &json!({"preset": "rembrandt", "add": "true"}));
+    assert!(e.is_err());
+    assert_eq!(s.develop_of(id).unwrap(), full);
 }
 
 /// Underwater in a preset (issue #342): set by a preset saved with it, left alone by one saved without.
@@ -394,9 +407,14 @@ fn an_old_presets_file_without_water_loads_unchanged() {
     s.open_library(&dir, false).unwrap();
     let p = &s.relight_presets[0];
     assert_eq!((p.name.as_str(), p.has_water(), p.lights.darken, p.lights.lights[0].amount), ("Old Look", false, 15.0, 55.0));
+    // (the file is only rewritten when the list changes: rename the preset so it is, then read what was written)
+    s.execute("relight.renamePreset", &json!({"preset": "user-1", "name": "Old Look Renamed"})).unwrap();
     s.close_library().unwrap();
     drop(s);
-    let text = std::fs::read_to_string(dir.join("presets.json")).unwrap();
-    assert!(!text.contains("water"), "an unchanged preset is written back without a water field");
+    let written: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir.join("presets.json")).unwrap()).unwrap();
+    let entry = &written["relightPresets"][0];
+    assert_eq!(entry["name"], "Old Look Renamed", "the file was rewritten");
+    assert_eq!((entry["lights"]["darken"].as_f64(), entry["lights"]["lights"][0]["amount"].as_f64()), (Some(15.0), Some(55.0)));
+    assert!(entry["lights"].get("water").is_none(), "an old preset is written back without a water field: {entry}");
     let _ = std::fs::remove_dir_all(&dir);
 }

@@ -26,8 +26,9 @@ const ADD_W: f32 = 20.0;
 #[derive(Clone, Default)]
 struct Edit {
     naming: Option<String>,
-    /// The name being typed is for this one light (Save This Light as Preset…), not for all the photo's lights.
-    light: Option<usize>,
+    /// The name being typed is for this one light (Save This Light as Preset…), not for all the photo's lights: the photo
+    /// and library it was started on, and the light's number. Dropped when the photo or the library changes.
+    light: Option<(PhotoId, u64, usize)>,
     renaming: Option<(String, String)>,
     /// A preset clicked while the photo's depth was still being found, and whether it is added: applied once it is.
     pending: Option<(PhotoId, String, u64, bool)>,
@@ -38,12 +39,12 @@ fn state_id() -> egui::Id {
 }
 
 /// Save This Light as Preset… on light `index`'s menu: opens the flyout with the name box for that light.
-pub(super) fn begin_save_light(app: &mut LightcraftApp, ctx: &egui::Context, index: usize) {
+pub(super) fn begin_save_light(app: &mut LightcraftApp, ctx: &egui::Context, photo: PhotoId, index: usize) {
     if !app.ui.flyout_open("relightPresets") {
         app.ui.toggle_flyout("relightPresets");
     }
     let mut edit: Edit = ctx.data(|x| x.get_temp(state_id())).unwrap_or_default();
-    (edit.naming, edit.light) = (Some(String::new()), Some(index));
+    (edit.naming, edit.light) = (Some(String::new()), Some((photo, app.session.library_generation(), index)));
     ctx.data_mut(|x| x.remove::<bool>(state_id().with("named")));
     ctx.data_mut(|x| x.insert_temp(state_id(), edit));
 }
@@ -57,6 +58,11 @@ pub(super) fn presets(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSet
     let ctx = ui.ctx().clone();
     let mut edit: Edit = ctx.data(|x| x.get_temp(state_id())).unwrap_or_default();
     apply_pending(app, &ctx, &mut edit, id);
+    // (a name being typed for a light belongs to the photo it was started on: another photo's light of that number is not it)
+    if edit.light.is_some_and(|(on, library, _)| !same_target(on, library, id, app.session.library_generation())) {
+        (edit.naming, edit.light) = (None, None);
+        ctx.data_mut(|x| x.remove::<bool>(state_id().with("named")));
+    }
     if !open {
         ctx.data_mut(|x| x.insert_temp(state_id(), edit));
         return;
@@ -102,6 +108,11 @@ fn apply(app: &mut LightcraftApp, ctx: &egui::Context, edit: &mut Edit, photo: P
         }
         Err(e) => app.toast(ctx, e),
     }
+}
+
+/// Whether something started on photo `on` of library `library` is still about the photo `id` of library `now`.
+fn same_target(on: PhotoId, library: u64, id: PhotoId, now: u64) -> bool {
+    on == id && library == now
 }
 
 /// The preset clicked while the depth was being found, once it is (or can't be): applied then; dropped on another photo.
@@ -241,7 +252,7 @@ fn save_box(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings, edi
     ui.ctx().data_mut(|x| x.insert_temp(state_id().with("named"), true));
     let list = app.session.relight_preset_list();
     let verdict = crate::inline_rename::verdict(&text, list.iter().map(|q| q.name.as_str()));
-    if let Some(i) = light {
+    if let Some((_, _, i)) = light {
         let line = crate::i18n::tr_format!("Preset of Light {n}", n = i + 1);
         ui.label(egui::RichText::new(line).size(11.0).color(t.text_dim));
     }
@@ -266,7 +277,7 @@ fn save_box(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings, edi
     }
     if save {
         let run = match light {
-            Some(i) => app.run("relight.saveLightPreset", json!({"name": text, "index": i})),
+            Some((_, _, i)) => app.run("relight.saveLightPreset", json!({"name": text, "index": i})),
             None => app.run("relight.savePreset", json!({"name": text})),
         };
         match run {

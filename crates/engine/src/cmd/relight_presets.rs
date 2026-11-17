@@ -57,7 +57,11 @@ fn apply(s: &mut Session, p: &Value) -> Result<Value> {
     let c = "relight.applyPreset";
     let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
     let preset = named(s, p, c)?;
-    let add = p.get("add").and_then(Value::as_bool) == Some(true);
+    let add = match p.get("add") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(b)) => *b,
+        Some(_) => return Err(bad(c, "`add` is true or false")),
+    };
     // (the lights go by the subject's own depth: while the worker is still finding the photo's depth nothing is applied, and
     // nothing waits; a depth that was cancelled or failed is not tried again, the lights then take their depth as written)
     if matches!(s.relight_depth(id), Depth::Finding) {
@@ -69,9 +73,11 @@ fn apply(s: &mut Session, p: &Value) -> Result<Value> {
         let (out, left_out, first) = preset.added_to(&d, &subject.0);
         let count = out.relight.lights.len();
         let added = first.map_or(0, |f| count - f);
-        // (nothing fitted and no water to set: no undo step for nothing)
-        if out == *d {
-            return Ok(json!({"applied": false, "added": 0, "leftOut": left_out, "preset": {"id": preset.id, "name": preset.name}, "lights": count}));
+        // (nothing fitted: nothing changes, not even the water, and there is no undo step for it)
+        if first.is_none() {
+            return Ok(
+                json!({"applied": false, "added": 0, "leftOut": left_out, "preset": {"id": preset.id, "name": preset.name}, "lights": d.relight.lights.len()}),
+            );
         }
         s.set_develop(id, out, &format!("Add Light Preset: {}", preset.name))?;
         s.relight_select(id, first.unwrap_or(0));

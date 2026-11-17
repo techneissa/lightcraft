@@ -229,11 +229,16 @@ impl LightPreset {
 
     /// `d` with this preset's lights round `subject` instead of its own, and the Relight section's eye on (a preset that
     /// changes nothing the photo shows would look like a button that does nothing). The photo's water stays as it is unless
-    /// the preset has Underwater.
+    /// the preset has Underwater, and its Darken Surroundings when the preset is one light with none of its own.
     pub fn onto(&self, d: &DevelopSettings, subject: &Subject) -> DevelopSettings {
         let mut out = d.clone();
         out.relight = self.placed(subject);
         out.relight.water = if self.has_water() { self.lights.water } else { d.relight.water };
+        // (a single light saved on its own carries no Darken Surroundings: the photo's stays; a built-in single light that
+        // sets one, like Split, still does)
+        if self.is_single() && self.lights.darken == 0.0 {
+            out.relight.darken = d.relight.darken;
+        }
         out.disabled_sections.retain(|s| s != crate::relight::SECTION);
         out
     }
@@ -667,6 +672,21 @@ mod tests {
         // and the water is written back only when the preset has it
         assert!(!serde_json::to_string(&dry).unwrap().contains("water"));
         assert_eq!(serde_json::from_str::<LightPreset>(&serde_json::to_string(&wet).unwrap()).unwrap(), wet);
+    }
+
+    #[test]
+    fn a_one_light_preset_keeps_the_photos_darken_surroundings() {
+        let s = Subject::CENTRE;
+        let mut d = DevelopSettings::default();
+        d.relight.darken = 45.0;
+        let mut r = built_in()[0].placed(&s);
+        r.darken = 60.0;
+        let one = LightPreset::capture_light("mine-1", "Key", &r, 0, &s).unwrap();
+        assert_eq!(one.onto(&d, &s).relight.darken, 45.0);
+        // a preset of several lights sets its own, and a built-in single light that has one keeps it
+        assert_eq!(LightPreset::capture("mine-2", "Both", &r, &s).onto(&d, &s).relight.darken, 60.0);
+        let split = built_in().iter().find(|p| p.id == "split").unwrap();
+        assert_eq!(split.onto(&d, &s).relight.darken, split.lights.darken);
     }
 
     #[test]
