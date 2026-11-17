@@ -65,6 +65,8 @@ pub(crate) use info::{draw_focus_point, failed_pill, loupe_pill, rendering_overd
 use lens_blur::{lens_blur_brush_overlay, lens_blur_shape_overlay};
 /// Fork (issue #288): Relight's light on the photo.
 mod relight;
+/// Fork (issue #294): what ⌥ shows while a Relight control is dragged.
+mod relight_alt;
 pub use look_ahead::LookAhead;
 pub(crate) use look_ahead::{Prepare, look_ahead};
 use masks::{RegionContext, RegionEdit, color_range_pick, mask_overlay, region_overlay};
@@ -937,6 +939,8 @@ struct ToolView<'a> {
 /// Route the pointer to the right panel's tool on the photo, or to the general interactions.
 fn tool_interaction(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, tv: &ToolView, v: &Views) {
     let (map, d) = (tv.map, tv.d);
+    // fork (issue #294): a drag of Relight's handle ends when the handle stops showing
+    relight::release_if_hidden(app, ui, d);
     if let Some(target) = super::mask_recolor::pick_target(&app.ui.tool) {
         // Recolor's eyedroppers (Masking): a click sets the selected mask's colour, or its Colour to Replace, from
         // that point (kept on the photo)
@@ -1392,8 +1396,12 @@ struct OverPhoto<'a> {
 /// the transform grid.
 fn photo_overlays(app: &mut LightcraftApp, ui: &mut egui::Ui, p: &egui::Painter, o: &OverPhoto) {
     let (canvas, img_rect) = (o.canvas, o.img_rect);
+    // fork (issue #294): ⌥ while a Relight control is dragged: where the light reaches, over the photo
+    if relight_alt::active(app) {
+        relight_alt::draw(app, ui, p, o.map, o.d, o.photo.id, img_rect.intersect(canvas));
+    }
     // (an Alt-drag preview already is a clipping or greyscale picture: the overlay would mark its own pixels)
-    if o.clipping && !o.fullscreen && crate::panels::clipping::alt_overlay(app).is_none() {
+    if o.clipping && !o.fullscreen && crate::panels::clipping::alt_overlay(app).is_none() && !relight_alt::active(app) {
         clipping_overlay(app, ui.ctx(), p, img_rect);
     }
     // View ▸ Loupe Overlay ▸ Layout Image, over the photo (the After view in a before/after)

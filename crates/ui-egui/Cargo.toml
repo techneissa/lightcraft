@@ -20,6 +20,7 @@ lightcraft-color = { workspace = true }
 lightcraft-raster = { workspace = true }
 lightcraft-develop = { workspace = true }
 lightcraft-pipeline = { workspace = true }
+lightcraft-relight = { workspace = true }
 lightcraft-catalog = { workspace = true }
 web-time = { workspace = true }
 lightcraft-learn = { workspace = true }

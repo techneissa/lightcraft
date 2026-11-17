@@ -4,11 +4,13 @@ use serde::{Deserialize, Serialize};
 
 mod delete_files;
 mod dialog;
+mod relight_look;
 mod settings;
 mod view;
 
 pub use delete_files::DeleteFiles;
 pub use dialog::{Dialog, NameEdit, SyncCounts, default_preset_groups};
+pub use relight_look::RelightLook;
 pub use settings::{
     AppSettings, AppearanceMode, DarkTheme, EditFile, EditFormat, EditSpace, GridBadges, HOT_PIXEL_LIMIT_DEFAULT, HOT_PIXEL_LIMITS, KeywordChips,
     LOUPE_EDGE_CEILING, LOUPE_EDGE_STEP, LaunchLibrary, LightTheme, LightroomImport, MIN_TEXTURE_SIDE, PHOTOCRAFT, PREVIEW_LIMITS, RECENT_LIBRARIES,
@@ -344,6 +346,9 @@ pub struct UiState {
     pub point_color_visualize: bool,
     /// Light panel "Visualize HDR": grey below SDR white, colour bands above (HDR edits).
     pub hdr_visualize: bool,
+    /// Relight's ⌥-drag preview: crosses or contour lines (`fork/relight.md`).
+    #[serde(deserialize_with = "settings::lenient")]
+    pub relight_look: RelightLook,
     /// Red Eye panel: selected correction, and whether new ones are pet eyes.
     pub eye: usize,
     /// The photo `eye` was chosen on: another photo starts at its first correction ([`UiState::eye_for`]).
@@ -596,6 +601,7 @@ impl Default for UiState {
             point_color: 0,
             point_color_visualize: false,
             hdr_visualize: false,
+            relight_look: RelightLook::default(),
             eye: 0,
             eye_photo: None,
             eye_pet: false,

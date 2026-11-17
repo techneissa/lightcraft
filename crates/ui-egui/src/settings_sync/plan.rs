@@ -135,7 +135,13 @@ fn area_of(key: &str, in_settings: bool) -> &'static str {
             k if ["brush", "remove", "mask", "crop", "clip"].iter().any(|p| k.starts_with(p))
                 || matches!(
                     k,
-                    "pointColorVisualize" | "hdrVisualize" | "visualizeSpots" | "spotsThreshold" | "toolOverlay" | "lensBlurBrushAmount"
+                    "pointColorVisualize"
+                        | "hdrVisualize"
+                        | "relightLook"
+                        | "visualizeSpots"
+                        | "spotsThreshold"
+                        | "toolOverlay"
+                        | "lensBlurBrushAmount"
                 ) =>
             {
                 "tools"
@@ -160,6 +166,8 @@ fn strings(value: &Value) -> Option<String> {
 fn strict_top(key: &str, value: &Value) -> Option<String> {
     match key {
         "foldedSections" => strings(value),
+        // (`ui.json` takes Crosses for a look it doesn't know; a file with one is refused)
+        "relightLook" => strictly::<crate::state::RelightLook>(value),
         _ => None,
     }
 }
