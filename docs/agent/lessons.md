@@ -28,3 +28,4 @@ One line each: symptom → cause → guard, at most 250 characters. Keep at most
 - Lanes spent hours on Fujifilm, Panasonic and DJI raw failures → the user shoots a Sony A7V → raw work on other cameras only when a check of a merge fails, smallest fix, no extra research or upstream follow-up unless asked.
 - A lane downloaded a second 1.3 GB copy of the depth model into the assets folder → it didn't know the shared models folder → briefs that need a model name `~/Library/Application Support/ArtCraft/models/<name>/`.
 - Each GitHub merge into `custom` started a Fork CI (cancelling the last) and a Fork build (a new update to install) → merge a batch's PRs locally on `custom`, check, push once at the end.
+- The sun-rays redesign brief (#330) listed controls but no target look; the fresh lane drew an evenly spaced hairline starburst → a brief for a visual feature states the target look and natural defaults, and the lane checks its renders against them before reporting.
