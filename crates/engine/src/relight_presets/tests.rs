@@ -286,3 +286,117 @@ fn another_library_does_not_show_the_last_ones_presets() {
     let _ = std::fs::remove_dir_all(&a);
     let _ = std::fs::remove_dir_all(&b);
 }
+
+fn lights_of(s: &Session, id: PhotoId) -> Vec<lightcraft_develop::relight::LightSettings> {
+    s.develop_of(id).unwrap().relight.lights.clone()
+}
+
+/// Saving one light (issue #342): a preset of that light alone, which lands round another photo's face.
+#[test]
+fn one_light_saved_as_a_preset_lands_round_another_photos_subject() {
+    let (mut s, ids) = session();
+    face(&mut s, ids[0], (0.20, 0.20, 0.30, 0.35));
+    face(&mut s, ids[1], (0.60, 0.40, 0.70, 0.55));
+    s.execute("relight.applyPreset", &json!({"preset": "neon-two-tone"})).unwrap();
+    let second = lights_of(&s, ids[0])[1].clone();
+    // an off light is no preset, and neither is one the photo doesn't have
+    s.execute("develop.set", &json!({"control": "relight.0.amount", "value": 0})).unwrap();
+    assert!(s.execute("relight.saveLightPreset", &json!({"name": "Off", "index": 0})).is_err());
+    assert!(s.execute("relight.saveLightPreset", &json!({"name": "Far", "index": 5})).is_err());
+    let saved = s.execute("relight.saveLightPreset", &json!({"name": "Fill Light", "index": 1})).unwrap();
+    assert_eq!((saved["lights"].as_u64(), saved["water"].as_bool()), (Some(1), Some(false)));
+    s.execute("library.select", &json!({"ids": [ids[1].0]})).unwrap();
+    s.execute("relight.applyPreset", &json!({"preset": saved["id"]})).unwrap();
+    let got = lights_of(&s, ids[1]);
+    assert_eq!(got.len(), 1);
+    assert_eq!((got[0].amount, got[0].kind.index()), (second.amount, second.kind.index()));
+    // the faces are 0.4 across and 0.2 down from each other, the same size: so are the lights
+    assert!((got[0].x - second.x - 0.4).abs() < 1e-6 && (got[0].y - second.y - 0.2).abs() < 1e-6, "{second:?} {:?}", got[0]);
+    let list = s.execute("relight.presets", &json!({})).unwrap();
+    let mine = list["presets"].as_array().unwrap().iter().find(|p| p["id"] == saved["id"]).unwrap();
+    assert_eq!(mine["single"], true);
+}
+
+/// Add to Lights (issue #342): after the photo's own lights, up to eight, one undo step.
+#[test]
+fn adding_a_preset_appends_to_the_lights_caps_at_eight_and_is_one_undo_step() {
+    let (mut s, ids) = session();
+    let id = ids[0];
+    s.execute("relight.applyPreset", &json!({"preset": "rembrandt"})).unwrap();
+    s.execute("develop.set", &json!({"control": "relight.darken", "value": 35})).unwrap();
+    let before = (*s.develop_of(id).unwrap()).clone();
+    let own = before.relight.lights.len();
+    let neon = built_in().iter().find(|p| p.id == "neon-two-tone").unwrap().lights.lights.len();
+    let r = s.execute("relight.applyPreset", &json!({"preset": "neon-two-tone", "add": true})).unwrap();
+    let after = s.develop_of(id).unwrap();
+    assert_eq!((r["added"].as_u64(), r["leftOut"].as_u64()), (Some(neon as u64), Some(0)));
+    assert_eq!(after.relight.lights.len(), own + neon);
+    assert_eq!(after.relight.lights[..own], before.relight.lights[..], "the photo's lights stay first, as they were");
+    assert_eq!(
+        (after.relight.darken, s.relight_selected(id)),
+        (35.0, own),
+        "Darken Surroundings stays the photo's; the first added light is selected"
+    );
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(*s.develop_of(id).unwrap(), before, "one undo takes the added lights off");
+    // fill the photo up: what does not fit is counted
+    for _ in 0..4 {
+        s.execute("relight.applyPreset", &json!({"preset": "neon-two-tone", "add": true})).unwrap();
+    }
+    let r = s.execute("relight.applyPreset", &json!({"preset": "neon-two-tone", "add": true})).unwrap();
+    assert_eq!(lights_of(&s, id).len(), 8);
+    let full = s.develop_of(id).unwrap().clone();
+    assert_eq!(r["leftOut"].as_u64().unwrap() + r["added"].as_u64().unwrap(), neon as u64);
+    let r = s.execute("relight.applyPreset", &json!({"preset": "neon-two-tone", "add": true})).unwrap();
+    assert_eq!((r["applied"].as_bool(), r["added"].as_u64(), r["leftOut"].as_u64()), (Some(false), Some(0), Some(neon as u64)));
+    assert_eq!(s.develop_of(id).unwrap(), full, "a full photo is left as it is");
+}
+
+/// Underwater in a preset (issue #342): set by a preset saved with it, left alone by one saved without.
+#[test]
+fn a_preset_with_underwater_sets_it_and_one_without_leaves_the_photos_water() {
+    let (mut s, ids) = session();
+    let id = ids[0];
+    s.execute("relight.applyPreset", &json!({"preset": "split"})).unwrap();
+    let dry = s.execute("relight.savePreset", &json!({"name": "Dry"})).unwrap();
+    s.execute("develop.set", &json!({"control": "relight.water", "value": 70})).unwrap();
+    let wet = s.execute("relight.savePreset", &json!({"name": "Wet"})).unwrap();
+    assert_eq!((dry["water"].as_bool(), wet["water"].as_bool()), (Some(false), Some(true)));
+    let list = s.execute("relight.presets", &json!({})).unwrap();
+    let water = |n: &str| list["presets"].as_array().unwrap().iter().find(|p| p["name"] == n).unwrap()["water"].clone();
+    assert_eq!((water("Wet"), water("Dry"), water("Rembrandt")), (json!(true), json!(false), json!(false)));
+    // a preset without water leaves the photo's 70 as it is; the built-ins have none
+    s.execute("relight.applyPreset", &json!({"preset": "dry"})).unwrap();
+    assert_eq!(s.develop_of(id).unwrap().relight.water.amount, 70.0);
+    s.execute("relight.applyPreset", &json!({"preset": "rembrandt"})).unwrap();
+    assert_eq!(s.develop_of(id).unwrap().relight.water.amount, 70.0);
+    // one with water sets it, on a photo that had none, added or not
+    s.execute("library.select", &json!({"ids": [ids[1].0]})).unwrap();
+    s.execute("relight.applyPreset", &json!({"preset": "wet"})).unwrap();
+    assert_eq!(s.develop_of(ids[1]).unwrap().relight.water.amount, 70.0);
+    s.execute("develop.set", &json!({"control": "relight.water", "value": 0})).unwrap();
+    s.execute("relight.applyPreset", &json!({"preset": "wet", "add": true})).unwrap();
+    assert_eq!(s.develop_of(ids[1]).unwrap().relight.water.amount, 70.0);
+}
+
+/// A presets.json written before presets held water (issue #342) loads as it was: its presets set no water.
+#[test]
+fn an_old_presets_file_without_water_loads_unchanged() {
+    let dir = temp_library("old-water");
+    let mut s = Session::new().with_fs();
+    s.open_library(&dir, false).unwrap();
+    s.close_library().unwrap();
+    drop(s);
+    let old =
+        json!({"relightPresets": [{"id": "user-1", "name": "Old Look", "lights": {"lights": [{"amount": 55, "x": 0.2, "y": 0.1}], "darken": 15}}]});
+    std::fs::write(dir.join("presets.json"), old.to_string()).unwrap();
+    let mut s = Session::new().with_fs();
+    s.open_library(&dir, false).unwrap();
+    let p = &s.relight_presets[0];
+    assert_eq!((p.name.as_str(), p.has_water(), p.lights.darken, p.lights.lights[0].amount), ("Old Look", false, 15.0, 55.0));
+    s.close_library().unwrap();
+    drop(s);
+    let text = std::fs::read_to_string(dir.join("presets.json")).unwrap();
+    assert!(!text.contains("water"), "an unchanged preset is written back without a water field");
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -194,6 +194,15 @@ fn lights_list(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings, 
         if resp.clicked() {
             picked = Some(i);
         }
+        // (issue #342: Save This Light as Preset… names this one light; an off light is no preset)
+        crate::widgets::context_menu(&resp, |ui| {
+            ui.add_enabled_ui(l.amount > 0.0, |ui| {
+                if ui.button(crate::i18n::tr("Save This Light as Preset…")).clicked() {
+                    presets::begin_save_light(app, ui.ctx(), i);
+                    ui.close();
+                }
+            });
+        });
     }
     if let Some(i) = picked
         && let Err(e) = app.run("relight.selectLight", json!({"index": i}))
