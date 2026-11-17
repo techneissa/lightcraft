@@ -21,6 +21,7 @@ pub mod filter;
 pub mod kinds;
 mod leaves;
 pub mod light;
+pub mod mist;
 mod occluder;
 pub mod overlay;
 mod pattern;
@@ -35,6 +36,8 @@ mod tests_edge;
 #[cfg(test)]
 mod tests_kinds;
 #[cfg(test)]
+mod tests_mist;
+#[cfg(test)]
 mod tests_pattern;
 #[cfg(test)]
 mod tests_rim;
@@ -46,6 +49,7 @@ pub use effects::{Effects, Pattern, PatternPlanes};
 pub use field::{DepthMap, Field, Kind};
 pub use kinds::{Fill, LightKind, Rim, Softbox, Spot, Sun};
 pub use light::{Light, Lobe, MAX_LIGHTS, Part, Planes, Rig, Shade, Shading, Split, ambient, warmth_tilt};
+pub use mist::{Ground, Medium};
 pub use shadow::Visibility;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
