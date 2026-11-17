@@ -230,6 +230,7 @@ fn main() -> eframe::Result {
     if let Some(result) = craft_update::self_update::finish(&lightcraft_ui_egui::UPDATE_APP, &std::env::args_os().skip(1).collect::<Vec<_>>()) {
         std::process::exit(i32::from(result.is_err()));
     }
+    alloc_release::restart_without_large_cache();
     // First, so every start-up record is kept for the log file (`logging`).
     let logger = logging::install();
     lightcraft_engine::guard::install_hook(panic_log_path_with(|name| std::env::var_os(name), std::env::temp_dir()));
