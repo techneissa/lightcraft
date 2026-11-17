@@ -31,7 +31,7 @@ pub(crate) const MAIN_DC: &str = "main_dc";
 /// Where the hooks go in `main`, and what follows each anchor.
 const HOOKS: [(&str, &str); 3] = [
     (
-        "    // --- local tone in log luminance\n    var l1 = l0;\n    if (dz != 0.0 || l_exp != 0.0) {\n        l1 = log_lum(c);\n    }\n",
+        "    // --- local tone in log luminance\n    var l1 = l0;\n    if (dz != 0.0 || l_exp != 0.0 || has_added) {\n        l1 = log_lum(c);\n    }\n",
         "    // (fork: at a decontaminated mask's soft edge, its edits made to each colour apart)\n    let ndc = pu(F_DC_N);\n    if (ndc > 0u) {\n        let dc = dc_scene(c, x, y, i, n, Local(lt, tint_on, tint_dir, tint_amt));\n        c = dc.xyz;\n        l1 = l1 + dc.w;\n    }\n",
     ),
     ("    // --- colour\n", "    let pre = d;\n"),

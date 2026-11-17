@@ -11,14 +11,15 @@
 //!   floor and jump where depth steps. The pattern multiplies the light's lobe, so the facing term, the roll-off and
 //!   the colour work as before; what the pattern's own material passes (a leaf, the slats' bounce) is a second lobe of
 //!   the same light with a tint of its own ([`Effects::through_colour`]).
-//! - **Haze:** a soft glow around the light that grows with the distance in depth ([`Field::haze_lobe`]): the light
-//!   scatters in the air, and a thicker stretch of air lies in front of what is far. It is one more lobe of the same
-//!   light (and the same colour), so it adds to the light the way a second light does.
+//! - **Haze:** the air glows where the light reaches it, up to each pixel's own depth and cut into shafts by what blocks
+//!   the light, brightest looking into the light (issue #317, [`crate::beam`]); the pattern cuts the air too
+//!   ([`AirPattern`]). The glow is light added on top in the light's own colour.
 
 use rayon::prelude::*;
 
 use crate::field::Field;
-use crate::light::{Light, Lobe, Rig, warmth_tilt};
+use crate::kinds::Shape;
+use crate::light::{Lobe, Rig, warmth_tilt};
 use crate::projector::Projector;
 
 /// What a pattern is drawn as.
@@ -69,6 +70,11 @@ pub struct Effects {
     pub softness: f64,
     /// The haze's amount, 0 .. 1.
     pub haze: f64,
+    /// How much the haze scatters onward rather than every way alike (issue #317), 0 .. 1 (the phase function's `g` from 0 to
+    /// [`crate::beam::G_MAX`]).
+    pub scatter: f64,
+    /// How much the haze's density varies through the scene (issue #317), 0 (even) .. 1.
+    pub dust: f64,
     /// How much of the light the photo's own things block (issue #315, [`Field::shadowed`]), 0 (none: the light as the
     /// lobe made it) .. 1 (a surface behind something nearer gets none of it).
     pub shadows: f64,
@@ -79,7 +85,19 @@ pub struct Effects {
 
 impl Default for Effects {
     fn default() -> Self {
-        Self { gel_hue: 0.0, gel_strength: 0.0, pattern: Pattern::None, scale: 0.5, rotation: 0.0, softness: 0.3, haze: 0.0, shadows: 0.0, open: 0.5 }
+        Self {
+            gel_hue: 0.0,
+            gel_strength: 0.0,
+            pattern: Pattern::None,
+            scale: 0.5,
+            rotation: 0.0,
+            softness: 0.3,
+            haze: 0.0,
+            scatter: 0.5,
+            dust: 0.0,
+            shadows: 0.0,
+            open: 0.5,
+        }
     }
 }
 
@@ -232,42 +250,73 @@ impl Field {
         (light, Some(through))
     }
 
-    /// The glow of `light`'s haze: a soft halo around where the light sits on the photo, as strong as
-    /// the distance in depth in front of a pixel is long (nothing at the nearest depth, full at the farthest).
-    /// 0..1 per field pixel; the Amount of the glow is the caller's ([`Effects::haze`], [`HAZE_GAIN`]).
-    pub fn haze_lobe(&self, light: &Light) -> Lobe {
-        let (w, h) = (self.width, self.height);
-        let f = |v: f64, d: f32| if v.is_finite() { v.clamp(-0.5, 1.5) as f32 } else { d };
-        let (lx, ly) = (f(light.x, 0.5), f(light.y, 0.5));
-        let soft = unit(light.softness, 0.5);
-        let radius = 0.06 + 0.3 * soft;
-        let long = w.max(h).max(1) as f32;
-        let span = (self.far - self.near).max(1e-3);
-        let mut m = vec![0f32; w * h];
-        m.par_chunks_mut(w.max(1)).enumerate().for_each(|(y, row)| {
-            let dy = ((y as f32 + 0.5) / h as f32 - ly) * h as f32 / long;
-            for (x, out) in row.iter_mut().enumerate() {
-                let dx = ((x as f32 + 0.5) / w as f32 - lx) * w as f32 / long;
-                let r = dx.hypot(dy) / radius;
-                let glow = (1.0 + r * r).powf(-1.5);
-                let (lz, _, _) = self.at_px(y * w + x);
-                let far = ((lz - self.near) / span).clamp(0.0, 1.0);
-                let fog = (1.0 - (-2.5 * far).exp()) / (1.0 - (-2.5f32).exp());
-                let v = glow * fog;
-                *out = if v.is_finite() { v } else { 0.0 };
-            }
-        });
-        Lobe { m }
+    /// The pattern of effects `e` in the air (issue #317) for light `rig` shining from `from` (`rig` itself, or a patterned
+    /// lamp's far source, [`Field::pattern_rig`]): `None` for no pattern.
+    pub(crate) fn air_pattern(&self, rig: &Rig, from: &Rig, e: &Effects) -> Option<AirPattern> {
+        if e.pattern == Pattern::None {
+            return None;
+        }
+        let projector = Projector::new(self, rig, e);
+        let ray = match from.shape {
+            // (a spot throws the pattern from its own place: the projector reads the air as it is)
+            Shape::Spot { .. } => Ray::Own,
+            Shape::Sun { to, .. } => Ray::Along(to),
+            _ => Ray::From(from.position()),
+        };
+        let leaves = (e.pattern == Pattern::Leaves).then(crate::leaves::Leaves::get);
+        Some(AirPattern { plane: projector.plane_depth(), projector, ray, pattern: e.pattern, open: unit(e.open, 0.5), leaves })
     }
 }
 
-/// The strength haze 1 gives the glow, relative to its light's own strength (`Part::gain`): at full Amount and full haze
-/// the glow's core over the farthest things lights about a stop and a quarter.
-pub const HAZE_GAIN: f32 = 0.25;
+/// How a point of the air is carried to the plane where the pattern lands on the surfaces.
+#[derive(Clone, Copy, Debug)]
+enum Ray {
+    /// Along the sun's parallel rays.
+    Along([f32; 3]),
+    /// Along the ray from the light's place.
+    From([f32; 3]),
+    /// Not at all (a spot is its own projector).
+    Own,
+}
+
+/// A light's pattern in the air (issue #317, [`Field::air_pattern`]): a point of the haze takes what the pattern passes where
+/// the light's ray through it meets the plane the pattern lands on (the middle of the light's pool), so blinds and window
+/// panes make shafts of their shape that run the light's way, and leaves dapple the beam.
+pub(crate) struct AirPattern {
+    projector: Projector,
+    ray: Ray,
+    plane: f32,
+    pattern: Pattern,
+    open: f32,
+    leaves: Option<std::sync::Arc<crate::leaves::Leaves>>,
+}
+
+impl AirPattern {
+    /// The share of the light the pattern passes to camera-space point `q` of the air (0 .. 1), straight through and through
+    /// its material alike (the beam has one colour), at its widest edges (the haze spreads a shaft's edge).
+    pub(crate) fn at(&self, q: [f32; 3]) -> f32 {
+        let along = |o: [f32; 3], d: [f32; 3]| -> Option<[f32; 3]> {
+            let t = (self.plane - o[2]) / d[2];
+            (d[2].abs() > 1e-4 && t.is_finite()).then(|| [o[0] + d[0] * t, o[1] + d[1] * t, self.plane])
+        };
+        let p = match self.ray {
+            Ray::Own => Some(q),
+            Ray::Along(to) => along(q, to),
+            Ray::From(l) => along(l, [q[0] - l[0], q[1] - l[1], q[2] - l[2]]),
+        };
+        let Some(p) = p.filter(|p| p.iter().all(|c| c.is_finite())) else { return 1.0 };
+        // (no normal: the surface's incidence reads as the most grazing, the widest edges)
+        let s = self.projector.sample(p, [0.0; 3]);
+        let passed = crate::pattern::passed(self.pattern, &s, &self.projector.opening, self.open, self.leaves.as_deref());
+        let v = passed.light + passed.through;
+        if v.is_finite() { v.clamp(0.0, 1.0) } else { 1.0 }
+    }
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::light::Light;
 
     fn flat(lz: impl Fn(usize, usize) -> f32) -> Field {
         let (w, h) = (192, 128);
@@ -322,6 +371,8 @@ mod tests {
             rotation: f64::NAN,
             softness: -4.0,
             haze: f64::NAN,
+            scatter: f64::NAN,
+            dust: f64::INFINITY,
             shadows: f64::NAN,
             open: f64::NAN,
         };
@@ -339,24 +390,6 @@ mod tests {
                 assert!(p.light.iter().chain(&p.through).all(|v| v.is_finite() && (0.0..=1.0).contains(v)));
             }
         }
-        assert!(f.haze_lobe(&Light { x: f64::NAN, y: f64::INFINITY, softness: f64::NAN, ..light() }).m.iter().all(|v| v.is_finite()));
-    }
-
-    #[test]
-    fn haze_brightens_far_pixels_near_the_light_more_than_near_ones() {
-        // the left half near, the right half far; the light in the middle of the picture
-        let f = flat(|x, _| if x < 96 { -0.5 } else { 0.5 });
-        let lobe = f.haze_lobe(&light());
-        let at = |x: usize, y: usize| lobe.m[y * f.width + x];
-        // the same distance from the light on both sides
-        let (near, far) = (at(96 - 12, 64), at(96 + 11, 64));
-        assert!(far > 2.0 * near, "near {near}, far {far}");
-        // it falls away from the light
-        assert!(at(180, 64) < far && far <= 1.0);
-        // and through a shading it brightens the far side more
-        let rig = f.rig(&light(), 0.0, 0.0);
-        let sh = f.shading_of(&[crate::Part { lobe: &lobe, gain: rig.gain() * HAZE_GAIN, tilt: 0.0, tint: 0.0 }], 1.0, 0.0);
-        assert!(sh.at(0.5 + 11.0 / 192.0, 0.5).stops > sh.at(0.5 - 12.0 / 192.0, 0.5).stops);
     }
 
     #[test]

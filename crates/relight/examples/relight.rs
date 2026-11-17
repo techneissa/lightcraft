@@ -2,13 +2,15 @@
 //! with a soft shoulder, not the app's tone curve), and pictures of the field.
 //!
 //! `cargo run --release -p lightcraft-relight --example relight -- photo.jpg <depth dump dir> out-prefix
-//! [x y depth amount softness warmth darken wrap]` with, from the environment, `LC_KIND=sun|softbox` (anything else is a point light: this tool has no spot, rim or fill),
+//! [x y depth amount softness warmth darken wrap]` with, from the environment, `LC_KIND=sun|softbox|spot` (anything else is a point light: this tool has no rim or fill),
+//! `LC_SPOT=aim_x,aim_y,angle,edge`, `LC_HAZE=haze,scatter,dust` (0..1 each: the light's beam through haze, issue #317; the time of
+//! the rays, their weighing and the upsample is printed, and with `LC_VISPIC=1` the beam alone goes to `<prefix>-beam.png`),
 //! `LC_SUN=azimuth,elevation`, `LC_BOX=width,height,rotation` and `LC_SHADOWS=0..1` and `LC_DRAFT=1` (the coarse shadows of a drag) and `LC_PATPIC=1` (also write `<prefix>-pattern.png`, the pattern alone) and `LC_VISPIC=1` (also write `<prefix>-vis.png`, the shadow's visibility, and `<prefix>-blockers.png`, what blocks: red how sure, green how deep, a share of 0.5 at full) (issue #315: how much the photo's own things
 //! block the light; the time of each stage of one drag step is printed) (the dump dir is `lightcraft-depth`'s example `--dump`: `depth.f32`
 //! and `size.txt`). Writes `<prefix>-before.png`, `<prefix>-after.png`, `<prefix>-gain.png`, `<prefix>-normals.png`, `<prefix>-depth.png` (the field's depth, near light).
 
 use lightcraft_raster::Rgb32f;
-use lightcraft_relight::{DepthMap, Effects, Field, Kind, Light, LightKind, Part, Pattern, Softbox, Sun};
+use lightcraft_relight::{DepthMap, Effects, Field, Kind, Light, LightKind, Part, Pattern, Softbox, Spot, Sun};
 
 fn srgb_to_linear(v: f32) -> f32 {
     if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
@@ -30,6 +32,12 @@ fn kind_from_env() -> LightKind {
     let n = |name: &str, i: usize, d: f64| env_numbers(name).get(i).copied().unwrap_or(d);
     match std::env::var("LC_KIND").as_deref() {
         Ok("sun") => LightKind::Sun(Sun { azimuth: n("LC_SUN", 0, 40.0), elevation: n("LC_SUN", 1, 35.0) }),
+        Ok("spot") => LightKind::Spot(Spot {
+            aim_x: n("LC_SPOT", 0, 0.5),
+            aim_y: n("LC_SPOT", 1, 0.6),
+            angle: n("LC_SPOT", 2, 25.0),
+            edge: n("LC_SPOT", 3, 0.4),
+        }),
         Ok("softbox") => LightKind::Softbox(Softbox { width: n("LC_BOX", 0, 0.3), height: n("LC_BOX", 1, 0.2), rotation: n("LC_BOX", 2, 0.0) }),
         _ => LightKind::Point,
     }
@@ -137,6 +145,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let (lobe, through) = lobe;
     let (tilt, tint) = effects.light_colour(light.warmth);
+    let haze = env_numbers("LC_HAZE");
+    let beam = if haze.first().is_some_and(|h| *h > 0.0) {
+        let e = Effects { haze: haze[0], scatter: haze.get(1).copied().unwrap_or(0.5), dust: haze.get(2).copied().unwrap_or(0.0), ..effects };
+        let t = std::time::Instant::now();
+        let shafts = field.shafts(shines, &light, draft).ok_or("no beam for this light")?;
+        let t_rays = t.elapsed().as_secs_f64() * 1e3;
+        let b = field.beam(&shafts, &rig, &e);
+        let t_weigh = t.elapsed().as_secs_f64() * 1e3;
+        let plane = field.plane_at(&field.beam_plane(&b), w, h, &|x, y| (x / w as f64, y / h as f64));
+        if std::env::var_os("LC_VISPIC").is_some() {
+            // (the light the beam adds, in units of 18 % grey at the light's strength: 0 black .. 2 white)
+            let mut pic = image::GrayImage::new(w as u32, h as u32);
+            for (i, v) in plane.iter().enumerate() {
+                pic.put_pixel((i % w) as u32, (i / w) as u32, image::Luma([((v * rig.gain() / 2.0).clamp(0.0, 1.0) * 255.0) as u8]));
+            }
+            pic.save(format!("{prefix}-beam.png"))?;
+        }
+        eprintln!("beam: rays {t_rays:.1} ms, weighing {:.1} ms, upsample {:.1} ms", t_weigh - t_rays, t.elapsed().as_secs_f64() * 1e3 - t_weigh);
+        Some(plane)
+    } else {
+        None
+    };
     let mut parts = vec![Part { lobe: &lobe, gain: rig.gain(), tilt, tint }];
     let (ttilt, ttint) = effects.through_colour(light.warmth);
     if let Some(t) = &through {
@@ -170,6 +200,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         o = [o[0] * (1.0 + 0.3 * t), o[1] * (1.0 - 0.22 * tn), o[2] * (1.0 - 0.3 * t).max(0.0)];
         let y1 = lum(o).max(1e-9);
         o = o.map(|v| v * y0 / y1);
+        // (issue #317: the beam, light added on top in the light's colour, as the finish stage adds it)
+        if let Some(b) = &beam {
+            let lc = [1.0 + 0.3 * tilt, 1.0, (1.0 - 0.3 * tilt).max(0.0)];
+            let k = b.get(i).copied().unwrap_or(0.0) * rig.gain() * 0.18 / lum(lc).max(1e-6);
+            o = [o[0] + lc[0] * k, o[1] + lc[1] * k, o[2] + lc[2] * k];
+        }
         before.put_pixel(x, y, image::Rgb(c.map(display)));
         after.put_pixel(x, y, image::Rgb(o.map(display)));
         gain.put_pixel(x, y, image::Luma([((st + 2.0) / 4.0 * 255.0).clamp(0.0, 255.0) as u8]));

@@ -37,17 +37,27 @@ const LOW_SIDE_DRAFT: usize = 200;
 const LOW_SIDE: usize = 400;
 /// Rays of the first pass (one at the light's middle and three round its edge); a pixel whose rays disagree (it is in
 /// a penumbra) gets [`MORE`] more across the whole light.
-const FIRST: usize = 4;
-const MORE: usize = 12;
+pub(crate) const FIRST: usize = 4;
+pub(crate) const MORE: usize = 12;
 /// A ray counts as inside a thing from this ratio of its front's depth and in full from the second (a little behind
 /// its front: the surface a ray starts on, a body's own curve and the depth model's ripples don't shadow it), or from a
 /// quarter and a half of the thing's depth when it is thinner (a pole: it still blocks in full).
 const FRONT: (f32, f32) = (1.03, 1.08);
+/// How deep a surface that is no thing (a wall, a bank of leaves) is to the air's rays (issue #317), as ratios of its front's
+/// depth: in full to the first, fading to nothing at the second. The depth map shows only its front; a window or a gap in
+/// it lets the light through.
+const WALL: (f32, f32) = (1.25, 1.4);
+/// An air's ray leaving through a side of the picture is held in full by the edge once it goes this far into the scene per
+/// unit of its length (the cosine of its angle to the camera's axis), less in part below.
+const EDGE_INTO: f32 = 0.15;
 /// How far apart the first rays of a pixel may be before the penumbra pass runs (they agree on a partial value where a light is hidden in
 /// part: nothing to refine).
 const SPREAD: f32 = 0.05;
 /// How much of the light's own radius (the sphere its fall-off comes from) a point or a spot's shadow uses.
 const POINT_SHARE: f32 = 0.5;
+/// What the sun's angular radius gains in the air (radians, about 3°): forward scattering in the haze spreads a shaft's edge
+/// (issue #317).
+const AIR_SUN_SPREAD: f32 = 0.05;
 /// The sun's angular radius (radians) at Softness 0 and the most it adds at Softness 1.
 const SUN_MIN: f32 = 0.012;
 const SUN_SPREAD: f32 = 0.26;
@@ -139,7 +149,7 @@ fn frame(a: [f32; 3]) -> ([f32; 3], [f32; 3]) {
 /// A number in 0..1 from a pixel's place that differs as much as it can between neighbours (interleaved gradient noise): each
 /// pixel of a 3 × 3 block turns its rays a different way, so the smoothing ([`smoothed`]) averages the turns out and a wide
 /// penumbra is not grainy.
-fn spread_noise(x: usize, y: usize) -> f32 {
+pub(crate) fn spread_noise(x: usize, y: usize) -> f32 {
     let g = 0.067_110_56 * x as f32 + 0.005_837_15 * y as f32;
     (52.982_918 * (g - g.floor())).fract()
 }
@@ -149,7 +159,7 @@ const GOLDEN: f32 = 2.399_963;
 
 /// The `k`th of the rays across the light as a point of the unit disc: the first pass's are the middle and three on
 /// the edge's 0.8, the rest a sunflower (`turn`: this pixel's rotation of the pattern).
-fn offset(k: usize, turn: f32) -> (f32, f32) {
+pub(crate) fn offset(k: usize, turn: f32) -> (f32, f32) {
     if k == 0 {
         return (0.0, 0.0);
     }
@@ -213,12 +223,12 @@ fn cells(a: (f32, f32), b: (f32, f32), size: f32, from: f32, to: f32, visit: &mu
 }
 
 /// The march's numbers for one reduced field and one light.
-struct March<'a> {
-    r: &'a Reduced,
+pub(crate) struct March<'a> {
+    pub(crate) r: &'a Reduced,
     src: Source,
     /// The camera's half-extent per unit depth, on each axis.
-    kx: f32,
-    ky: f32,
+    pub(crate) kx: f32,
+    pub(crate) ky: f32,
     /// Nothing is nearer than this (the light never sits in front of it, so the ray ends), and nothing farther than this.
     z_cut: f32,
     z_cap: f32,
@@ -227,8 +237,8 @@ struct March<'a> {
 }
 
 impl March<'_> {
-    /// How far along `d` from `p` the ray stays in the picture and between [`March::z_cut`] and [`March::z_cap`].
-    fn exit(&self, p: [f32; 3], d: [f32; 3]) -> f32 {
+    /// How far along `d` from `p` the ray stays in the picture and between [`March::z_cut`] and [`March::z_cap`], and whether it leaves through one of the picture's sides (not past the nearest or farthest depth).
+    fn exit_side(&self, p: [f32; 3], d: [f32; 3]) -> (f32, bool) {
         let mut t = f32::INFINITY;
         for (a, pa, da) in [(0.5 * self.kx, p[0], d[0]), (0.5 * self.ky, p[1], d[1])] {
             for s in [1.0f32, -1.0] {
@@ -243,12 +253,13 @@ impl March<'_> {
                 }
             }
         }
+        let t_side = t;
         if d[2] < -1e-9 {
             t = t.min((p[2] - self.z_cut) / -d[2]);
         } else if d[2] > 1e-9 {
             t = t.min((self.z_cap - p[2]) / d[2]);
         }
-        if t.is_finite() { t.max(0.0) } else { 0.0 }
+        if t.is_finite() { (t.max(0.0), t_side <= t) } else { (0.0, false) }
     }
 
     /// Where `q` (a point of the scene) falls on the reduced field: its pixel's column and row (clamped to the picture), and
@@ -271,17 +282,35 @@ impl March<'_> {
     /// it crosses ([`cells`]: a thing one pixel wide is never stepped over), skipping each [`TILE`] × [`TILE`] block where nothing can
     /// hold it, and held against the thing at each pixel over the depths the ray has there ([`held`]: along a line on the picture,
     /// 1 / depth changes evenly, so those depths are exact). The pixel that holds back most decides.
-    fn clear(&self, p: [f32; 3], d: [f32; 3], whole: bool) -> f32 {
+    ///
+    /// `air`: the ray starts in the air (issue #317, [`crate::beam`]) and is also held by every surface it passes just behind
+    /// that is no thing standing in front of others (a wall, a far bank of leaves, taken to be [`WALL`] deep: light from behind
+    /// them comes only through their gaps), except open sky ([`Reduced::sky`]); a thing keeps its own depth. A surface's own ray is not (its own depth ripples would shade it).
+    fn clear_from(&self, p: [f32; 3], d: [f32; 3], whole: bool, air: bool) -> f32 {
         let r = self.r;
-        let mut end = self.exit(p, d);
+        let (out, side) = self.exit_side(p, d);
+        let mut end = out;
         if whole {
             end = end.min(1.0);
         }
+        // (a sun's air ray that leaves through a side of the picture going deeper: the scene goes on past the edge as the edge
+        // shows it, so unless the edge is open sky it passes behind it there; a light with a place is nearby, its ray is clear)
+        let edge = if air && !whole && side && d[2] > 0.0 {
+            let q = [p[0] + d[0] * out, p[1] + d[1] * out, p[2] + d[2] * out];
+            let into = d[2] / (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt().max(1e-9);
+            match self.pixel(q) {
+                Some(((x, y), _)) if !r.sky.get(y * r.w + x).copied().unwrap_or(true) => 1.0 - (into / EDGE_INTO).clamp(0.0, 1.0),
+                _ => 1.0,
+            }
+        } else {
+            1.0
+        };
         if end.is_nan() || end <= 1e-6 {
             return 1.0;
         }
-        // (only the part of the ray between the nearest blocker's front and the farthest one's end can be held back)
-        let (zlo, zhi) = r.span;
+        // (only the part of the ray between the nearest blocker's front and the farthest one's end can be held back; the
+        // air's ray, by any surface: all of it)
+        let (zlo, zhi) = if air { (0.0, f32::INFINITY) } else { r.span };
         let (t_in, t_out) = if d[2].abs() > 1e-9 {
             let (ta, tb) = ((zlo - p[2]) / d[2], (zhi - p[2]) / d[2]);
             (ta.min(tb).max(0.0), ta.max(tb).min(end))
@@ -305,10 +334,25 @@ impl March<'_> {
         let inside = |q: (f32, f32)| (q.0.clamp(0.0, r.w as f32 - 1e-3), q.1.clamp(0.0, r.h as f32 - 1e-3));
         let (a, b) = (inside(a), inside(b));
         let mut through = 1.0f32;
+        // (the air's ray goes out through a gap onto open sky when it crosses a sky pixel at least as deep as the last surface it
+        // passed, the one framing the gap; then nothing more holds it, the picture's edge included)
+        let mut out = false;
+        let mut last_z: Option<f32> = None;
         cells(a, b, TILE as f32, 0.0, 1.0, &mut |tx, ty, s0, s1| {
             let (lo, hi) = depths(s0, s1);
-            let Some(&(near, far)) = r.tiles.get(ty * r.tw + tx).filter(|_| tx < r.tw) else { return true };
-            if hi < near || lo > far {
+            if tx >= r.tw {
+                return true;
+            }
+            let t = ty * r.tw + tx;
+            let blocks = r.tiles.get(t).is_some_and(|&(near, far)| hi >= near && lo <= far);
+            let behind = air
+                && r.tile_zmin.get(t).is_some_and(|zmin| hi > zmin * FRONT.0 && lo < r.tile_zmax.get(t).copied().unwrap_or(f32::INFINITY) * WALL.1);
+            let sky_here = air && r.tile_sky.get(t).copied().unwrap_or(false);
+            if !(blocks || behind || sky_here) {
+                // (passed in front of everything here: its nearest surface is the last the ray passed)
+                if air && let Some(z) = r.tile_zmin.get(t).filter(|z| z.is_finite()) {
+                    last_z = Some(*z);
+                }
                 return true;
             }
             cells(a, b, 1.0, s0, s1, &mut |x, y, s0, s1| {
@@ -318,34 +362,81 @@ impl March<'_> {
                 let k = y * r.w + x;
                 let (Some(zs), Some(blk)) = (r.z.get(k), r.blk.get(k)) else { return true };
                 let (lo, hi) = depths(s0, s1);
+                if air {
+                    if r.sky.get(k).copied().unwrap_or(false) {
+                        if hi >= last_z.unwrap_or(r.back_z) * FRONT.0 {
+                            out = true;
+                            return false;
+                        }
+                        return true;
+                    }
+                    last_z = Some(*zs);
+                }
                 through = through.min(1.0 - held(*zs, blk, lo, hi));
+                if air && !r.sky.get(k).copied().unwrap_or(false) {
+                    // (a surface that is no thing standing in front of others holds the air's ray: the backdrop as far behind
+                    // it as the ray goes, a wall or a nearer bank of leaves as a slab [`WALL`] deep; a thing keeps its own
+                    // depth, `held`)
+                    let open = 1.0 - blk.s.clamp(0.0, 1.0);
+                    let past = if r.back.get(k).copied().unwrap_or(false) {
+                        open * ((hi / zs - FRONT.0) / (FRONT.1 - FRONT.0)).clamp(0.0, 1.0)
+                    } else {
+                        held(*zs, &Blocker { s: open, full: WALL.0, end: WALL.1 }, lo, hi)
+                    };
+                    through = through.min(1.0 - past);
+                }
                 through > 0.0
             })
         });
-        through
+        if out { through } else { through.min(edge) }
     }
 
     /// The ray `k` from `p` (a surface point) towards the light, turned by `turn`; whether it reaches the light.
     fn ray(&self, p: [f32; 3], k: usize, turn: f32) -> f32 {
-        let (a, b) = offset(k, turn);
+        self.toward(p, offset(k, turn))
+    }
+
+    /// Whether the ray from `p` (a surface point, or a point of the air for the beams, [`crate::beam`]) towards the point `(a, b)`
+    /// of the light (its unit disc, or its rectangle) reaches it: 1 all of it .. 0 blocked.
+    pub(crate) fn toward(&self, p: [f32; 3], (a, b): (f32, f32)) -> f32 {
+        self.toward_from(p, (a, b), false)
+    }
+
+    /// [`March::toward`] from a point of the air (issue #317): every surface the ray passes behind holds it too.
+    pub(crate) fn toward_air(&self, p: [f32; 3], (a, b): (f32, f32)) -> f32 {
+        self.toward_from(p, (a, b), true)
+    }
+
+    fn toward_from(&self, p: [f32; 3], (a, b): (f32, f32), air: bool) -> f32 {
         match &self.src {
             Source::Point { pos, radius } => {
                 let axis = unit(sub(*pos, p), [0.0, 0.0, -1.0]);
                 let (e1, e2) = frame(axis);
                 let s = [0, 1, 2].map(|j| pos[j] + (e1[j] * a + e2[j] * b) * radius);
-                self.clear(p, sub(s, p), true)
+                self.clear_from(p, sub(s, p), true, air)
             }
             Source::Box { c, tx, ty, hw, hh } => {
                 let (a, b) = ((1.15 * a).clamp(-1.0, 1.0) * hw, (1.15 * b).clamp(-1.0, 1.0) * hh);
                 let s = [0, 1, 2].map(|j| c[j] + tx[j] * a + ty[j] * b);
-                self.clear(p, sub(s, p), true)
+                self.clear_from(p, sub(s, p), true, air)
             }
             Source::Sun { to, spread } => {
                 let (e1, e2) = self.sun_axes;
+                // (in the air the sun's disc counts wider: the haze's own scattering spreads a shaft's edge, so the edge softens
+                // as it goes from the gap that makes it, issue #317)
+                let spread = if air { spread + AIR_SUN_SPREAD } else { *spread };
                 let d = unit([0, 1, 2].map(|j| to[j] + (e1[j] * a + e2[j] * b) * spread), *to);
-                self.clear(p, d, false)
+                self.clear_from(p, d, false, air)
             }
         }
+    }
+
+    /// How much of the light reaches `p`, a point of the air (issue #317): `n` rays aimed across the light (the `k`th of a
+    /// sunflower turned by `turn` and onwards), averaged, so the light's edge is soft.
+    pub(crate) fn air_seen(&self, p: [f32; 3], k: usize, n: usize, turn: f32) -> f32 {
+        let n = n.max(1);
+        let sum: f32 = (0..n).map(|j| self.toward_air(p, offset(FIRST + (k * n + j) % MORE, turn))).sum();
+        sum / n as f32
     }
 
     /// The share of the light that reaches pixel `(x, y)` of the reduced field.
@@ -414,6 +505,23 @@ impl Field {
     /// shadow (a rim, a fill). It depends on the light's place, depth, Softness and type numbers and the field, not on
     /// its Amount or the shadow amount, so the caller keeps it until the light moves.
     pub fn visibility(&self, rig: &Rig, light: &Light, draft: bool) -> Option<Visibility> {
+        let march = self.march(rig, light, draft)?;
+        let r = march.r;
+        let mut v = vec![1f32; r.w * r.h];
+        v.par_chunks_mut(r.w.max(1)).enumerate().for_each(|(y, row)| {
+            for (x, o) in row.iter_mut().enumerate() {
+                let s = march.visible(x, y, draft);
+                *o = if s.is_finite() { s.clamp(0.0, 1.0) } else { 1.0 };
+            }
+        });
+        // (the full one twice: a wide penumbra's rays differ most, and two passes leave no grain)
+        let v = smoothed(r, &v);
+        let v = if draft { v } else { smoothed(r, &v) };
+        Some(Visibility { w: r.w, h: r.h, v, draft })
+    }
+
+    /// `light`'s shadow rays (set up as `rig`) on the reduced field, `None` for a light that takes no shadow.
+    pub(crate) fn march(&self, rig: &Rig, light: &Light, draft: bool) -> Option<March<'_>> {
         let soft = if light.softness.is_finite() { light.softness.clamp(0.0, 1.0) as f32 } else { 0.5 };
         let src = match &rig.shape {
             Shape::Point | Shape::Spot { .. } => Source::Point { pos: rig.pos, radius: rig.r2.max(0.0).sqrt() * POINT_SHARE },
@@ -427,7 +535,7 @@ impl Field {
             Source::Sun { to, .. } => frame(*to),
             _ => ([1.0, 0.0, 0.0], [0.0, 1.0, 0.0]),
         };
-        let march = March {
+        Some(March {
             r,
             src,
             kx: LENS * self.width as f32 / long,
@@ -435,18 +543,7 @@ impl Field {
             z_cut: self.near.exp() * 0.5,
             z_cap: self.far.exp() * 3.0,
             sun_axes,
-        };
-        let mut v = vec![1f32; r.w * r.h];
-        v.par_chunks_mut(r.w.max(1)).enumerate().for_each(|(y, row)| {
-            for (x, o) in row.iter_mut().enumerate() {
-                let s = march.visible(x, y, draft);
-                *o = if s.is_finite() { s.clamp(0.0, 1.0) } else { 1.0 };
-            }
-        });
-        // (the full one twice: a wide penumbra's rays differ most, and two passes leave no grain)
-        let v = smoothed(r, &v);
-        let v = if draft { v } else { smoothed(r, &v) };
-        Some(Visibility { w: r.w, h: r.h, v, draft })
+        })
     }
 
     /// What blocks light, on the reduced field of the full march (pictures): its width and height, and for each pixel how sure
@@ -483,9 +580,22 @@ impl Field {
             });
             return lobe;
         }
+        let up = self.upsampled(r, &vis.v, 1.0);
+        lobe.m.par_iter_mut().zip(&up).for_each(|(m, s)| *m *= 1.0 - a * (1.0 - s.clamp(0.0, 1.0)));
+        lobe
+    }
+
+    /// `v` (one value per pixel of the reduced field `r`) at the field's size, edge-aware (see the module docs); a value that is
+    /// not a number reads as `fallback`.
+    pub(crate) fn upsampled(&self, r: &Reduced, v: &[f32], fallback: f32) -> Vec<f32> {
+        let (w, h) = (self.width, self.height);
+        let mut out = vec![fallback; w * h];
+        if v.len() != r.w * r.h || w == 0 || r.w == 0 || r.h == 0 {
+            return out;
+        }
         let f = r.f as f32;
         let (is_lum, is_depth) = (1.0 / (2.0 * SIGMA_LUM * SIGMA_LUM), 1.0 / (2.0 * SIGMA_DEPTH * SIGMA_DEPTH));
-        lobe.m.par_chunks_mut(w).enumerate().for_each(|(y, row)| {
+        out.par_chunks_mut(w).enumerate().for_each(|(y, row)| {
             // the reduced samples sit at the centre of their blocks
             let fy = ((y as f32 - (r.f / 2) as f32) / f).clamp(0.0, (r.h - 1) as f32);
             let (y0, ty) = (fy as usize, fy - fy.floor());
@@ -496,11 +606,11 @@ impl Field {
                 let x1 = (x0 + 1).min(r.w - 1);
                 let i = y * w + x;
                 let (gi, lz) = (self.gi.get(i).copied().unwrap_or(0.0), self.ln_z.get(i).copied().unwrap_or(0.0));
-                let (mut sum, mut weights, mut nearest) = (0f32, 0f32, (f32::MAX, 1.0f32));
+                let (mut sum, mut weights, mut nearest) = (0f32, 0f32, (f32::MAX, fallback));
                 for (qy, wy) in [(y0, 1.0 - ty), (y1, ty)] {
                     for (qx, wx) in [(x0, 1.0 - tx), (x1, tx)] {
                         let q = qy * r.w + qx;
-                        let (Some(v), Some(g), Some(l)) = (vis.v.get(q), r.gi.get(q), r.lz.get(q)) else { continue };
+                        let (Some(v), Some(g), Some(l)) = (v.get(q), r.gi.get(q), r.lz.get(q)) else { continue };
                         let (dg, dl) = (((gi - g).abs() - DEAD_LUM).max(0.0), ((lz - l).abs() - DEAD_DEPTH).max(0.0));
                         let d = dg * dg * is_lum + dl * dl * is_depth;
                         let wt = wx * wy * (-d).exp();
@@ -513,10 +623,9 @@ impl Field {
                 }
                 // (no sample like the pixel at all: the one most like it)
                 let s = if weights > 1e-6 { sum / weights } else { nearest.1 };
-                let s = if s.is_finite() { s.clamp(0.0, 1.0) } else { 1.0 };
-                *m *= 1.0 - a * (1.0 - s);
+                *m = if s.is_finite() { s } else { fallback };
             }
         });
-        lobe
+        out
     }
 }

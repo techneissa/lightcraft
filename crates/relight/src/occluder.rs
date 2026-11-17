@@ -73,6 +73,37 @@ pub(crate) struct Reduced {
     /// The same for each [`TILE`] × [`TILE`] block of pixels (`tw` across), so a ray skips a block where nothing can hold it.
     pub tiles: Vec<(f32, f32)>,
     pub tw: usize,
+    /// Issue #317: the nearest and farthest surface of each tile that is not open sky (`f32::INFINITY` and 0 for none): a ray from
+    /// the air passing just behind a surface is blocked.
+    pub tile_zmin: Vec<f32>,
+    pub tile_zmax: Vec<f32>,
+    /// Issue #317: each pixel that is open sky to the air's rays (far and bright: the sky, a gap in leaves onto it).
+    pub sky: Vec<bool>,
+    /// Issue #317: each pixel of the backdrop (far and not sky: a dark far bank of leaves, the back wall), which holds the air's
+    /// rays as far behind it as they go (nothing is seen behind it), and each tile that holds one.
+    pub back: Vec<bool>,
+    pub tile_back: Vec<bool>,
+    /// Issue #317: each tile that holds open sky, and the depth of the backdrop (the photo's farthest, less [`OPEN`]).
+    pub tile_sky: Vec<bool>,
+    pub back_z: f32,
+}
+
+/// A pixel is open sky to the air's rays (issue #317) when it lies within this much log depth of the photo's farthest (the
+/// depth model puts the sky and far gaps at the far end) and is among the brightest of the photo (the top [`BRIGHT`] share,
+/// and brighter than its darkest):
+/// light comes through the bright gaps in leaves, not through a dark far bank of them.
+const OPEN: f32 = 0.3;
+const BRIGHT: f32 = 0.12;
+
+/// Which pixels of the reduced field (log depth `lz`, cube-root luminance `gi`; the field's farthest `far`) are open sky.
+fn open_sky(lz: &[f32], gi: &[f32], far: f32) -> Vec<bool> {
+    let mut sorted: Vec<f32> = gi.iter().copied().filter(|v| v.is_finite()).collect();
+    sorted.sort_by(f32::total_cmp);
+    let k = ((sorted.len() as f32) * (1.0 - BRIGHT)) as usize;
+    let bright = sorted.get(k.min(sorted.len().saturating_sub(1))).copied().unwrap_or(f32::INFINITY);
+    // (and brighter than the darkest: a photo as bright all over has no sky to tell apart)
+    let darkest = sorted.first().copied().unwrap_or(f32::INFINITY);
+    lz.iter().zip(gi).map(|(l, g)| *l >= far - OPEN - 1e-4 && *g >= bright && *g > darkest + 1e-3).collect()
 }
 
 /// The side of a block of [`Reduced::tiles`] (reduced pixels).
@@ -106,12 +137,39 @@ impl Reduced {
                 *t = (t.0.min(*zf), t.1.max(zf * b.end));
             }
         }
-        Reduced { f, w, h, z, lz, gi, blk, span, tiles, tw }
+        let sky = open_sky(&lz, &gi, field.far);
+        let back: Vec<bool> = lz.iter().zip(&sky).map(|(l, s)| !s && *l >= field.far - OPEN - 1e-4).collect();
+        let (mut tile_back, mut tile_sky) = (vec![false; tw * th], vec![false; tw * th]);
+        for (i, (b, sk)) in back.iter().zip(&sky).enumerate() {
+            let t = (i / w / TILE) * tw + (i % w) / TILE;
+            if *b && let Some(v) = tile_back.get_mut(t) {
+                *v = true;
+            }
+            if *sk && let Some(v) = tile_sky.get_mut(t) {
+                *v = true;
+            }
+        }
+        let back_z = (field.far - OPEN).exp();
+        let (mut tile_zmin, mut tile_zmax) = (vec![f32::INFINITY; tw * th], vec![0f32; tw * th]);
+        for (i, zf) in z.iter().enumerate() {
+            let t = (i / w / TILE) * tw + (i % w) / TILE;
+            if !sky.get(i).copied().unwrap_or(false)
+                && let (Some(lo), Some(hi)) = (tile_zmin.get_mut(t), tile_zmax.get_mut(t))
+            {
+                *lo = lo.min(*zf);
+                *hi = hi.max(*zf);
+            }
+        }
+        Reduced { f, w, h, z, lz, gi, blk, span, tiles, tw, tile_zmin, tile_zmax, sky, back, tile_back, tile_sky, back_z }
     }
 
     /// Memory held (bytes).
     pub(crate) fn bytes(&self) -> usize {
-        (self.z.len() + self.lz.len() + self.gi.len() + 2 * self.tiles.len()) * 4 + self.blk.len() * std::mem::size_of::<Blocker>()
+        (self.z.len() + self.lz.len() + self.gi.len() + 4 * self.tiles.len()) * 4
+            + self.sky.len()
+            + self.back.len()
+            + 2 * self.tile_back.len()
+            + self.blk.len() * std::mem::size_of::<Blocker>()
     }
 }
 

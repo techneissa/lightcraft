@@ -301,6 +301,9 @@ pub static SPECS: &[ControlSpec] = &[
     // (issue #316: how far the slats are tilted open, how thin the mullions, how small the leaves, how many gaps)
     spec("relight.patternOpen", "Pattern Openness", (0.0, 100.0, 50.0), (1.0, 0), Track::Plain),
     spec("relight.haze", "Haze", (0.0, 100.0, 0.0), (1.0, 0), Track::Plain),
+    // (issue #317: how the haze scatters the light's beams)
+    spec("relight.scatter", "Forward Scatter", (0.0, 100.0, 50.0), (1.0, 0), Track::Plain),
+    spec("relight.dust", "Dust", (0.0, 100.0, 0.0), (1.0, 0), Track::Plain),
     // (issue #315: how much the photo's own things block the light)
     spec("relight.shadows", "Cast Shadows", (0.0, 100.0, 0.0), (1.0, 0), Track::Plain),
 ];
@@ -458,7 +461,7 @@ mod tests {
         assert_eq!((get(&s, "relight.0.warmth"), get(&s, "relight.1.warmth")), (Some(-50.0), Some(0.0)));
         assert_eq!(for_light("relight.amount", 2).as_deref(), Some("relight.2.amount"));
         assert_eq!((for_light("relight.darken", 2), for_light("relight.1.amount", 2)), (None, None));
-        assert_eq!(light_instances(&s).len(), 60);
+        assert_eq!(light_instances(&s).len(), 64);
         assert_eq!(crate::controls::find("relight.1.wrap").map(|c| c.id), Some("relight.wrap"));
         assert!(crate::controls::find("relight.x.wrap").is_none() && crate::controls::find("relight.0.darken").is_none());
         // a section reset puts all the lights back
@@ -483,6 +486,8 @@ mod tests {
                 "patternSoftness",
                 "patternOpen",
                 "haze",
+                "scatter",
+                "dust",
                 "shadows"
             ]
             .contains(&k.as_str())),
@@ -496,6 +501,8 @@ mod tests {
             ("relight.patternScale", 20.0),
             ("relight.haze", 35.0),
             ("relight.0.shadows", 60.0),
+            ("relight.scatter", 80.0),
+            ("relight.0.dust", 25.0),
         ] {
             assert!(set(&mut s, id, v), "{id}");
         }
@@ -503,6 +510,7 @@ mod tests {
         assert_eq!(v[KEY]["lights"][0]["gelHue"], json!(200.0));
         assert!(v[KEY]["lights"][0].get("patternSoftness").is_none());
         assert_eq!(v[KEY]["lights"][0]["shadows"], json!(60.0));
+        assert_eq!((&v[KEY]["lights"][0]["scatter"], &v[KEY]["lights"][0]["dust"]), (&json!(80.0), &json!(25.0)));
         let back = DevelopSettings::from_json(&v).unwrap();
         assert_eq!(back.relight, s.relight);
         assert_eq!((get(&back, "relight.0.pattern"), get(&back, "relight.patternSoftness")), (Some(3.0), Some(30.0)));

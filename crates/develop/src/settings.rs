@@ -998,6 +998,10 @@ pub struct LocalAdjustments {
     pub recolor_from_g: f64,
     #[serde(skip_serializing_if = "is_zero")]
     pub recolor_from_b: f64,
+    /// Fork (issue #317, `fork/relight.md`): light added on top, in scene-linear Rec.2020 (red, green, blue; 18 % grey is
+    /// `0.18`): Relight's beams through haze. Made by the render for its own planes, never saved or set by a mask.
+    #[serde(skip)]
+    pub fork_added: [f64; 3],
 }
 
 impl Default for LocalAdjustments {
@@ -1036,6 +1040,7 @@ impl Default for LocalAdjustments {
             recolor_from_r: 0.0,
             recolor_from_g: 0.0,
             recolor_from_b: 0.0,
+            fork_added: [0.0; 3],
         }
     }
 }

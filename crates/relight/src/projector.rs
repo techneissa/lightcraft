@@ -203,6 +203,13 @@ impl Projector {
         Projector { origin, axis, e1, e2, freq: d_med / cell, sin, cos, gobo: GOBO * d_med, alpha, d_min: 0.05 * d_med, px, opening }
     }
 
+    /// The depth of the middle of the scene along the projector's axis (the median distance's point): where the pattern lands
+    /// on the surfaces it is drawn for (issue #317: the air's points are carried there along the light's rays).
+    pub(crate) fn plane_depth(&self) -> f32 {
+        let z = self.origin[2] + self.axis[2] * self.gobo / GOBO;
+        if z.is_finite() && z > 0.0 { z } else { 1.0 }
+    }
+
     /// Where the field point `p` (normal `n`) lands on the pattern.
     #[inline]
     pub(crate) fn sample(&self, p: [f32; 3], n: [f32; 3]) -> Sample {

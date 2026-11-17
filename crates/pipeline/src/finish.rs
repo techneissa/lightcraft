@@ -193,17 +193,18 @@ fn crystal_row(fp: &FinishParams, y: usize, w: usize) -> Vec<f32> {
 }
 
 /// Number of per-mask terms in [`mask_terms`].
-pub const MASK_TERMS: usize = 21 + crate::recolor::TERMS;
+pub const MASK_TERMS: usize = 24 + crate::recolor::TERMS;
 
 /// Where a mask's Recolor terms ([`crate::recolor::terms`]) start in its term block.
-pub const MASK_RECOLOR: usize = 21;
+pub const MASK_RECOLOR: usize = 24;
 
 /// Number of alpha-weighted terms at the start of [`mask_terms`].
-pub const MASK_SUMS: usize = 17;
+pub const MASK_SUMS: usize = 20;
 
 /// A mask's local adjustments as the per-pixel stage uses them (alpha-weighted sums), in order:
 /// exposure, temp, tint, contrast, highlights, shadows, whites, blacks, texture, clarity, dehaze,
-/// saturation, hue, sharpness, noise, moiré, defringe, then the colour overlay: on (0/1), cos and
+/// saturation, hue, sharpness, noise, moiré, defringe, the light added on top (red, green, blue; fork, issue #317), then the
+/// colour overlay: on (0/1), cos and
 /// sin of its OkLCh hue, and its strength, then the Recolor ([`MASK_RECOLOR`]; off here: its terms need the area's
 /// reference, [`effect_terms_with`]).
 pub fn mask_terms(j: &LocalAdjustments) -> [f32; MASK_TERMS] {
@@ -231,6 +232,9 @@ pub fn mask_terms(j: &LocalAdjustments) -> [f32; MASK_TERMS] {
         (j.noise / 100.0) as f32,
         (j.moire / 100.0) as f32,
         (j.defringe / 100.0) as f32,
+        j.fork_added[0] as f32,
+        j.fork_added[1] as f32,
+        j.fork_added[2] as f32,
         on,
         cos,
         sin,
@@ -846,7 +850,7 @@ fn recolor_pixel(
 }
 
 pub(crate) fn adjust_scene_pixel(p: &Prepared, fp: &FinishParams, index: usize, raw: [f32; 3], local: &PixelLocalTerms) -> ([f32; 3], f32) {
-    let [l_exp, l_temp, l_tint, _, _, _, _, _, _, _, l_dehaze, _, _, _, l_noise, l_moire, l_defringe] = local.values;
+    let [l_exp, l_temp, l_tint, _, _, _, _, _, _, _, l_dehaze, _, _, _, l_noise, l_moire, l_defringe, add_r, add_g, add_b] = local.values;
     let mut color = if fp.gain == 1.0 { raw } else { raw.map(|value| value * fp.gain) };
 
     let moire = (l_moire + 0.5 * l_noise.max(0.0)).clamp(-1.0, 1.0);
@@ -896,9 +900,14 @@ pub(crate) fn adjust_scene_pixel(p: &Prepared, fp: &FinishParams, index: usize, 
         let luminance_after = luminance_2020(color).max(1e-9);
         color = color.map(|value| value * luminance_before / luminance_after);
     }
+    // (fork, issue #317: Relight's beams, light added on top in the light's own colour, after the light's gain and colour)
+    let added = add_r != 0.0 || add_g != 0.0 || add_b != 0.0;
+    if added {
+        color = [color[0] + add_r.max(0.0), color[1] + add_g.max(0.0), color[2] + add_b.max(0.0)];
+    }
 
     let l0 = p.log_l.data[index] + fp.ev;
-    let log_luminance = if dehaze != 0.0 || l_exp != 0.0 { log_lum(color) } else { l0 };
+    let log_luminance = if dehaze != 0.0 || l_exp != 0.0 || added { log_lum(color) } else { l0 };
     (color, log_luminance)
 }
 
@@ -933,7 +942,7 @@ pub(crate) fn shadows_highlights_delta(shadows: f32, highlights: f32, base: f32,
 }
 
 pub(crate) fn local_tone_delta(p: &Prepared, fp: &FinishParams, index: usize, base: f32, l1: f32, local: &PixelLocalTerms) -> f32 {
-    let [_, _, _, l_con, l_hl, l_sh, l_wh, l_bl, l_tex, l_clar, _, _, _, l_sharp, l_noise, _, _] = local.values;
+    let [_, _, _, l_con, l_hl, l_sh, l_wh, l_bl, l_tex, l_clar, _, _, _, l_sharp, l_noise, _, _, _, _, _] = local.values;
     let mut delta = 0.0;
     let (highlights, shadows) = (fp.hl + l_hl, fp.sh + l_sh);
     if highlights != 0.0 || shadows != 0.0 {
