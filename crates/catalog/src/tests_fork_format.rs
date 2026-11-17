@@ -526,6 +526,38 @@ fn a_fork_11_log_patch_of_relight_lands_on_the_first_light() {
     assert_eq!(r.upgraded_from, Some(11));
 }
 
+/// Fork 13 (#302) made a fork 12 library an older one, but fork 12 already wrote the lights list: its log's patches name
+/// `lights` and replay as they are, not against Relight's first (one-light) form. A fork 12 snapshot with two lights and a
+/// log patch on the second opens with the patch applied and nothing set aside.
+#[test]
+fn a_fork_12_log_patch_of_a_second_light_is_applied_and_nothing_is_set_aside() {
+    let mut c = Catalog::new();
+    let mut d = DevelopSettings::default();
+    d.relight.lights[0].amount = 60.0;
+    d.relight.lights.push(lightcraft_develop::relight::LightSettings { amount: 10.0, ..Default::default() });
+    let id = photo(&mut c, d.clone(), None);
+    let m = MemStore::new();
+    let (mut j, _, _) = Journal::open(Box::new(m.clone())).unwrap();
+    j.snapshot(&c).unwrap();
+    d.relight.lights[1].amount = 70.0;
+    j.append(&[Op::SetDevelop { id, settings: Arc::new(d), label: "Relight".into(), edited: None }]).unwrap();
+    drop(j);
+    // the library as fork 12 left it: this snapshot's header, and the log written under it
+    let snap = String::from_utf8(m.get(SNAPSHOT).unwrap()).unwrap();
+    assert!(snap.contains(&format!("\"version\":{}", crate::fork_format::VERSION)), "{}", &snap[..snap.len().min(120)]);
+    m.set(SNAPSHOT, snap.replacen(&format!("\"version\":{}", crate::fork_format::VERSION), "\"version\":12", 1).into_bytes());
+    let (_, loaded, r) = Journal::open(Box::new(m.clone())).unwrap();
+    assert_eq!((r.replayed, r.failed), (1, 0), "{r:?}");
+    assert_eq!(r.upgraded_from, Some(12));
+    let lights = &loaded.photo(id).unwrap().develop.relight.lights;
+    assert_eq!((lights.len(), lights[0].amount, lights[1].amount), (2, 60.0, 70.0), "the patch on the second light was lost");
+    assert!(
+        !m.files.lock().unwrap().keys().any(|k| k.contains("damaged")),
+        "a log was set aside: {:?}",
+        m.files.lock().unwrap().keys().collect::<Vec<_>>()
+    );
+}
+
 /// A store whose snapshot file can't be written while `full` is set (the log's small lines still fit).
 #[derive(Clone, Default)]
 struct FullForSnapshots {
