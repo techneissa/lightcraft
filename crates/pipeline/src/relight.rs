@@ -41,12 +41,13 @@ impl PartialEq for Input {
     }
 }
 
-/// The light of a render: the lights' shading over the photo (its colour planes carry the tilts), and the lights' beams
-/// through haze (issue #317), light added on top.
+/// The light of a render: the lights' shading over the photo (its colour planes carry the tilts), the lights' beams
+/// through haze (issue #317), light added on top, and how far things fade into the air (issue #331).
 #[derive(Clone)]
 pub struct Lit {
     pub shading: Arc<Shading>,
     pub beams: Vec<Beamed>,
+    pub fades: Vec<Faded>,
     /// The field the beams' planes are on.
     pub field: Arc<Field>,
 }
@@ -59,8 +60,18 @@ pub struct Beamed {
     pub colour: [f32; 3],
 }
 
+/// One light's Distance Fade (issue #331): the air's optical depth in front of each pixel of the field ([`Field::fade`]), and the
+/// air's colour (scene-linear Rec.2020, at the render's exposure) things fade to.
+#[derive(Clone)]
+pub struct Faded {
+    pub plane: Arc<Lobe>,
+    pub colour: [f32; 3],
+}
+
 /// The ids the beams' planes take among the masks (after [`IDS`]), one per light.
 const BEAM_IDS: u32 = u32::MAX - 6;
+/// The ids the fades' planes take (after the beams'), two per light: the dimming and the air's glow.
+const FADE_IDS: u32 = BEAM_IDS - lightcraft_relight::MAX_LIGHTS as u32;
 
 /// The ids the light's planes take among the masks: brightening, darkening, warm colour, cool colour, and for a gel
 /// magenta and green (those two after the others, so a light without a gel keeps the ids it had).
@@ -128,6 +139,8 @@ static SHAFTS: Memo<Shafts> = Memo::new(KEEP_LOBES);
 static BEAMS: Memo<Beam> = Memo::new(KEEP_LOBES);
 /// The beams at the field's size, as lobes (apart from the lights' own lobes, so the beams never push those out).
 static BEAM_LOBES: Memo<Lobe> = Memo::new(KEEP_LOBES);
+/// Distance Fades (issue #331), one per light's air: they don't depend on the light's place, so a drag of the light reuses them.
+static FADES: Memo<Lobe> = Memo::new(KEEP_LOBES);
 
 /// Let go of every kept lobe and shading (the engine drops a photo's field: what was made from it goes too; they are
 /// made again by the next render). They are keyed by the field, so one photo's go with another's.
@@ -138,6 +151,7 @@ pub fn forget() {
     SHAFTS.clear();
     BEAMS.clear();
     BEAM_LOBES.clear();
+    FADES.clear();
 }
 
 // (the settings and the light's numbers keep to the same cap)
@@ -204,6 +218,9 @@ fn effects_of(e: &lightcraft_develop::relight_effects::LightEffects) -> Effects 
         dust: e.dust / 100.0,
         shadows: e.shadows / 100.0,
         open: e.pattern_open / 100.0,
+        mist: e.mist / 100.0,
+        mist_height: e.mist_height / 100.0,
+        fade: e.fade / 100.0,
     }
 }
 
@@ -226,7 +243,7 @@ pub fn lit(info: &SourceInfo, s: &DevelopSettings, draft: bool) -> Option<Lit> {
     let input = info.relight.as_ref()?;
     let scene = scene_of(s)?;
     let (_, shading) = shading_for(input, &scene, s.light.exposure, draft);
-    Some(Lit { shading, beams: beams_of(input, &scene, draft), field: input.field.clone() })
+    Some(Lit { shading, beams: beams_of(input, &scene, draft), fades: fades_of(input, &scene, s.light.exposure), field: input.field.clone() })
 }
 
 fn hashed(parts: impl FnOnce(&mut std::collections::hash_map::DefaultHasher)) -> u64 {
@@ -290,8 +307,8 @@ pub fn shading_key(input: &Input, scene: &Scene, ev: f64, draft: bool) -> u64 {
         if draft && scene.drafts_differ() {
             std::hash::Hash::hash(&b'd', h);
         }
-        // (not the haze's numbers: the beams are not in the shading, issue #317)
-        let shaded = |e: &Effects| Effects { haze: 0.0, scatter: 0.5, dust: 0.0, ..*e };
+        // (not the air's numbers: the beams and the fade are not in the shading, issues #317 and #331)
+        let shaded = |e: &Effects| Effects { haze: 0.0, scatter: 0.5, dust: 0.0, mist: 0.0, mist_height: 0.3, fade: 0.0, ..*e };
         for (i, e) in scene.effects.iter().map(shaded).enumerate().filter(|(_, e)| *e != Effects::default()) {
             std::hash::Hash::hash(&(i, e.gel_hue.to_bits(), e.gel_strength.to_bits(), e.pattern, e.scale.to_bits()), h);
             std::hash::Hash::hash(&(e.rotation.to_bits(), e.softness.to_bits(), e.haze.to_bits(), e.shadows.to_bits(), e.open.to_bits()), h);
@@ -356,9 +373,11 @@ fn shadows_for(input: &Input, light: &Light, rig: &Rig, draft: bool, far: bool) 
     Some(vis)
 }
 
-/// Whether `light` shows a beam with `effects` (issue #317): it has haze, and a place it shines from (not a rim or a fill).
+/// Whether `light` shows a beam with `effects` (issue #317): it has haze or mist (issue #331), and a place it shines from (not
+/// a rim or a fill).
 fn has_beam(light: &Light, effects: &Effects) -> bool {
-    light.kind.has_place() && effects.haze.is_finite() && effects.haze > 0.0
+    let some = |v: f64| v.is_finite() && v > 0.0;
+    light.kind.has_place() && (some(effects.haze) || some(effects.mist))
 }
 
 /// The key naming the rays from the air towards `light` on `input`'s field (issue #317): what they and the air's light read,
@@ -380,6 +399,10 @@ fn beam_key(input: &Input, light: &Light, effects: &Effects, coarse: bool) -> u6
     hashed(|h| {
         std::hash::Hash::hash(&(4u8, shafts_key(input, light, effects, coarse)), h);
         std::hash::Hash::hash(&(effects.haze.to_bits(), effects.scatter.to_bits(), effects.dust.to_bits()), h);
+        // (the mist, issue #331: a beam with none hashes as it did before it, Mist Height not read)
+        if effects.mist != 0.0 {
+            std::hash::Hash::hash(&(b'm', effects.mist.to_bits(), effects.mist_height.to_bits()), h);
+        }
         // (the light's pattern cuts its beam too)
         std::hash::Hash::hash(
             &(effects.pattern, effects.scale.to_bits(), effects.rotation.to_bits(), effects.softness.to_bits(), effects.open.to_bits()),
@@ -458,6 +481,44 @@ pub fn beams_of(input: &Input, scene: &Scene, draft: bool) -> Vec<Beamed> {
             let k = rig.gain() * crate::tone::GREY / lum;
             let colour = c.map(|v| if (v * k).is_finite() { (v * k).max(0.0) } else { 0.0 });
             Some(Beamed { plane, colour })
+        })
+        .collect()
+}
+
+/// The key naming a Distance Fade on `input`'s field: the air's numbers it reads (Haze, Mist, Mist Height, Distance Fade).
+fn fade_key(input: &Input, e: &Effects) -> u64 {
+    hashed(|h| std::hash::Hash::hash(&(6u8, input.key, [e.haze, e.mist, e.mist_height, e.fade].map(f64::to_bits)), h))
+}
+
+/// The scene's Distance Fades (issue #331): each light with some, its plane (made once per set of the air's numbers and kept;
+/// the light's place, type and a drag don't change it) and the air's colour at exposure `ev`, from the photo's far colour and the
+/// light's own (Warmth and gel).
+pub fn fades_of(input: &Input, scene: &Scene, ev: f64) -> Vec<Faded> {
+    let none = Effects::default();
+    scene
+        .lights
+        .iter()
+        .take(MAX_LIGHTS)
+        .enumerate()
+        .filter_map(|(i, l)| {
+            let e = scene.effects.get(i).unwrap_or(&none);
+            if !(e.fade.is_finite() && e.fade > 0.0) {
+                return None;
+            }
+            let key = fade_key(input, e);
+            let plane = match FADES.get(key) {
+                Some(p) => p,
+                None => {
+                    let p = Arc::new(input.field.fade(e)?);
+                    FADES.put(key, p.clone());
+                    p
+                }
+            };
+            let (t, s) = e.light_colour(l.warmth);
+            let light = [1.0 + 0.3 * t, 1.0 - 0.22 * s, (1.0 - 0.3 * t).max(0.0)];
+            let gain = if ev.is_finite() { 2f32.powf(ev.clamp(-10.0, 10.0) as f32) } else { 1.0 };
+            let colour = input.field.air_colour(light).map(|c| c * gain);
+            Some(Faded { plane, colour })
         })
         .collect()
 }
@@ -588,6 +649,25 @@ pub fn masks(plan: &Plan<'_>) -> Vec<Evaluated> {
         let alpha = plane.iter().map(|v| (v / top).clamp(0.0, 1.0)).collect();
         let added = b.colour.map(|c| f64::from(c * top));
         out.push(evaluated(BEAM_IDS - k as u32, w, h, alpha, LocalAdjustments { fork_added: added, ..LocalAdjustments::default() }));
+    }
+    // (issue #331: each light's Distance Fade: the photo's light dimmed by the air in front of it, an exposure, and the air's own
+    // glow in its colour, light added on top; so a pixel becomes `c · T + air · (1 − T)`, the beams on top of that)
+    for (k, f) in lit.fades.iter().enumerate() {
+        let tau = lit.field.plane_at(&f.plane, w, h, &|x, y| {
+            let q = map.apply(Point::new(x, y));
+            (q.x, q.y)
+        });
+        let top = tau.iter().copied().fold(0f32, f32::max);
+        if top <= 1e-6 || !top.is_finite() {
+            continue;
+        }
+        let dim = tau.iter().map(|v| (v / top).clamp(0.0, 1.0)).collect();
+        let glow_top = 1.0 - (-top).exp();
+        let glow = tau.iter().map(|v| ((1.0 - (-v.max(0.0)).exp()) / glow_top).clamp(0.0, 1.0)).collect();
+        let id = FADE_IDS - 2 * k as u32;
+        out.push(evaluated(id, w, h, dim, LocalAdjustments { exposure: -f64::from(top) / std::f64::consts::LN_2, ..LocalAdjustments::default() }));
+        let added = f.colour.map(|c| f64::from(c * glow_top));
+        out.push(evaluated(id - 1, w, h, glow, LocalAdjustments { fork_added: added, ..LocalAdjustments::default() }));
     }
     if let Some(t) = t {
         eprintln!("    relight planes ({w} × {h}): {:.1} ms", t.elapsed().as_secs_f64() * 1e3);

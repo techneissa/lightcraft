@@ -51,9 +51,6 @@ const FIRST_EVERY_DRAFT: usize = 2;
 /// sixteenth), and every pixel reads its beam off the lines round it at its own depth.
 const STRIDE: usize = 2;
 const STRIDE_DRAFT: usize = 4;
-/// The haze's optical depth from the camera to the photo's farthest thing at Haze 1 (`exp(−1.5)`: 22 % of that far
-/// thing's light comes through); it grows with the square of Haze, so the low end is fine-grained.
-const TAU: f32 = 1.5;
 /// The most forward the scatter gets at Forward Scatter 100 (0.85: about 150 times more onward than back).
 pub const G_MAX: f32 = 0.85;
 /// The glow of a light, in units of 18 % grey, per unit of optical depth and of the light's own strength: the radiance a
@@ -309,9 +306,9 @@ impl Field {
         Some(Shafts { w: r.w, h: r.h, gw, gh, stride, steps: n, vis })
     }
 
-    /// The beam of `rig`'s light through the haze of effects `e` (Haze, Forward Scatter, Dust, and the light's pattern), from
+    /// The beam of `rig`'s light through the haze of effects `e` (Haze, Mist, Forward Scatter, Dust, and the light's pattern), from
     /// its `shafts` (traced from `rig`, or for a patterned lamp from its far source, [`Field::pattern_rig`]): the light the
-    /// air in front of each pixel of the reduced field scatters towards the camera. All 0 for no haze, or for shafts of
+    /// air in front of each pixel of the reduced field scatters towards the camera. All 0 for no haze or mist, or for shafts of
     /// another field.
     ///
     /// Each traced line sums its air step by step; the steps are smoothed across neighbouring lines (only steps in front of
@@ -321,13 +318,13 @@ impl Field {
     pub fn beam(&self, shafts: &Shafts, rig: &Rig, e: &Effects) -> Beam {
         let r = self.reduced(false);
         let (w, h, n, stride, gw, gh) = (r.w, r.h, shafts.steps, shafts.stride, shafts.gw, shafts.gh);
-        let haze = unit(e.haze, 0.0);
         let mut s = vec![0f32; w * h];
-        if haze <= 0.0 || shafts.w != w || shafts.h != h || shafts.vis.len() != gw * gh * n || n == 0 || stride == 0 {
+        // (the haze, and with Mist the layer over the ground, issue #331: no air, no beam)
+        let Some(medium) = self.medium(e) else { return Beam { w, h, s } };
+        if shafts.w != w || shafts.h != h || shafts.vis.len() != gw * gh * n || n == 0 || stride == 0 {
             return Beam { w, h, s };
         }
         let zfar = self.far.exp().max(1e-6);
-        let sigma = TAU * haze * haze / zfar;
         let g = G_MAX * unit(e.scatter, 0.5);
         let dust = unit(e.dust, 0.0);
         let cell = zfar / DUST_CELLS;
@@ -356,7 +353,7 @@ impl Field {
                 }
                 let seen = f32::from(shafts.vis.get(j * n + k).copied().unwrap_or(255)) / 255.0;
                 let scatter = phase(g, dot(travel(from, q), to_camera));
-                let v = ds * sigma * dust_at(q, cell, dust) * (-sigma * d).exp() * light * seen * scatter;
+                let v = ds * medium.at(q) * dust_at(q, cell, dust) * (-medium.depth(path.e, d)).exp() * light * seen * scatter;
                 *o = if v.is_finite() { v.max(0.0) } else { 0.0 };
             }
         });
@@ -530,7 +527,7 @@ fn across(air: &[f32], front: &[bool], (gw, gh, n): (usize, usize, usize)) -> (V
 }
 
 /// `v` averaged over each pixel's neighbours within `radius` (1: 3 × 3) on the same surface (a log depth within [`SAME`] of its own).
-fn same_surface_mean(r: &Reduced, v: &[f32], radius: usize) -> Vec<f32> {
+pub(crate) fn same_surface_mean(r: &Reduced, v: &[f32], radius: usize) -> Vec<f32> {
     let mut out = vec![0f32; v.len()];
     out.par_chunks_mut(r.w.max(1)).enumerate().for_each(|(y, row)| {
         for (x, o) in row.iter_mut().enumerate() {

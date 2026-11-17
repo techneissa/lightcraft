@@ -67,6 +67,12 @@ pub struct Field {
     pub(crate) gi: Vec<f32>,
     /// The pixels near a step in depth, each with the mean and variance of `gi` over its window.
     pub(crate) band: Vec<(u32, f32, f32)>,
+    /// The air's colour (issue #331, [`Field::air_colour`]): the guide's mean colour (linear Rec.2020) over its farthest
+    /// tenth, and the luminance of the photo's light quarter (its 75th percentile).
+    pub(crate) air: [f32; 3],
+    pub(crate) bright: f32,
+    /// The ground plane under the photo (issue #331, [`Field::ground`]), fitted the first time the mist asks.
+    pub(crate) ground: std::sync::OnceLock<crate::mist::Ground>,
     /// The field reduced for the shadow march (issue #315), made the first time a light asks.
     pub(crate) reduced: std::sync::OnceLock<crate::shadow::Reduced>,
     /// The same, coarser, for a drag's shadows.
@@ -167,6 +173,21 @@ fn same_side(lz: &[f32], w: usize, h: usize, i: usize, b: f32) -> f32 {
 /// `.0` (about 4 %), left alone over `.1` (about 11 %).
 const TERRACE: (f32, f32) = (0.04, 0.11);
 
+/// The air's colour of a field of log depth `lz` and luminance `y` (`colour` gives pixel `i`'s): the mean colour over the
+/// farthest tenth, and the 75th percentile of the luminance (both finite, not negative).
+fn air_of(lz: &[f32], y: &[f32], colour: impl Fn(usize) -> [f32; 3] + Sync) -> ([f32; 3], f32) {
+    let cut = percentile(lz, 0.9);
+    let (sum, n) = lz
+        .par_iter()
+        .enumerate()
+        .filter(|(_, z)| **z >= cut)
+        .map(|(i, _)| (colour(i).map(|c| if c.is_finite() { c.max(0.0) } else { 0.0 }), 1usize))
+        .reduce(|| ([0.0; 3], 0), |(a, n), (b, m)| ([a[0] + b[0], a[1] + b[1], a[2] + b[2]], n + m));
+    let air = if n > 0 { sum.map(|c| c / n as f32) } else { [0.18; 3] };
+    let bright = percentile(y, 0.75);
+    (air, if bright.is_finite() { bright.max(0.0) } else { 0.0 })
+}
+
 /// Percentile `q` (0..1) of `v` (copied and sorted; `v` is not empty).
 fn percentile(v: &[f32], q: f64) -> f32 {
     let mut s: Vec<f32> = v.iter().copied().filter(|x| x.is_finite()).collect();
@@ -247,6 +268,7 @@ impl Field {
         let ln_z = deterrace(&ln_z, &gi, w, h);
         let normal = normals(&ln_z, w, h);
         let band = edge_band(&ln_z, &gi, w, h);
+        let (air, bright) = air_of(&ln_z, &y, |i| guide.data.get(i).copied().unwrap_or([0.18; 3]));
         Ok(Field {
             width: w,
             height: h,
@@ -257,6 +279,9 @@ impl Field {
             far,
             gi,
             band,
+            air,
+            bright,
+            ground: std::sync::OnceLock::new(),
             reduced: std::sync::OnceLock::new(),
             reduced_draft: std::sync::OnceLock::new(),
         })
@@ -340,6 +365,8 @@ impl Field {
         let normal = normals(&ln_z, width, height);
         let (near, far) = (percentile(&ln_z, 0.02), percentile(&ln_z, 0.98));
         let band = edge_band(&ln_z, &gi, width, height);
+        let y: Vec<f32> = lum.iter().map(|l| 0.18 * l.exp2()).collect();
+        let (air, bright) = air_of(&ln_z, &y, |i| [y.get(i).copied().unwrap_or(0.18); 3]);
         Ok(Field {
             width,
             height,
@@ -350,6 +377,9 @@ impl Field {
             far,
             gi,
             band,
+            air,
+            bright,
+            ground: std::sync::OnceLock::new(),
             reduced: std::sync::OnceLock::new(),
             reduced_draft: std::sync::OnceLock::new(),
         })

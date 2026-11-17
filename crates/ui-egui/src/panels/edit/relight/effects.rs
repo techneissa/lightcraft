@@ -2,7 +2,8 @@
 //! named gels as swatches, then any hue and a strength), a pattern (blinds, window panes, leaves, dapple, with
 //! Scale, Rotation, Softness and Openness) and Haze. Each is a control by id, `relight.<n>.gelHue`, `.gelStrength`,
 //! `.pattern`, `.patternScale`, `.patternRotation`, `.patternSoftness`, `.patternOpen` (issue #316) and `.haze`, and with
-//! some haze (issue #317) its `.scatter` and `.dust`.
+//! some haze (issue #317) its `.scatter` and `.dust`; then (issue #331) `.mist` with its `.mistHeight`, and with haze or mist
+//! `.fade` (Distance Fade).
 
 use egui::{Align2, Color32, Sense, Stroke, vec2};
 use lightcraft_develop::DevelopSettings;
@@ -121,9 +122,15 @@ pub(super) fn effects(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSet
     }
     heading(ui, "Haze");
     control(app, ui, d, &format!("relight.{sel}.haze"), true);
-    // (issue #317: how the haze shows the beams, once there is some)
-    if e.haze > 0.0 {
+    // (issue #331: mist that lies low over the ground, and how high it reaches once there is some)
+    control(app, ui, d, &format!("relight.{sel}.mist"), true);
+    if e.mist > 0.0 {
+        control(app, ui, d, &format!("relight.{sel}.mistHeight"), true);
+    }
+    // (issue #317: how the air shows the beams, and issue #331: how far things fade into it, once there is some)
+    if e.haze > 0.0 || e.mist > 0.0 {
         control(app, ui, d, &format!("relight.{sel}.scatter"), true);
         control(app, ui, d, &format!("relight.{sel}.dust"), true);
+        control(app, ui, d, &format!("relight.{sel}.fade"), true);
     }
 }

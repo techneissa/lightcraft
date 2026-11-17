@@ -747,3 +747,37 @@ fn a_failed_upgrade_snapshot_leaves_no_log_of_two_formats() {
     assert_eq!((r.failed, r.upgraded_from), (0, None));
     assert_eq!(again.photo(id).unwrap().develop.relight.lights[0].amount, 90.0);
 }
+
+/// Fork 22 (#331) made a fork 18 library an older one, but fork 18 already wrote haze, Forward Scatter and Dust per light: its
+/// log's patches replay as they are. A fork 18 snapshot with a hazy light at Forward Scatter 80 and Dust 30 and a log patch on
+/// its haze opens with the patch applied, Scatter and Dust kept, Low Mist, Mist Height and Distance Fade at their defaults, and
+/// nothing set aside.
+#[test]
+fn a_fork_18_log_patch_of_a_hazy_light_is_applied_and_nothing_is_set_aside() {
+    let mut c = Catalog::new();
+    let mut d = DevelopSettings::default();
+    d.relight.lights[0].amount = 60.0;
+    (d.relight.lights[0].effects.haze, d.relight.lights[0].effects.scatter, d.relight.lights[0].effects.dust) = (30.0, 80.0, 30.0);
+    let id = photo(&mut c, d.clone(), None);
+    let m = MemStore::new();
+    let (mut j, _, _) = Journal::open(Box::new(m.clone())).unwrap();
+    j.snapshot(&c).unwrap();
+    d.relight.lights[0].effects.haze = 55.0;
+    j.append(&[Op::SetDevelop { id, settings: Arc::new(d), label: "Relight".into(), edited: None }]).unwrap();
+    drop(j);
+    let snap = String::from_utf8(m.get(SNAPSHOT).unwrap()).unwrap();
+    let now = format!("\"version\":{}", crate::fork_format::VERSION);
+    assert!(snap.contains(&now), "{}", &snap[..snap.len().min(120)]);
+    m.set(SNAPSHOT, snap.replacen(&now, "\"version\":18", 1).into_bytes());
+    let (_, loaded, r) = Journal::open(Box::new(m.clone())).unwrap();
+    assert_eq!((r.replayed, r.failed), (1, 0), "{r:?}");
+    assert_eq!(r.upgraded_from, Some(18));
+    let e = loaded.photo(id).unwrap().develop.relight.lights[0].effects;
+    assert_eq!((e.haze, e.scatter, e.dust), (55.0, 80.0, 30.0), "the patch on the haze was lost");
+    assert_eq!((e.mist, e.mist_height, e.fade), (0.0, 30.0, 0.0));
+    assert!(
+        !m.files.lock().unwrap().keys().any(|k| k.contains("damaged")),
+        "a log was set aside: {:?}",
+        m.files.lock().unwrap().keys().collect::<Vec<_>>()
+    );
+}

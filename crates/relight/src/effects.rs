@@ -81,6 +81,12 @@ pub struct Effects {
     /// How open the pattern is (issue #316), 0 .. 1: how far the blinds' slats are tilted open, how thin a window's
     /// mullions are, how small the leaves are, how many gaps a canopy has.
     pub open: f64,
+    /// Low mist (issue #331, [`crate::mist`]): how thick the air is near the ground, 0 (none) .. 1.
+    pub mist: f64,
+    /// How high the mist reaches, 0 (a thin layer on the ground) .. 1 (above the camera).
+    pub mist_height: f64,
+    /// Distance Fade (issue #331): how much far things fade into the air, 0 (none) .. 1 (as the air's density says).
+    pub fade: f64,
 }
 
 impl Default for Effects {
@@ -97,6 +103,9 @@ impl Default for Effects {
             dust: 0.0,
             shadows: 0.0,
             open: 0.5,
+            mist: 0.0,
+            mist_height: 0.3,
+            fade: 0.0,
         }
     }
 }
@@ -375,6 +384,9 @@ mod tests {
             dust: f64::INFINITY,
             shadows: f64::NAN,
             open: f64::NAN,
+            mist: f64::INFINITY,
+            mist_height: f64::NAN,
+            fade: -3.0,
         };
         for w in [f64::NAN, 9.0, -9.0] {
             let (t, s) = bad.light_colour(w);

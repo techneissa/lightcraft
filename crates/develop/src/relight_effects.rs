@@ -2,7 +2,8 @@
 //! the light's settings ([`crate::relight::LightSettings::effects`]); the pipeline turns them into
 //! `lightcraft_relight::Effects`. Issue #315 adds Shadows (how much the photo's own things block the light), issue #316 the pattern's openness (`patternOpen`). A light with none
 //! writes nothing, so an edit made before them reads and saves as it was; a block with some reads leniently like the rest (a number that is not a number takes its default).
-//! Issue #317 makes Haze a medium the light's beams show in, and adds Forward Scatter and Dust to it.
+//! Issue #317 makes Haze a medium the light's beams show in, and adds Forward Scatter and Dust to it; issue #331 adds Mist,
+//! Mist Height and Distance Fade.
 
 use serde::{Deserialize, Serialize};
 
@@ -63,6 +64,15 @@ pub struct LightEffects {
     /// canopy's gaps.
     #[serde(skip_serializing_if = "fifty")]
     pub pattern_open: f64,
+    /// Low mist (issue #331): how thick the air is near the ground the depth shows, 0 (none) .. 100.
+    #[serde(skip_serializing_if = "zero")]
+    pub mist: f64,
+    /// How high the mist reaches above the ground (issue #331), 0 (a thin layer) .. 100 (above the camera).
+    #[serde(skip_serializing_if = "thirty")]
+    pub mist_height: f64,
+    /// Distance Fade (issue #331): how much far things fade into the haze and mist, 0..100.
+    #[serde(skip_serializing_if = "zero")]
+    pub fade: f64,
 }
 
 impl Default for LightEffects {
@@ -79,13 +89,16 @@ impl Default for LightEffects {
             dust: 0.0,
             shadows: 0.0,
             pattern_open: 50.0,
+            mist: 0.0,
+            mist_height: 30.0,
+            fade: 0.0,
         }
     }
 }
 
 impl LightEffects {
     /// The number the control `field` (`gelHue`, `gelStrength`, `pattern`, `patternScale`, `patternRotation`,
-    /// `patternSoftness`, `patternOpen`, `haze`, `scatter`, `dust`, `shadows`) names.
+    /// `patternSoftness`, `patternOpen`, `haze`, `scatter`, `dust`, `shadows`, `mist`, `mistHeight`, `fade`) names.
     pub(crate) fn field(&mut self, field: &str) -> Option<&mut f64> {
         Some(match field {
             "gelHue" => &mut self.gel_hue,
@@ -99,6 +112,9 @@ impl LightEffects {
             "scatter" => &mut self.scatter,
             "dust" => &mut self.dust,
             "shadows" => &mut self.shadows,
+            "mist" => &mut self.mist,
+            "mistHeight" => &mut self.mist_height,
+            "fade" => &mut self.fade,
             _ => return None,
         })
     }
@@ -114,7 +130,7 @@ impl LightEffects {
         serde_json::json!({
             "gelHue": self.gel_hue, "gelStrength": self.gel_strength, "pattern": self.pattern, "patternScale": self.pattern_scale,
             "patternRotation": self.pattern_rotation, "patternSoftness": self.pattern_softness, "patternOpen": self.pattern_open, "haze": self.haze,
-            "scatter": self.scatter, "dust": self.dust, "shadows": self.shadows,
+            "scatter": self.scatter, "dust": self.dust, "shadows": self.shadows, "mist": self.mist, "mistHeight": self.mist_height, "fade": self.fade,
         })
     }
 }
