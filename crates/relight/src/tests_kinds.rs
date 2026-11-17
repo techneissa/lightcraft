@@ -54,7 +54,7 @@ fn a_rim_lights_the_edges_that_turn_away_and_not_the_middle_or_the_background() 
         })
         .collect();
     let f = Field::from_parts(w, h, lz, vec![-2.0; w * h]).unwrap();
-    let l = light(LightKind::Rim(Rim { width: 0.6 }));
+    let l = light(LightKind::Rim(Rim { width: 0.6, ..Rim::default() }));
     let rig = f.rig(&l, 0.0, 0.0);
     let at = |dx: f32| f.shade(&rig, 0.5 + dx, 0.5).stops;
     // (the brightest of the dome's last few pixels: the rim is a thin line)
@@ -108,7 +108,8 @@ fn hostile_numbers_give_finite_planes_for_every_type() {
         LightKind::Sun(Sun { azimuth: f64::NEG_INFINITY, elevation: bad }),
         LightKind::Softbox(Softbox { width: bad, height: -3.0, rotation: f64::INFINITY }),
         LightKind::Softbox(Softbox { width: 1e300, height: 1e300, rotation: 1e300 }),
-        LightKind::Rim(Rim { width: bad }),
+        LightKind::Rim(Rim { width: bad, angle: f64::INFINITY, one_sided: 1e9 }),
+        LightKind::Rim(Rim { width: -1e300, angle: bad, one_sided: bad }),
         LightKind::Fill(Fill { near: f64::INFINITY }),
     ];
     for kind in kinds {
