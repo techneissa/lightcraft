@@ -36,6 +36,9 @@ const FIRST: usize = 4;
 const MORE: usize = 12;
 /// A ray point is behind a surface when its depth is more than this ratio of the surface's (a little over: the
 /// surface it starts on, and the depth model's small ripples, don't shadow it) ...
+/// (a ray behind a surface is blocked only once it runs through more than this share of the surface's thickness, and in full when it
+/// runs through all of it: see [`March::let_through`])
+const THROUGH_FROM: f32 = 0.6;
 const BIAS: f32 = 1.08;
 /// ... and a thing blocks the light only so far behind its visible surface: this ratio of the surface's depth is the
 /// thickness a thing is taken to have (about 0.4 in log depth), since the photo shows nothing behind a thing's front.
@@ -204,8 +207,6 @@ struct March<'a> {
     z_cap: f32,
     /// The sun's frame ⟂ its direction.
     sun_axes: ([f32; 3], [f32; 3]),
-    /// The light's own depth (none for a sun, which has no place).
-    light_z: Option<f32>,
 }
 
 impl March<'_> {
@@ -233,24 +234,39 @@ impl March<'_> {
         if t.is_finite() { t.max(0.0) } else { 0.0 }
     }
 
-    /// Whether the light itself lies in the band behind a surface of depth `zs` that would block (a light placed a little behind a
-    /// near subject): such a surface blocks nothing for it, as the light is taken to be in front of it. Else a light
-    /// over its subject's shoulder would shade the whole picture.
-    fn light_inside(&self, zs: f32) -> bool {
-        self.light_z.is_some_and(|z| z > zs * BIAS && z < zs * THICK)
+    /// How much of the light a surface of depth `zs` lets a ray through whose depth runs from `z0` to `z1` and which is in the
+    /// surface's band (a thing is taken to reach from [`BIAS`] to [`THICK`] times `zs`) at a sample: 1 all of it, 0 none.
+    ///
+    /// A ray that starts in front of the surface (`z0` under the band) hits its front, wherever its light lies behind it: it
+    /// is blocked. One that starts behind the surface (a wall behind a person) is blocked by the share of the surface's thickness
+    /// it runs through beyond [`THROUGH_FROM`] of it, squared: a light inside the thing's band is hidden from what lies behind it only
+    /// in part, and not at all when the band's far edge is where it is. So the shadow changes smoothly as a light's depth crosses a
+    /// band's edge (a light just behind a person still shades the floor in front of them; a light a little behind a near subject
+    /// does not shade the whole wall).
+    fn let_through(zs: f32, z0: f32, z1: f32) -> f32 {
+        let (lo, hi) = (zs * BIAS, zs * THICK);
+        if z0 < lo {
+            return 0.0;
+        }
+        let overlap = (z0.max(z1).min(hi) - z0.min(z1).max(lo)).max(0.0);
+        let through = (overlap / (hi - lo).max(1e-6)).clamp(0.0, 1.0);
+        let g = ((through - THROUGH_FROM) / (1.0 - THROUGH_FROM)).clamp(0.0, 1.0);
+        1.0 - g * g
     }
 
-    /// Whether the ray from `p` along `d` (`d` spans the whole way to the light when `whole`, else it is a direction)
-    /// reaches the light: `false` when something blocks it. `jit` (0..1) offsets the steps.
-    fn clear(&self, p: [f32; 3], d: [f32; 3], whole: bool, jit: f32) -> bool {
+    /// How much of the light the ray from `p` along `d` (`d` spans the whole way to the light when `whole`, else it is a direction)
+    /// lets through: 1 when nothing blocks it, 0 when a thing does ([`March::let_through`]). `jit` (0..1) offsets the steps.
+    fn clear(&self, p: [f32; 3], d: [f32; 3], whole: bool, jit: f32) -> f32 {
         let r = self.r;
         let mut end = self.exit(p, d);
         if whole {
             end = end.min(1.0);
         }
         if end.is_nan() || end <= 1e-6 {
-            return true;
+            return 1.0;
         }
+        let (z0, z1) = (p[2], p[2] + d[2] * end);
+        let mut through = 1.0f32;
         let (lw, lh) = (r.w as f32, r.h as f32);
         for i in 0..STEPS {
             let t = end * (i as f32 + jit) / STEPS as f32;
@@ -265,15 +281,18 @@ impl March<'_> {
             if r.stand.get(iy * r.w + ix).is_none_or(|s| *s < STAND) {
                 continue;
             }
-            if q[2] > zs * BIAS && q[2] < zs * THICK && !self.light_inside(*zs) {
-                return false;
+            if q[2] > zs * BIAS && q[2] < zs * THICK {
+                through = through.min(Self::let_through(*zs, z0, z1));
+                if through <= 0.0 {
+                    break;
+                }
             }
         }
-        true
+        through
     }
 
     /// The ray `k` from `p` (a surface point) towards the light, turned by `turn`; whether it reaches the light.
-    fn ray(&self, p: [f32; 3], k: usize, turn: f32, jit: f32) -> bool {
+    fn ray(&self, p: [f32; 3], k: usize, turn: f32, jit: f32) -> f32 {
         let (a, b) = offset(k, turn);
         match &self.src {
             Source::Point { pos, radius } => {
@@ -305,13 +324,13 @@ impl March<'_> {
         let p = [(u - 0.5) * self.kx * z, (v - 0.5) * self.ky * z, z];
         let turn = noise(x, y, 1) * std::f32::consts::TAU;
         let jit = noise(x, y, 2);
-        let first = (0..FIRST).filter(|k| self.ray(p, *k, turn, jit)).count();
-        if draft || first == 0 || first == FIRST {
-            return first as f32 / FIRST as f32;
+        let first: f32 = (0..FIRST).map(|k| self.ray(p, k, turn, jit)).sum();
+        if draft || first < 1e-3 || first > FIRST as f32 - 1e-3 {
+            return first / FIRST as f32;
         }
         // (a pixel in a penumbra: more rays across the whole light)
-        let more = (FIRST..FIRST + MORE).filter(|k| self.ray(p, *k, turn, jit)).count();
-        (first + more) as f32 / (FIRST + MORE) as f32
+        let more: f32 = (FIRST..FIRST + MORE).map(|k| self.ray(p, k, turn, jit)).sum();
+        (first + more) / (FIRST + MORE) as f32
     }
 }
 
@@ -374,11 +393,6 @@ impl Field {
             Source::Sun { to, .. } => frame(*to),
             _ => ([1.0, 0.0, 0.0], [0.0, 1.0, 0.0]),
         };
-        let light_z = match &src {
-            Source::Point { pos, .. } => Some(pos[2]),
-            Source::Box { c, .. } => Some(c[2]),
-            Source::Sun { .. } => None,
-        };
         let march = March {
             r,
             src,
@@ -387,7 +401,6 @@ impl Field {
             z_cut: self.near.exp() * 0.5,
             z_cap: self.far.exp() * 3.0,
             sun_axes,
-            light_z,
         };
         let mut v = vec![1f32; r.w * r.h];
         v.par_chunks_mut(r.w.max(1)).enumerate().for_each(|(y, row)| {

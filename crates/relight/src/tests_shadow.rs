@@ -185,7 +185,7 @@ fn stairs_and_box() -> (Field, f32) {
     (Field::from_parts(W, H, lz, vec![-2.0; W * H]).unwrap(), box_lz)
 }
 
-/// A pole leaning out of a far wall: a bar over `u` 0.4 .. 0.46 whose log depth is 0.1 nearer than the wall (0.2) at the bottom of the picture
+/// A pole leaning out of a far wall: a bar over `u` 0.4 .. 0.46 whose log depth is 0.4 nearer than the wall (0.2) at the bottom of the picture
 /// and 1.1 nearer at the top, so its shadow on the wall (from a light off to the left) starts narrow and softens as it goes.
 fn leaning_pole() -> Field {
     // (800 × 512: the march runs on a grid of half that, as a real photo's does of a quarter)
@@ -223,7 +223,7 @@ fn a_light_behind_a_near_box_keeps_the_stepped_floor_lit_outside_the_boxs_shadow
     let (f, blz) = stairs_and_box();
     let ((bu0, bu1), (bv0, bv1)) = ((0.42f32, 0.58f32), (0.7f32, 0.9f32));
     // the light over the box, a little behind its front (inside the thickness a thing is taken to have)
-    let d = f64::from((blz + 0.25 - f.near + 0.6) / (f.far - f.near));
+    let d = f64::from((blz + 0.25 - f.near + 0.6) / (f.far - f.near + 0.6));
     for (softness, draft) in [(0.05, false), (0.5, false), (0.5, true)] {
         let l = Light { x: 0.5, y: 0.8, depth: d, ..light(softness, LightKind::Point) };
         let vis = f.visibility(&f.rig(&l, 0.0, 0.0), &l, draft).unwrap();
@@ -248,5 +248,52 @@ fn a_light_behind_a_near_box_keeps_the_stepped_floor_lit_outside_the_boxs_shadow
         }
         let share = lit as f32 / outside as f32;
         assert!(share >= 0.95, "softness {softness}, draft {draft}: only {share} of the floor outside the box's shadow keeps its light");
+    }
+}
+
+/// A person (`u` 0.45 .. 0.55, `v` 0.2 .. 0.7, depth 1) in front of a wall (depth 4) over a floor in front of them (the rows from `v` 0.7 down,
+/// depth 0.5).
+fn person_and_floor() -> Field {
+    let lz: Vec<f32> = (0..W * H)
+        .map(|i| {
+            let (u, v) = ((i % W) as f32 / W as f32, (i / W) as f32 / H as f32);
+            if v >= 0.7 {
+                0.5f32.ln()
+            } else if (0.45..0.55).contains(&u) && v >= 0.2 {
+                0.0
+            } else {
+                4.0f32.ln()
+            }
+        })
+        .collect();
+    Field::from_parts(W, H, lz, vec![-2.0; W * H]).unwrap()
+}
+
+#[test]
+fn a_lights_shadow_of_a_person_changes_smoothly_as_the_light_crosses_the_edge_of_their_thickness() {
+    let f = person_and_floor();
+    // the mean share of the light the floor under the person (the rows from 0.75 down, `u` 0.42 .. 0.58) sees, for a light over the
+    // person at `k` times their depth
+    let floor_light = |k: f32| -> f32 {
+        let d = f64::from((k.ln() - f.near + 0.6) / (f.far - f.near + 0.6));
+        let l = Light { x: 0.5, y: 0.4, depth: d, ..light(0.05, LightKind::Point) };
+        let vis = f.visibility(&f.rig(&l, 0.0, 0.0), &l, false).unwrap();
+        let plane = f.visibility_plane(&vis);
+        let mut sum = 0.0;
+        let mut n = 0.0;
+        for y in (H * 3 / 4)..H {
+            for x in (W * 42 / 100)..(W * 58 / 100) {
+                sum += plane[y * W + x];
+                n += 1.0;
+            }
+        }
+        sum / n
+    };
+    // (just behind the person the floor in front of them is in their shadow, and the light's depth crossing 1.5 times theirs, the edge of
+    // the thickness a thing is taken to have, changes that by no more than 0.1 in any step of 0.05, from 1.3 to 1.9 times)
+    assert!(floor_light(1.15) < 0.3, "a light just behind the person: the floor sees {}", floor_light(1.15));
+    let steps: Vec<f32> = (0..=12).map(|i| floor_light(1.3 + 0.05 * i as f32)).collect();
+    for pair in steps.windows(2) {
+        assert!((pair[1] - pair[0]).abs() <= 0.1, "the floor's light jumps: {steps:?}");
     }
 }
