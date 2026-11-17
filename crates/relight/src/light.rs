@@ -427,7 +427,16 @@ impl Field {
                     let (mp, mgp) = ((window(&sp, x0, y0, x1, y1) / k) as f32, (window(&sgp, x0, y0, x1, y1) / k) as f32);
                     let a = (mgp - mean_g * mp) / (var_g + EDGE_EPS);
                     let q = a * self.gi.get(i).copied()? + (mp - a * mean_g);
-                    q.is_finite().then_some((i, q))
+                    // (the local linear fit can swing past both sides where the photo's luminance and the light
+                    // disagree: the light stays within the range the window holds, the two sides')
+                    let (mut lo, mut hi) = (f32::MAX, f32::MIN);
+                    for row in y0..y1 {
+                        for v in p.get(row * w + x0..row * w + x1)? {
+                            lo = lo.min(*v);
+                            hi = hi.max(*v);
+                        }
+                    }
+                    (q.is_finite() && lo <= hi).then(|| (i, q.clamp(lo, hi)))
                 })
                 .collect()
         };
