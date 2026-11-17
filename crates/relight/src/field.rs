@@ -293,7 +293,7 @@ impl Field {
 
 /// Surface normals of log depth `lz` (`w × h`). Slopes come from a copy smoothed by a self-guided filter (radius
 /// 1.2 % of the long side: depth changes under 3 % go, steps between near and far stay). A slope steeper than a
-/// surface seen at 80° can have is a step between two things, not a surface: those pixels give no normal. The
+/// surface seen at 88° can have is a step between two things, not a surface: those pixels give no normal. The
 /// normals are then averaged over a disc of 1 % of the long side (only pixels that gave one), so the depth
 /// model's small blocks and ripples never show as lighting texture, and the pixels of a step take their
 /// neighbours'.
@@ -303,8 +303,8 @@ fn normals(lz: &[f32], w: usize, h: usize) -> Vec<[f32; 3]> {
     let r = ((long as f32 * 0.012).round() as usize).max(2);
     let s = guided(lz, lz, w, h, r, 0.03 * 0.03);
     let e = LENS / long.max(1) as f32;
-    // tan 80°
-    let steep = 5.7 * e;
+    // tan 88°: a floor at a cat's eye view leans well past 80°, a step between two things much further
+    let steep = 28.6 * e;
     let at = |x: usize, y: usize| s.get(y * w + x).copied().unwrap_or(0.0);
     // the central slope, or the gentler one-sided slope when the other side is a step
     let slope = |c: f32, before: Option<f32>, after: Option<f32>| -> Option<f32> {
@@ -429,6 +429,20 @@ mod tests {
         let f = Field::from_parts(w, h, floor, vec![0.0; w * h]).unwrap();
         let (_, n, _) = f.at(0.5, 0.5);
         assert!(n[1] < -0.3 && n[2] < 0.0, "{n:?}");
+    }
+
+    #[test]
+    fn a_floor_seen_at_a_grazing_angle_is_still_a_surface() {
+        // a floor at the camera's feet (a cat's eye view): log depth changes 3 % a row on 240, as it does 0.6 % on
+        // 1200. That is a steep slope, not a step: its normal must tilt up, not fall back to facing the camera
+        // (which gave the floor patches of another light, where a window of pixels had no normal)
+        let (w, h) = (320, 240);
+        let lz: Vec<f32> = (0..w * h).map(|i| -0.03 * (i / w) as f32).collect();
+        let f = Field::from_parts(w, h, lz, vec![0.0; w * h]).unwrap();
+        for v in [0.2, 0.5, 0.8] {
+            let (_, n, _) = f.at(0.5, v);
+            assert!(n[1] < -0.9, "row {v}: {n:?}");
+        }
     }
 
     #[test]
