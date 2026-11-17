@@ -19,13 +19,13 @@ pub struct Light {
     pub y: f64,
     /// How far away: 0 in front of the nearest thing in the photo, 1 at the farthest.
     pub depth: f64,
-    /// How strong, 0..1 (1: the most lit point brightens by two stops).
+    /// How strong, 0..1 (1: the most lit point brightens by three stops).
     pub amount: f64,
     /// How large the source is, 0 (a tight pool) .. 1 (broad, window-like light).
     pub softness: f64,
-    /// The light's colour, −1 (cool, about 12 000 K) .. 0 (the photo's white) .. 1 (warm, about 2 800 K).
+    /// The light's colour, −1 (cool, about 16 000 K) .. 0 (the photo's white) .. 1 (warm, about 2 700 K).
     pub warmth: f64,
-    /// How much the rest of the photo darkens, 0..1 (1: by two stops).
+    /// How much the rest of the photo darkens, 0..1 (1: by more than three stops).
     pub darken: f64,
     /// How far light wraps around shapes, 0 (follows them closely) .. 1 (ignores them).
     pub wrap: f64,
@@ -38,13 +38,21 @@ impl Light {
     }
 }
 
-/// The brightest the light makes the most lit point: `1 + PEAK_GAIN` times (two stops).
-pub const PEAK_GAIN: f32 = 3.0;
-/// Log2 luminance (relative to 18 % grey) the light never takes a pixel past: two stops over grey (0.72 in
-/// scene-linear light), under white so a lit face keeps its highlights.
-const CEILING: f32 = 2.0;
+/// The brightest the light makes the most lit point: `1 + PEAK_GAIN` times (three stops).
+pub const PEAK_GAIN: f32 = 7.0;
+/// Log2 luminance (relative to 18 % grey) the light never takes a pixel past: 2.3 stops over grey (0.89 in
+/// scene-linear light), just under white so a lit face keeps its highlights.
+const CEILING: f32 = 2.3;
 /// How far under [`CEILING`] the roll-off begins (stops).
-const KNEE: f32 = 1.0;
+const KNEE: f32 = 1.3;
+/// Log2 luminance (relative to 18 % grey) below which the roll-off is off (`.0`) and from which it holds (`.1`): the
+/// pixels in between take it in part, so a mid-grey at the most lit point gains about 2.25 stops of the 3 at full
+/// Amount (nothing goes past the ceiling), and everything from `.1` (where the roll-off begins, [`CEILING`] − [`KNEE`]) up is rolled off as it was.
+const FULL: (f32, f32) = (-0.3, 1.0);
+/// The knee of the cut that keeps even those pixels under [`CEILING`] (stops): a mid-grey gains about 2.25 of its 3.
+const FREE_KNEE: f32 = 0.3;
+/// The darkest the rest of the photo gets at full Darken Surroundings: `1 − DARKEN_MAX` of its light (3.3 stops).
+const DARKEN_MAX: f32 = 0.9;
 /// Where shadows begin to be held back (log2 luminance below 18 % grey): fully at `SHADOW.0`, not at `SHADOW.1`.
 const SHADOW: (f32, f32) = (-8.0, -5.0);
 
@@ -54,6 +62,8 @@ pub struct Rig {
     pos: [f32; 3],
     /// The source's radius, squared.
     r2: f32,
+    /// How fast the light falls off past the radius (an exponent: a tight light falls off faster than a broad one).
+    tail: f32,
     amount: f32,
     ambient: f32,
     /// How much of the light the facing term decides, and how far it wraps past 90°.
@@ -91,15 +101,16 @@ impl Field {
         let pos = self.point(x, y, lz);
         let zl = lz.exp();
         let soft = f(light.softness, 0.0, 1.0, 0.5);
-        let radius = zl * (0.04 + 0.9 * soft * soft);
+        let radius = zl * (0.03 + 1.4 * soft * soft);
         let wrap = f(light.wrap, 0.0, 1.0, 0.4);
         let mut rig = Rig {
             pos,
             r2: radius * radius,
             amount: f(light.amount, 0.0, 1.0, 0.0) * PEAK_GAIN,
-            ambient: 1.0 - 0.75 * f(light.darken, 0.0, 1.0, 0.0),
-            face: 0.85 * (1.0 - wrap),
-            wrap: 0.25 + 0.75 * wrap,
+            tail: 1.0 + 1.5 * (1.0 - soft),
+            ambient: 1.0 - DARKEN_MAX * f(light.darken, 0.0, 1.0, 0.0),
+            face: 1.0 - wrap,
+            wrap: 0.1 + 0.9 * wrap,
             peak: 1.0,
             ev: if ev.is_finite() { ev.clamp(-10.0, 10.0) as f32 } else { 0.0 },
         };
@@ -123,10 +134,11 @@ impl Field {
         let p = self.point(u, v, lz);
         let d = [rig.pos[0] - p[0], rig.pos[1] - p[1], rig.pos[2] - p[2]];
         let r2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
-        let falloff = rig.r2 / (rig.r2 + r2);
+        let falloff = (rig.r2 / (rig.r2 + r2)).powf(rig.tail);
         let r = r2.sqrt().max(1e-9);
         let cos = (n[0] * d[0] + n[1] * d[1] + n[2] * d[2]) / r;
-        let facing = 1.0 - rig.face + rig.face * ((cos + rig.wrap) / (1.0 + rig.wrap)).clamp(0.0, 1.0);
+        let t = ((cos + rig.wrap) / (1.0 + rig.wrap)).clamp(0.0, 1.0);
+        let facing = 1.0 - rig.face + rig.face * t * t * t;
         let v = falloff * facing;
         if v.is_finite() { v } else { 0.0 }
     }
@@ -152,7 +164,14 @@ impl Field {
             // gets nothing more)
             let target = l + raw;
             let start = CEILING - KNEE;
-            let rolled = if target <= start { raw } else { (start + KNEE * (1.0 - (-(target - start) / KNEE).exp()) - l).clamp(0.0, raw) };
+            let limited = if target <= start { raw } else { (start + KNEE * (1.0 - (-(target - start) / KNEE).exp()) - l).clamp(0.0, raw) };
+            // (the roll-off holds from `FULL.1` up; below `FULL.0` the light gets all its stops, so mid-grey at the
+            // peak gains most of the Amount: 2.25 of 3 stops, never past the ceiling)
+            let free = 1.0 - smoothstep(FULL.0, FULL.1, l);
+            // (but never past the ceiling: the stops it gets are cut to what fits under it, by a tighter knee)
+            let start = CEILING - FREE_KNEE;
+            let cut = if target <= start { raw } else { (start + FREE_KNEE * (1.0 - (-(target - start) / FREE_KNEE).exp()) - l).clamp(0.0, raw) };
+            let rolled = limited + (cut.max(limited) - limited) * free;
             // and less in the deepest shadows
             rolled * held
         } else {
@@ -162,20 +181,23 @@ impl Field {
         // shadows), the same where the gain brightens and where Darken Surroundings darkens, so it never jumps where
         // the gain crosses 1
         let lit = if gain > 0.0 { added / gain } else { 0.0 };
-        let share = lit * held * (1.0 - smoothstep(CEILING - KNEE, CEILING, l));
+        // (the light's colour reaches further than its brightness does: a pixel with half its light from the new
+        // light takes three quarters of its colour)
+        let colour = 1.0 - (1.0 - lit) * (1.0 - lit);
+        let share = colour * held * (1.0 - smoothstep(CEILING - KNEE, CEILING, l));
         Shade { stops, share: if share.is_finite() { share.clamp(0.0, 1.0) } else { 0.0 } }
     }
 }
 
 /// The light's colour for Warmth `w` (−1..1) as the strength of a red–blue tilt `t`, the one the finish stage's
 /// local temperature applies (`(1 + 0.3 t, 1, 1 − 0.3 t)`, luminance kept): the ratio of red to blue of a
-/// black body against the photo's white (D65), from about 12 000 K (cool) to 2 800 K (warm).
+/// black body against the photo's white (D65), from about 16 000 K (cool) to 2 700 K (warm).
 pub fn warmth_tilt(w: f64) -> f32 {
     if !w.is_finite() || w == 0.0 {
         return 0.0;
     }
     let w = w.clamp(-1.0, 1.0);
-    let mired = 1e6 / 6504.0 + if w > 0.0 { 200.0 * w } else { 70.0 * w };
+    let mired = 1e6 / 6504.0 + if w > 0.0 { 210.0 * w } else { 90.0 * w };
     let xy = lightcraft_color::cct::temp_tint_to_xy(1e6 / mired, 0.0);
     let rgb = lightcraft_color::REC2020.from_xyz().apply(xy.to_xyz());
     let q = rgb[0] / rgb[2].max(1e-6);
@@ -447,7 +469,19 @@ mod tests {
         let f = two_planes(0.5);
         let rig = f.rig(&light(), 0.0);
         let best = (0..96).map(|x| f.shade(&rig, (x as f32 + 0.5) / 96.0, 0.5).stops).fold(0f32, f32::max);
-        assert!((best - 2.0).abs() < 0.2, "{best}");
+        assert!((best - 3.0).abs() < 0.2, "{best}");
+        // a mid-grey point at the peak gains most of it (not two stops: the roll-off is for highlights)
+        let grey = Field::from_parts(96, 64, vec![0.0; 96 * 64], vec![0.0; 96 * 64]).unwrap();
+        let rig = grey.rig(&light(), 0.0);
+        let best = (0..96).map(|x| grey.shade(&rig, (x as f32 + 0.5) / 96.0, 0.5).stops).fold(0f32, f32::max);
+        assert!(best >= 2.2, "mid-grey gains {best} stops at full Amount");
+        // and skin tones a half and a whole stop over grey stay at or under the ceiling
+        for l in [0.5f32, 1.0] {
+            let f = Field::from_parts(96, 64, vec![0.0; 96 * 64], vec![l; 96 * 64]).unwrap();
+            let rig = f.rig(&light(), 0.0);
+            let top = (0..96).map(|x| f.shade(&rig, (x as f32 + 0.5) / 96.0, 0.5).stops).fold(0f32, f32::max);
+            assert!(l + top <= CEILING + 0.01, "a point {l} stops over grey reaches {} at full Amount", l + top);
+        }
         // a pixel already near white gets little more
         let bright = Field::from_parts(96, 64, vec![0.0; 96 * 64], vec![2.2; 96 * 64]).unwrap();
         let rig = bright.rig(&light(), 0.0);
@@ -455,7 +489,7 @@ mod tests {
         // nor do the deepest shadows
         let dark = Field::from_parts(96, 64, vec![0.0; 96 * 64], vec![-9.0; 96 * 64]).unwrap();
         let rig = dark.rig(&light(), 0.0);
-        assert!(dark.shade(&rig, 0.5, 0.5).stops < 0.8);
+        assert!(dark.shade(&rig, 0.5, 0.5).stops < 1.2);
     }
 
     #[test]
@@ -463,7 +497,7 @@ mod tests {
         let f = two_planes(0.5);
         let off = f.rig(&Light { amount: 0.0, ..light() }, 0.0);
         assert_eq!(f.shade(&off, 0.3, 0.3), Shade { stops: 0.0, share: 0.0 });
-        let dark = f.rig(&Light { softness: 0.0, darken: 1.0, ..light() }, 0.0);
+        let dark = f.rig(&Light { softness: 0.3, darken: 1.0, ..light() }, 0.0);
         assert!(f.shade(&dark, 0.98, 0.05).stops < -0.5, "{:?}", f.shade(&dark, 0.98, 0.05));
         assert!(f.shade(&dark, 0.5, 0.5).stops > 0.0);
     }

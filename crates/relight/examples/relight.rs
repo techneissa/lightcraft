@@ -3,7 +3,7 @@
 //!
 //! `cargo run --release -p lightcraft-relight --example relight -- photo.jpg <depth dump dir> out-prefix
 //! [x y depth amount softness warmth darken wrap]` (the dump dir is `lightcraft-depth`'s example `--dump`: `depth.f32`
-//! and `size.txt`). Writes `<prefix>-before.png`, `<prefix>-after.png`, `<prefix>-gain.png`, `<prefix>-normals.png`.
+//! and `size.txt`). Writes `<prefix>-before.png`, `<prefix>-after.png`, `<prefix>-gain.png`, `<prefix>-normals.png`, `<prefix>-depth.png` (the field's depth, near light).
 
 use lightcraft_raster::Rgb32f;
 use lightcraft_relight::{DepthMap, Field, Kind, Light, warmth_tilt};
@@ -65,6 +65,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut after = image::RgbImage::new(w as u32, h as u32);
     let mut gain = image::GrayImage::new(w as u32, h as u32);
     let mut normals = image::RgbImage::new(w as u32, h as u32);
+    let mut depth_pic = image::GrayImage::new(w as u32, h as u32);
+    let (dnear, dfar) = (field.near, field.far.max(field.near + 1e-3));
+    let ln_z = field.depth_plane().data;
     for (i, c) in lin.data.iter().enumerate() {
         let (x, y) = ((i % w) as u32, (i / w) as u32);
         let (st, sh) = (planes.stops[i], planes.share[i]);
@@ -79,6 +82,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         before.put_pixel(x, y, image::Rgb(c.map(display)));
         after.put_pixel(x, y, image::Rgb(o.map(display)));
         gain.put_pixel(x, y, image::Luma([((st + 2.0) / 4.0 * 255.0).clamp(0.0, 255.0) as u8]));
+        let d = ln_z.get(i).copied().unwrap_or(0.0);
+        depth_pic.put_pixel(x, y, image::Luma([((1.0 - (d - dnear) / (dfar - dnear)).clamp(0.0, 1.0) * 255.0) as u8]));
         let (u, v) = ((x as f32 + 0.5) / w as f32, (y as f32 + 0.5) / h as f32);
         let n = field.normal_at(u, v);
         normals.put_pixel(x, y, image::Rgb(n.map(|c| ((c * 0.5 + 0.5) * 255.0) as u8)));
@@ -87,5 +92,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     after.save(format!("{prefix}-after.png"))?;
     gain.save(format!("{prefix}-gain.png"))?;
     normals.save(format!("{prefix}-normals.png"))?;
+    depth_pic.save(format!("{prefix}-depth.png"))?;
     Ok(())
 }

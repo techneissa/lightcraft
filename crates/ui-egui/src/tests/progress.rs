@@ -262,28 +262,3 @@ fn the_sam_bar_text_and_its_accessible_value_agree() {
         assert_eq!(bar.value, Some(says), "{done}/{total}");
     }
 }
-
-#[test]
-fn an_activity_bar_is_named_after_its_task() {
-    let task = lightcraft_engine::activity::TaskInfo {
-        id: 1,
-        kind: "export",
-        label: "Exporting".into(),
-        done: 3,
-        total: 25,
-        unit: lightcraft_engine::activity::Unit::Count,
-        detail: String::new(),
-        cancellable: true,
-        cancelling: false,
-        age_ms: 600,
-        parent: None,
-        batch: false,
-        failed: 0,
-        background: false,
-        eta_ms: None,
-    };
-    let (nodes, _, _) = frames(Vec::new(), |ui| crate::panels::activity::bar(ui, &task, 200.0).rect.width());
-    let bar = nodes.iter().find(|n| n.role == "ProgressIndicator").unwrap_or_else(|| panic!("{nodes:?}"));
-    assert_eq!(bar.label, "Exporting");
-    assert_eq!(bar.value, Some(12.0));
-}

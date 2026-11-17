@@ -121,3 +121,50 @@ fn a_draft_and_an_export_make_the_same_light() {
     let at_crop = luma(cropped.get((0.2 / 0.7 * cropped.width as f32) as usize, (0.35 / 0.8 * cropped.height as f32) as usize));
     assert!((at_crop - at_full).abs() < 6.0, "{at_full} {at_crop}");
 }
+
+/// The mean colour (8-bit, each channel) of `img` over the normalized box.
+fn mean_rgb(img: &Rgba8, (u0, v0, u1, v1): (f32, f32, f32, f32)) -> [f32; 3] {
+    let (w, h) = (img.width as f32, img.height as f32);
+    let (x0, x1, y0, y1) = ((u0 * w) as usize, (u1 * w) as usize, (v0 * h) as usize, (v1 * h) as usize);
+    let mut sum = [0f32; 3];
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let p = img.get(x, y);
+            (0..3).for_each(|c| sum[c] += f32::from(p[c]));
+        }
+    }
+    let n = ((x1 - x0) * (y1 - y0)).max(1) as f32;
+    sum.map(|v| v / n)
+}
+
+#[test]
+fn a_warm_light_warms_a_neutral_wall_and_a_cool_one_cools_it() {
+    // a flat grey wall (a few shades of grey, none with a colour) lit from its middle
+    let src = Rgb32f::from_fn(W, H, |x, _| [0.03 + 0.12 * x as f32 / W as f32; 3]);
+    let wall = {
+        let (fw, fh) = (240, 160);
+        let field = Field::from_parts(fw, fh, vec![0.0; fw * fh], vec![-2.0; fw * fh]).unwrap();
+        SourceInfo { relight: Some(relight::Input { field: Arc::new(field), key: 9 }), ..SourceInfo::default() }
+    };
+    for warmth in [-100.0, -67.0, 67.0, 100.0] {
+        let mut s = DevelopSettings::default();
+        s.relight.amount = 48.0;
+        s.relight.softness = 84.0;
+        s.relight.wrap = 28.0;
+        s.relight.x = 0.5;
+        s.relight.y = 0.5;
+        s.relight.depth = 10.0;
+        s.relight.warmth = warmth;
+        let img = render(&src, &wall, &s, &RenderRequest::fit(W, H)).image;
+        for (name, b) in [("left", (0.1, 0.4, 0.2, 0.6)), ("middle", (0.45, 0.4, 0.55, 0.6)), ("right", (0.8, 0.4, 0.9, 0.6))] {
+            let [r, g, b] = mean_rgb(&img, b);
+            // (the finish stage's temperature may not take a channel to nothing, and keeps the order of the light's colour)
+            assert!(r.min(g).min(b) > 20.0, "warmth {warmth} {name}: {r} {g} {b}");
+            if warmth > 0.0 {
+                assert!(r > g + 8.0 && g > b + 8.0, "warmth {warmth} {name} is not warm: {r} {g} {b}");
+            } else {
+                assert!(b > g + 5.0 && g > r + 5.0, "warmth {warmth} {name} is not cool: {r} {g} {b}");
+            }
+        }
+    }
+}

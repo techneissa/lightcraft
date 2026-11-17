@@ -1,0 +1,3 @@
+# Activity ring only (issue #295)
+cargo test -p lightcraft-ui-egui --lib -- tests::activity
+cargo test -p lightcraft-ui-egui --lib -- import_reads_files_off_the_ui_thread folder_scan_cancel_and_busy

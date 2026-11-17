@@ -171,9 +171,7 @@ impl LightcraftApp {
             library_window_input: Default::default(),
             alt_asks_for_library: false,
             recent_checks: Default::default(),
-            activity_expanded: false,
             map: Default::default(),
-            activity_open: Default::default(),
             activity_seen_seq: 0,
         }
     }
