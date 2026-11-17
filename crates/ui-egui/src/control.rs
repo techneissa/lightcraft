@@ -932,8 +932,6 @@ pub fn save_screenshot(app: &mut LightcraftApp, image: &egui::ColorImage, target
     }
 }
 
-/// The preview cache's numbers for `ui.inspect` → `perf.previewCache`: what memory holds, and the
-/// disk cache's hits, misses and writes this session (notes 47 and 48: are built previews used?).
 /// Who asked for the frame before this one (`file:line reason`, each once): what keeps an idle window drawing (#304).
 fn repaint_causes(ctx: &egui::Context) -> Vec<String> {
     let mut causes: Vec<String> = ctx.repaint_causes().iter().map(|c| format!("{c:?}")).collect();
@@ -942,6 +940,8 @@ fn repaint_causes(ctx: &egui::Context) -> Vec<String> {
     causes
 }
 
+/// The preview cache's numbers for `ui.inspect` → `perf.previewCache`: what memory holds, and the
+/// disk cache's hits, misses and writes this session (notes 47 and 48: are built previews used?).
 fn preview_cache_json(app: &crate::LightcraftApp) -> serde_json::Value {
     use std::sync::atomic::Ordering;
     let (entries, bytes) = app.session.media.rendered.mem_usage();

@@ -86,6 +86,8 @@ pub struct Tracker {
 /// A run in progress; the holder is not unloaded while one lives.
 pub struct Use {
     tracker: Tracker,
+    /// When it ended, when told (tests); else when it is dropped.
+    ended: Option<Instant>,
 }
 
 fn soonest(t: Instant, next: &mut Option<Instant>) {
@@ -132,19 +134,25 @@ impl Registry {
         if self.background.load(Ordering::Acquire) { BACKGROUND_IDLE } else { MODEL_IDLE }
     }
 
-    /// Unload what has been idle at `now`, ask the allocator's pages back (`trim`) when work has been quiet, and say when
-    /// to look again.
+    /// Unload what has been idle at `now`, ask the allocator's pages back (`trim`) once work, or an unload, has been quiet
+    /// for [`TRIM_QUIET`], and say when to look again.
     pub fn sweep(&self, now: Instant, trim: &dyn Fn()) -> Sweep {
         let idle = self.idle();
         let entries: Vec<Arc<Entry>> = lock(&self.inner).entries.clone();
         let mut out = Sweep::default();
         for e in entries {
             let due = {
-                let s = lock(&e.state);
+                let mut s = lock(&e.state);
                 if !s.armed || s.busy > 0 {
                     continue;
                 }
-                s.last_used + idle
+                let due = s.last_used + idle;
+                if now >= due {
+                    // (cleared here, under the lock the check was made in: a use that starts while the holder is
+                    // unloading arms it again and is not lost)
+                    s.armed = false;
+                }
+                due
             };
             if now < due {
                 soonest(due, &mut out.next);
@@ -152,28 +160,29 @@ impl Registry {
             }
             // (the function runs with no lock of ours held: dropping a model takes a while)
             match (e.unload)() {
-                Unload::Freed => {
-                    lock(&e.state).armed = false;
-                    out.freed.push(e.name);
-                }
-                Unload::Nothing => lock(&e.state).armed = false,
+                Unload::Freed => out.freed.push(e.name),
+                Unload::Nothing => {}
                 Unload::Busy => {
                     log::debug!("{} is in use: asked again after {idle:?}", e.name);
-                    lock(&e.state).last_used = now;
+                    let mut s = lock(&e.state);
+                    s.armed = true;
+                    s.last_used = now;
                     soonest(now + idle, &mut out.next);
                 }
             }
         }
         let mut inner = lock(&self.inner);
+        // (memory a holder gave up is the allocator's to give back too, once it is quiet)
+        if !out.freed.is_empty() && inner.last_work.is_none() {
+            inner.last_work = Some(now);
+        }
         if let Some(w) = inner.last_work {
-            if now >= w + TRIM_QUIET || !out.freed.is_empty() {
+            if now >= w + TRIM_QUIET {
                 inner.last_work = None;
                 out.trimmed = true;
             } else {
                 soonest(w + TRIM_QUIET, &mut out.next);
             }
-        } else if !out.freed.is_empty() {
-            out.trimmed = true;
         }
         drop(inner);
         if out.trimmed {
@@ -232,7 +241,15 @@ impl Tracker {
             s.armed = true;
             s.busy += 1;
         }
-        Use { tracker: self.clone() }
+        Use { tracker: self.clone(), ended: None }
+    }
+}
+
+impl Use {
+    /// End the run at `at` (the time is the caller's, as for [`Tracker::touch_at`]).
+    #[cfg(test)]
+    fn end_at(mut self, at: Instant) {
+        self.ended = Some(at);
     }
 }
 
@@ -241,7 +258,7 @@ impl Drop for Use {
         {
             let mut s = lock(&self.tracker.entry.state);
             s.busy = s.busy.saturating_sub(1);
-            s.last_used = Instant::now();
+            s.last_used = self.ended.unwrap_or_else(Instant::now);
         }
         self.tracker.registry.wake();
     }
@@ -346,8 +363,8 @@ mod tests {
         m.loaded.store(true, Ordering::SeqCst);
         let run = t.using();
         assert!(reg.sweep(at(t0, 100 * MODEL_IDLE.as_secs()), &|| {}).freed.is_empty(), "never while it runs");
-        drop(run);
-        let ended = Instant::now();
+        let ended = at(t0, 500);
+        run.end_at(ended);
         assert!(reg.sweep(at(ended, MODEL_IDLE.as_secs() - 1), &|| {}).freed.is_empty(), "the idle time counts from the end");
         assert_eq!(reg.sweep(at(ended, MODEL_IDLE.as_secs()), &|| {}).freed, vec!["fake"]);
     }
@@ -369,6 +386,31 @@ mod tests {
     }
 
     #[test]
+    fn a_use_that_starts_during_an_unload_is_not_lost() {
+        let reg = Registry::new();
+        let t0 = Instant::now();
+        let tracker: Arc<std::sync::OnceLock<Tracker>> = Arc::new(std::sync::OnceLock::new());
+        let unloads = Arc::new(AtomicUsize::new(0));
+        let (cell, count) = (tracker.clone(), unloads.clone());
+        let t = reg.register("racy", move || {
+            // (a use begins while the holder is being unloaded)
+            if count.fetch_add(1, Ordering::SeqCst) == 0
+                && let Some(t) = cell.get()
+            {
+                t.touch_at(Instant::now());
+            }
+            Unload::Freed
+        });
+        let _ = tracker.set(t.clone());
+        t.touch_at(t0);
+        assert_eq!(reg.sweep(at(t0, MODEL_IDLE.as_secs()), &|| {}).freed, vec!["racy"]);
+        // the use that began meanwhile is still tracked: the holder goes again after its own idle time
+        let later = Instant::now() + MODEL_IDLE;
+        assert_eq!(reg.sweep(later, &|| {}).freed, vec!["racy"]);
+        assert_eq!(unloads.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
     fn the_background_shortens_the_time() {
         let reg = Registry::new();
         let (m, t) = fake(&reg);
@@ -376,7 +418,15 @@ mod tests {
         m.loaded.store(true, Ordering::SeqCst);
         t.touch_at(t0);
         reg.set_background(true);
-        assert_eq!(reg.sweep(at(t0, BACKGROUND_IDLE.as_secs()), &|| {}).freed, vec!["fake"]);
+        let trims = AtomicUsize::new(0);
+        let trim = || {
+            trims.fetch_add(1, Ordering::SeqCst);
+        };
+        let gone = at(t0, BACKGROUND_IDLE.as_secs());
+        assert_eq!(reg.sweep(gone, &trim).freed, vec!["fake"]);
+        // what it gave up goes back to the system once it is quiet, not at once
+        assert_eq!(trims.load(Ordering::SeqCst), 0);
+        assert!(reg.sweep(gone + TRIM_QUIET, &trim).trimmed);
     }
 
     #[test]

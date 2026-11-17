@@ -136,6 +136,9 @@ impl LearnEdits {
     ) -> Result<Option<Vec<(Item, Result<Arc<Vec<f32>>, String>)>>, String> {
         // (a model measurement waits while this runs: issue #267)
         let _job = crate::model_units::shared().user_job();
+        // (the encoder is not let go while the job runs, and its idle time counts from the end)
+        #[cfg(not(target_arch = "wasm32"))]
+        let _in_use = self.idle().using();
         #[cfg(not(target_arch = "wasm32"))]
         let encoder = if items.iter().all(|i| i.cached.is_some()) { None } else { self.encoder()? };
         let mut out = Vec::with_capacity(items.len());

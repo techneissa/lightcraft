@@ -11,11 +11,13 @@ fn release() {
     let _ = lightcraft_sysmem::release_free_memory();
 }
 
-/// macOS 26 and later: freed large blocks stay in the process's memory (up to 2 GB: every raw decode's pixels)
-/// and `malloc_zone_pressure_relief` returns none of it. Starting with `MallocLargeCache=0`, which libmalloc reads
+/// Measured on macOS 27 only (no other version was tried): freed large blocks stay in the process's memory (up to
+/// 2 GB: every raw decode's pixels) and `malloc_zone_pressure_relief` returns none of it. Starting with `MallocLargeCache=0`, which libmalloc reads
 /// only at process start, hands them back at once. So the first start replaces itself with the same program and
 /// arguments and that variable (same process, same window-server identity; no unsafe); the second start sees the
-/// variable and goes on. `LIGHTCRAFT_KEEP_MALLOC_CACHE=1` keeps the allocator as it is (issue #304).
+/// variable and goes on. There is no version check: on a macOS where pressure relief works the variable only turns
+/// off libmalloc's cache of large blocks, which the render times did not show (a render of a 61 MP raw, interleaved
+/// with and without it). `LIGHTCRAFT_KEEP_MALLOC_CACHE=1` keeps the allocator as it is (issue #304).
 #[cfg(target_os = "macos")]
 pub fn restart_without_large_cache() {
     use std::os::unix::process::CommandExt;

@@ -41,6 +41,9 @@ pub const QUEUE: usize = 12;
 pub const MODEL_LONG: usize = 504;
 /// The folder of the depth model under the models folder.
 pub const MODEL_DIR: &str = "da3-mono-large";
+/// How long [`RelightStore::model_installed`] trusts what it found in the models folder (a download that finishes is
+/// seen within it).
+const INSTALLED_MEMO: std::time::Duration = std::time::Duration::from_secs(3);
 /// The depth box's picture (pixels on its long side).
 pub const THUMB: usize = 240;
 /// What Relight says on the web build.
@@ -128,6 +131,8 @@ struct Shared {
     fields_idle: std::sync::OnceLock<crate::idle::Tracker>,
     /// The key of the field last asked for by a render (a render of the same photo again is no new use).
     last_asked: Mutex<String>,
+    /// What [`RelightStore::model_installed`] last found, and when.
+    installed: Mutex<Option<(web_time::Instant, bool)>>,
 }
 
 /// One of the store's flags while the session sets up renders.
@@ -170,12 +175,13 @@ impl Shared {
         })
     }
 
-    /// Drop every kept field but the newest; `Busy` when the store is in use.
+    /// Drop every kept field but the newest and the one asked for last; `Busy` when the store is in use.
     fn drop_old_fields(&self) -> crate::idle::Unload {
         use crate::idle::Unload;
+        let keep = self.last_asked.lock().unwrap_or_else(PoisonError::into_inner).clone();
         let old = match self.state.try_lock() {
-            Ok(mut st) => all_but_newest(&mut st),
-            Err(std::sync::TryLockError::Poisoned(p)) => all_but_newest(&mut p.into_inner()),
+            Ok(mut st) => all_but_newest(&mut st, &keep),
+            Err(std::sync::TryLockError::Poisoned(p)) => all_but_newest(&mut p.into_inner(), &keep),
             Err(std::sync::TryLockError::WouldBlock) => return Unload::Busy,
         };
         if old.is_empty() {
@@ -194,10 +200,19 @@ impl Shared {
     }
 }
 
-/// Take every kept field but the newest out of `st`.
-fn all_but_newest(st: &mut State) -> Vec<(String, Arc<Made>)> {
-    let at = st.made.len().min(1);
-    st.made.split_off(at)
+/// Take every kept field out of `st` but the newest and the one a render asked for last (`keep`): the worker lands a
+/// flick through photos newest-first, so the photo in front is not always at the top.
+fn all_but_newest(st: &mut State, keep: &str) -> Vec<(String, Arc<Made>)> {
+    let mut old = Vec::new();
+    let mut i = 1;
+    while i < st.made.len() {
+        if st.made.get(i).is_some_and(|(k, _)| k != keep) {
+            old.push(st.made.remove(i));
+        } else {
+            i += 1;
+        }
+    }
+    old
 }
 
 /// A flag set by [`RelightStore::raise`], put back as it was when dropped, also when a panic unwinds past it (a
@@ -435,13 +450,22 @@ impl RelightStore {
         self.root.as_ref().map(|r| r.join(MODEL_DIR))
     }
 
-    /// Whether the depth model is in place (and this build runs it).
+    /// Whether the depth model is in place (and this build runs it). Looked at the file system at most every
+    /// [`INSTALLED_MEMO`]: the Relight section asks on every frame.
     pub fn model_installed(&self) -> bool {
-        #[cfg(feature = "sam")]
-        if let Some(dir) = self.model_dir() {
-            return lightcraft_depth::is_model_dir(&dir);
+        let now = web_time::Instant::now();
+        let mut memo = self.shared.installed.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some((at, yes)) = *memo
+            && now.duration_since(at) < INSTALLED_MEMO
+        {
+            return yes;
         }
-        false
+        #[cfg(feature = "sam")]
+        let yes = self.model_dir().is_some_and(|dir| lightcraft_depth::is_model_dir(&dir));
+        #[cfg(not(feature = "sam"))]
+        let yes = false;
+        *memo = Some((now, yes));
+        yes
     }
 
     /// Forget every failure (the model was installed: photos are tried again).
@@ -847,6 +871,19 @@ mod tests {
         let keys: Vec<String> = store.lock().made.iter().map(|(k, _)| k.clone()).collect();
         assert_eq!(keys, ["k0"], "the photo in front keeps its field");
         assert_eq!(store.shared.drop_old_fields(), Unload::Nothing);
+    }
+
+    #[test]
+    fn letting_go_keeps_the_field_a_render_asked_for_last_even_when_it_is_not_the_newest() {
+        let store = RelightStore::default();
+        for k in ["a", "b", "c"] {
+            store.put(k, Ok(field_made(k)));
+        }
+        // a flick through photos: the field of the photo in front (a) is older than c's
+        store.asked("a");
+        assert_eq!(store.shared.drop_old_fields(), crate::idle::Unload::Freed);
+        let keys: Vec<String> = store.lock().made.iter().map(|(k, _)| k.clone()).collect();
+        assert_eq!(keys, ["c", "a"], "the newest and the one in front stay; b goes");
     }
 
     #[test]

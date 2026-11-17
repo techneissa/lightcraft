@@ -228,7 +228,12 @@ impl LamaFill {
             let weak = Arc::downgrade(&self.inner);
             crate::idle::register("LaMa", move || {
                 let Some(inner) = weak.upgrade() else { return crate::idle::Unload::Nothing };
-                let old = inner.model.lock().unwrap_or_else(PoisonError::into_inner).take();
+                // (a load holds the lock for seconds: not waited behind)
+                let old = match inner.model.try_lock() {
+                    Ok(mut slot) => slot.take(),
+                    Err(std::sync::TryLockError::Poisoned(p)) => p.into_inner().take(),
+                    Err(std::sync::TryLockError::WouldBlock) => return crate::idle::Unload::Busy,
+                };
                 if old.is_some() { crate::idle::Unload::Freed } else { crate::idle::Unload::Nothing }
             })
         })

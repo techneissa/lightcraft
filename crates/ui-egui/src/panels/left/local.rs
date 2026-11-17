@@ -335,6 +335,11 @@ pub(crate) fn fs_cached<T: Clone + PartialEq + Send + 'static>(
         #[cfg(target_arch = "wasm32")]
         work();
     }
+    // an answer that changed on disk (a folder made in Finder) is seen without input: look again at the pace asked for
+    // while the window shows; a hidden window draws nothing and looks again at its first frame (issue #304)
+    if every.is_finite() && ui.input(|i| i.viewport().visible() != Some(false)) {
+        ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(every));
+    }
     lock(&cell)
 }
 
