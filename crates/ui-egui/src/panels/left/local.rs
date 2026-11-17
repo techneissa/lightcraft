@@ -274,7 +274,13 @@ pub(super) fn fs_running_counter(ctx: &egui::Context) -> std::sync::Arc<std::syn
 /// A file-system answer for `path` (`f(path)`), kept per `kind` and path and refreshed on a worker
 /// thread at most every `every` seconds: a folder on a sleeping NAS, a dropped share or a
 /// spinning-up drive never blocks a frame. `None` until the first answer arrives.
-pub(crate) fn fs_cached<T: Clone + Send + 'static>(ui: &egui::Ui, kind: &'static str, path: &str, every: f64, f: fn(&str) -> T) -> Option<T> {
+pub(crate) fn fs_cached<T: Clone + PartialEq + Send + 'static>(
+    ui: &egui::Ui,
+    kind: &'static str,
+    path: &str,
+    every: f64,
+    f: fn(&str) -> T,
+) -> Option<T> {
     struct Entry<T> {
         value: Option<T>,
         at: Option<f64>,
@@ -309,12 +315,17 @@ pub(crate) fn fs_cached<T: Clone + Send + 'static>(ui: &egui::Ui, kind: &'static
         let work = move || {
             let v = f(&path);
             let mut e = out.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            // a frame only when the answer is new or differs: an answer equal to the shown one needs none, and one
+            // that woke the window each time kept an idle window drawing (issue #304)
+            let changed = e.value.as_ref() != Some(&v);
             e.value = Some(v);
             e.running = false;
             drop(e);
             // after the answer is stored: a frame that sees the count drop also sees the answer
             done.fetch_sub(1, Ordering::AcqRel);
-            repaint.request_repaint();
+            if changed {
+                repaint.request_repaint();
+            }
         };
         #[cfg(not(target_arch = "wasm32"))]
         if std::thread::Builder::new().name("lc-fs-list".into()).spawn(work).is_err() {

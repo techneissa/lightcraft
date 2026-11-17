@@ -689,7 +689,7 @@ pub fn source_summary(sources: &[String]) -> String {
 /// Facts cached by the filesystem worker, formatted in the UI thread's active language.
 /// Caching a translated String on the worker would always use its default language (English)
 /// and also retain that language after the user changes the UI language.
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 enum SourceSummary {
     Folder(String),
     File(String),
