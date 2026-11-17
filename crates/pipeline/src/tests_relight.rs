@@ -408,3 +408,19 @@ fn a_near_thing_blocks_a_pattern_even_at_cast_shadows_0() {
     let drop = |b| mean(&bare, b) - mean(&open, b);
     assert!(drop(behind) > drop(beside) + 3.0, "behind the square {} darker, beside it {}", drop(behind), drop(beside));
 }
+
+#[test]
+fn a_release_after_a_drag_draws_a_shadowless_lights_pattern_in_full() {
+    // a fill (it casts no shadows) through blinds: the drag's render draws the pattern coarse; the release with the same
+    // settings must not reuse that drag's shading: it equals a full render made from nothing (it used to reuse it)
+    let (_, info) = wall();
+    let mut s = effect(|e| (e.pattern, e.pattern_scale, e.pattern_softness) = (1.0, 90.0, 0.0));
+    assert!(lightcraft_develop::relight::set(&mut s, "relight.kind", 5.0));
+    let scene = relight::scene_of(&s).unwrap();
+    let field = info.relight.as_ref().unwrap().field.clone();
+    let (dragged, fresh) = (relight::Input { field: field.clone(), key: 316_001 }, relight::Input { field, key: 316_002 });
+    let planes =
+        |input: &relight::Input, draft: bool| relight::shading_for(input, &scene, 0.0, draft).1.split(W, H, &|x, y| (x / W as f64, y / H as f64)).up;
+    let _drag = planes(&dragged, true);
+    assert!(planes(&dragged, false) == planes(&fresh, false), "the release reused the drag's coarse pattern");
+}

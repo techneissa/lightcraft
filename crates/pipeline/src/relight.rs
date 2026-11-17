@@ -134,6 +134,12 @@ impl Scene {
     pub fn has_shadows(&self) -> bool {
         self.lights.iter().zip(&self.effects).any(|(l, e)| shadow_amount(l, e).is_some())
     }
+
+    /// Whether a drag's shading differs from the full one: some light casts shadows (marched coarser) or has a pattern
+    /// (drawn coarser; a rim or a fill with one casts no shadows).
+    pub fn drafts_differ(&self) -> bool {
+        self.has_shadows() || self.effects.iter().any(|e| e.pattern != Pattern::None)
+    }
 }
 
 /// The lights in settings `s` (`None`: Relight is off, or its section's eye is).
@@ -252,8 +258,9 @@ pub fn shading_key(input: &Input, scene: &Scene, ev: f64, draft: bool) -> u64 {
         }
         // each light's effects with the light's place in the list (a scene whose lights have none hashes as it did before
         // them; the same effect on another light is another scene)
-        // (a drag's shading, whose shadows are coarse, is not the full one; a scene with no shadows is the same for both)
-        if draft && scene.has_shadows() {
+        // (a drag's shading, whose shadows and patterns are coarse, is not the full one; a scene with neither is the same
+        // for both)
+        if draft && scene.drafts_differ() {
             std::hash::Hash::hash(&b'd', h);
         }
         for (i, e) in scene.effects.iter().enumerate().filter(|(_, e)| **e != Effects::default()) {
@@ -278,13 +285,15 @@ fn shadow_amount(light: &Light, effects: &Effects) -> Option<f64> {
 
 /// The key naming `light`'s shadow visibility on `input`'s field: only what the march reads. A point and a spot: the
 /// place, depth and Softness (the size); a sun: its direction and Softness, not a place; a softbox: the place, depth and
-/// rectangle, not Softness. Not Amount, a spot's cone or the shadow amount. `coarse`: the drag's march.
+/// rectangle, not Softness; a patterned lamp (`far`, marched from `Field::pattern_rig`) adds its Wrap and Softness. Not
+/// Amount, a spot's cone or the shadow amount. `coarse`: the drag's march.
 fn shadow_key(input: &Input, light: &Light, coarse: bool, far: bool) -> u64 {
     hashed(|h| {
         std::hash::Hash::hash(&(2u8, input.key, coarse), h);
-        // (a patterned lamp's shadows are marched from its far source, `Field::pattern_rig`)
+        // (a patterned lamp's shadows are marched from its far source, `Field::pattern_rig`, which the middle of its pool
+        // sets: Wrap moves the pool, and Softness its size, for every type)
         if far {
-            std::hash::Hash::hash(&b'f', h);
+            std::hash::Hash::hash(&(b'f', light.wrap.to_bits(), light.softness.to_bits()), h);
         }
         let bits = |v: f64| v.to_bits();
         match light.kind {
@@ -458,5 +467,28 @@ mod tests {
         }
         memo.clear();
         assert!(memo.get(1).is_none());
+    }
+
+    #[test]
+    fn a_patterned_lights_shadows_follow_its_wrap() {
+        // a patterned lamp's shadows are marched from its far source, which the middle of its pool sets, and Wrap moves
+        // the pool: another Wrap is another shadow map (the kept one used to be reused)
+        let (w, h) = (160, 100);
+        let lz = (0..w * h).map(|i| if (60..100).contains(&(i % w)) && (30..80).contains(&(i / w)) { -0.6 } else { 0.0 }).collect();
+        let lum = (0..w * h).map(|i| if i % w < w / 2 { -1.0 } else { -3.0 }).collect();
+        let field = Arc::new(Field::from_parts(w, h, lz, lum).unwrap());
+        let input = Input { field: field.clone(), key: 316_101 };
+        let effects = Effects { pattern: Pattern::Blinds, ..Effects::default() };
+        let lamp = |wrap: f64| Light { x: 0.2, y: 0.3, depth: 0.1, amount: 0.8, softness: 0.4, warmth: 0.0, wrap, kind: LightKind::Point };
+        let marched = |l: &Light| {
+            let far = field.pattern_rig(&field.rig(l, 0.0, 0.0), &effects).unwrap();
+            let kept = shadows_for(&input, l, &far, false, true).unwrap();
+            let fresh = field.visibility(&far, l, false).unwrap();
+            (field.visibility_plane(&kept), field.visibility_plane(&fresh))
+        };
+        let (a, _) = marched(&lamp(0.0));
+        let (b, b_fresh) = marched(&lamp(1.0));
+        assert!(a != b_fresh, "Wrap doesn't move the far source here: the test shows nothing");
+        assert!(b == b_fresh, "the shadows of Wrap 0 were kept for Wrap 1");
     }
 }

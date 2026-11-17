@@ -129,7 +129,7 @@ pub(crate) struct Leaves {
 static BAKED: OnceLock<Arc<Leaves>> = OnceLock::new();
 
 impl Leaves {
-    /// The texture, baked the first time it is asked for (about 2.4 MB).
+    /// The texture, baked the first time it is asked for (about 1.2 MB: two distances per texel).
     pub(crate) fn get() -> Arc<Leaves> {
         BAKED.get_or_init(|| Arc::new(Leaves::bake())).clone()
     }

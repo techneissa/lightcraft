@@ -410,63 +410,30 @@ impl Field {
                 }
             }
         });
-        let r = crate::field::BAND_RADIUS;
         // (a colour plane that no light has a component for stays 0 and is refined for nothing)
         let active: [bool; 4] = std::array::from_fn(|k| tops[k] > 0.0 && (k < 2 || want_tint));
-        // the gain and the colour planes refined along the edge band in one pass: each band pixel sums its own window
-        // (the band is a small share of the photo: far less work than tables of running sums over the whole of it for
-        // every plane, which a drag paid for)
-        let fits: Vec<(usize, [f32; 5])> = if self.band.is_empty() {
+        // the gain and each colour plane some light has a component for, refined along the edge band as they always were
+        // (each its own tables of running sums in f64, so an edit renders to the byte as before), the planes at once
+        let wanted: Vec<usize> = (0..5).filter(|&q| q == 0 || active.get(q - 1).copied().unwrap_or(false)).collect();
+        let fits: Vec<(usize, Vec<(usize, f32)>)> = if self.band.is_empty() {
             Vec::new()
         } else {
-            self.band
+            wanted
                 .par_iter()
-                .filter_map(|&(i, mean_g, var_g)| {
-                    let i = i as usize;
-                    let (x, y) = (i % w, i / w);
-                    let (x0, y0, x1, y1) = (x.saturating_sub(r), y.saturating_sub(r), (x + r + 1).min(w), (y + r + 1).min(h));
-                    let k = ((x1 - x0) * (y1 - y0)) as f32;
-                    if k < 1.0 {
-                        return None;
-                    }
-                    // (the local linear fit can swing past both sides where the photo's luminance and the light
-                    // disagree: the light stays within the range the window holds, the two sides')
-                    let (mut lo, mut hi, mut sp, mut sgp) = ([f32::MAX; 5], [f32::MIN; 5], [0f32; 5], [0f32; 5]);
-                    for row in y0..y1 {
-                        let span = row * w + x0..row * w + x1;
-                        let (st, co, gs) = (stops.get(span.clone())?, col.get(span.clone())?, self.gi.get(span)?);
-                        for ((a, c), g) in st.iter().zip(co).zip(gs) {
-                            let v = [*a, c[0], c[1], c[2], c[3]];
-                            for q in 0..5 {
-                                lo[q] = lo[q].min(v[q]);
-                                hi[q] = hi[q].max(v[q]);
-                                sp[q] += v[q];
-                                sgp[q] += v[q] * g;
-                            }
-                        }
-                    }
-                    let gi = self.gi.get(i).copied()?;
-                    let fit = std::array::from_fn(|q| {
-                        let (mp, mgp) = (sp[q] / k, sgp[q] / k);
-                        let a = (mgp - mean_g * mp) / (var_g + EDGE_EPS);
-                        let v = a * gi + (mp - a * mean_g);
-                        if v.is_finite() && lo[q] <= hi[q] { v.clamp(lo[q], hi[q]) } else { f32::NAN }
-                    });
-                    Some((i, fit))
+                .map(|&q| {
+                    let p: Vec<f32> = if q == 0 { stops.clone() } else { col.par_iter().map(|c| c.get(q - 1).copied().unwrap_or(0.0)).collect() };
+                    (q, self.refined(&p))
                 })
                 .collect()
         };
-        for (i, q) in fits {
-            if let Some(v) = stops.get_mut(i)
-                && q[0].is_finite()
-            {
-                *v = q[0];
-            }
-            if let Some(c) = col.get_mut(i) {
-                for k in 0..4 {
-                    if active[k] && q[k + 1].is_finite() {
-                        c[k] = q[k + 1].clamp(0.0, 1.0);
+        for (q, fit) in fits {
+            for (i, v) in fit {
+                if q == 0 {
+                    if let Some(s) = stops.get_mut(i) {
+                        *s = v;
                     }
+                } else if let Some(c) = col.get_mut(i).and_then(|c| c.get_mut(q - 1)) {
+                    *c = v.clamp(0.0, 1.0);
                 }
             }
         }
@@ -476,6 +443,70 @@ impl Field {
         let px = stops.par_iter().zip(&col).map(|(a, c)| [*a, c[0], c[1]]).collect();
         Shading { width: w, height: h, px, tn, up_top, down_top, tilt_up, tilt_down, tint_up, tint_down }
     }
+}
+
+impl Field {
+    /// Plane `p` (the field's size) refined along the edge band: at each band pixel, a local linear fit of `p` against the
+    /// guide over the pixel's window, kept within the range the window holds. The changed pixels and their values.
+    pub(crate) fn refined(&self, p: &[f32]) -> Vec<(usize, f32)> {
+        let (w, h, r) = (self.width, self.height, crate::field::BAND_RADIUS);
+        if self.band.is_empty() || p.iter().all(|v| *v == 0.0) {
+            return Vec::new();
+        }
+        let gp: Vec<f32> = p.par_iter().zip(&self.gi).map(|(a, b)| a * b).collect();
+        let (sp, sgp) = rayon::join(|| sat(p, w, h), || sat(&gp, w, h));
+        let stride = w + 1;
+        let window = |t: &[f64], x0: usize, y0: usize, x1: usize, y1: usize| -> f64 {
+            let at = |x: usize, y: usize| t.get(y * stride + x).copied().unwrap_or(0.0);
+            at(x1, y1) - at(x0, y1) - at(x1, y0) + at(x0, y0)
+        };
+        self.band
+            .par_iter()
+            .filter_map(|&(i, mean_g, var_g)| {
+                let i = i as usize;
+                let (x, y) = (i % w, i / w);
+                let (x0, y0, x1, y1) = (x.saturating_sub(r), y.saturating_sub(r), (x + r + 1).min(w), (y + r + 1).min(h));
+                let k = ((x1 - x0) * (y1 - y0)) as f64;
+                if k < 1.0 {
+                    return None;
+                }
+                let (mp, mgp) = ((window(&sp, x0, y0, x1, y1) / k) as f32, (window(&sgp, x0, y0, x1, y1) / k) as f32);
+                let a = (mgp - mean_g * mp) / (var_g + EDGE_EPS);
+                let q = a * self.gi.get(i).copied()? + (mp - a * mean_g);
+                // (the local linear fit can swing past both sides where the photo's luminance and the light
+                // disagree: the light stays within the range the window holds, the two sides')
+                let (mut lo, mut hi) = (f32::MAX, f32::MIN);
+                for row in y0..y1 {
+                    for v in p.get(row * w + x0..row * w + x1)? {
+                        lo = lo.min(*v);
+                        hi = hi.max(*v);
+                    }
+                }
+                (q.is_finite() && lo <= hi).then(|| (i, q.clamp(lo, hi)))
+            })
+            .collect()
+    }
+}
+
+/// The summed-area table of `p` (`w × h`): `(w + 1) × (h + 1)` sums, in f64 (exact enough for any window).
+fn sat(p: &[f32], w: usize, h: usize) -> Vec<f64> {
+    let stride = w + 1;
+    let mut t = vec![0f64; stride * (h + 1)];
+    // each row's running sum, then each row adds the one above it
+    t.par_chunks_mut(stride).skip(1).enumerate().for_each(|(y, row)| {
+        let mut acc = 0f64;
+        for (x, v) in row.iter_mut().skip(1).enumerate() {
+            acc += f64::from(p.get(y * w + x).copied().unwrap_or(0.0));
+            *v = acc;
+        }
+    });
+    for y in 1..=h {
+        let (above, rest) = t.split_at_mut(y * stride);
+        if let (Some(prev), Some(row)) = (above.get((y - 1) * stride..), rest.get_mut(..stride)) {
+            row.iter_mut().zip(prev).for_each(|(v, a)| *v += a);
+        }
+    }
+    t
 }
 
 /// The light's planes over a render: for each pixel, its gain in stops and the light's share.
