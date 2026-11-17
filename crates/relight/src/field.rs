@@ -55,7 +55,8 @@ pub struct Field {
     pub height: usize,
     /// Log depth relative to the photo's median depth.
     ln_z: Vec<f32>,
-    /// Unit normals in camera space, towards the camera (negative z).
+    /// Unit normals in camera space, on the camera's side of the surface (`n · view ray < 0`): z is negative for a
+    /// surface facing the camera, and can be slightly positive for a floor under the lens.
     normal: Vec<[f32; 3]>,
     /// The guide's log2 luminance relative to 18 % grey.
     lum: Vec<f32>,
@@ -111,8 +112,8 @@ fn edge_band(lz: &[f32], gi: &[f32], w: usize, h: usize) -> Vec<(u32, f32, f32)>
 /// the photo's brightness along, so the photo's own lines print into it). So log depth `lz` (`w × h`) is
 /// smoothed by a guided filter against the photo's luminance `gi` over a window of 6 % of the long side (a surface
 /// of one colour takes the mean of its terraces; at the photo's own edges the filter follows them), and a pixel
-/// takes that where it is within [`TERRACE`] of its own depth. A real step between two things is larger than a
-/// terrace and stays as it is, sharp.
+/// takes that where it is within [`TERRACE`] of its own depth. Steps above about 11 % of depth (a cat against the
+/// floor) stay sharp; smaller ones on one colour soften, and the light there is smooth anyway.
 fn deterrace(lz: &[f32], gi: &[f32], w: usize, h: usize) -> Vec<f32> {
     let r = ((w.max(h) as f32 * 0.03).round() as usize).max(2);
     let smooth = guided(gi, lz, w, h, r, 1.5e-2);

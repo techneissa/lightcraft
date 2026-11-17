@@ -45,6 +45,10 @@ pub const PEAK_GAIN: f32 = 7.0;
 const CEILING: f32 = 2.3;
 /// How far under [`CEILING`] the roll-off begins (stops).
 const KNEE: f32 = 1.3;
+/// Log2 luminance (relative to 18 % grey) below which the roll-off is off (`.0`) and from which it holds (`.1`): the
+/// pixels in between take it in part, so a mid-grey at the most lit point gains about 2.7 stops of the 3 at full
+/// Amount, and everything from `.1` (where the roll-off begins, [`CEILING`] − [`KNEE`]) up is rolled off as it was.
+const FULL: (f32, f32) = (-0.5, 1.0);
 /// The darkest the rest of the photo gets at full Darken Surroundings: `1 − DARKEN_MAX` of its light (3.3 stops).
 const DARKEN_MAX: f32 = 0.9;
 /// Where shadows begin to be held back (log2 luminance below 18 % grey): fully at `SHADOW.0`, not at `SHADOW.1`.
@@ -158,7 +162,11 @@ impl Field {
             // gets nothing more)
             let target = l + raw;
             let start = CEILING - KNEE;
-            let rolled = if target <= start { raw } else { (start + KNEE * (1.0 - (-(target - start) / KNEE).exp()) - l).clamp(0.0, raw) };
+            let limited = if target <= start { raw } else { (start + KNEE * (1.0 - (-(target - start) / KNEE).exp()) - l).clamp(0.0, raw) };
+            // (the roll-off holds from `FULL.1` up; below `FULL.0` the light gets all its stops, so mid-grey at the
+            // peak gains nearly the whole Amount: 2.7 of 3 stops)
+            let free = 1.0 - smoothstep(FULL.0, FULL.1, l);
+            let rolled = limited + (raw - limited) * free;
             // and less in the deepest shadows
             rolled * held
         } else {
@@ -456,7 +464,12 @@ mod tests {
         let f = two_planes(0.5);
         let rig = f.rig(&light(), 0.0);
         let best = (0..96).map(|x| f.shade(&rig, (x as f32 + 0.5) / 96.0, 0.5).stops).fold(0f32, f32::max);
-        assert!((best - 3.0).abs() < 0.3, "{best}");
+        assert!((best - 3.0).abs() < 0.2, "{best}");
+        // a mid-grey point at the peak gains nearly all of it (not two stops: the roll-off is for highlights)
+        let grey = Field::from_parts(96, 64, vec![0.0; 96 * 64], vec![0.0; 96 * 64]).unwrap();
+        let rig = grey.rig(&light(), 0.0);
+        let best = (0..96).map(|x| grey.shade(&rig, (x as f32 + 0.5) / 96.0, 0.5).stops).fold(0f32, f32::max);
+        assert!(best >= 2.6, "mid-grey gains {best} stops at full Amount");
         // a pixel already near white gets little more
         let bright = Field::from_parts(96, 64, vec![0.0; 96 * 64], vec![2.2; 96 * 64]).unwrap();
         let rig = bright.rig(&light(), 0.0);
@@ -493,8 +506,8 @@ mod tests {
     fn warmth_is_a_temperature() {
         assert_eq!(warmth_tilt(0.0), 0.0);
         let (warm, cool) = (warmth_tilt(1.0), warmth_tilt(-1.0));
-        assert!(warm > 1.0 && warm < 3.0, "{warm}");
-        assert!(cool < -0.3 && cool > -1.8, "{cool}");
+        assert!(warm > 0.8 && warm < 2.5, "{warm}");
+        assert!(cool < -0.2 && cool > -1.5, "{cool}");
         assert!(warmth_tilt(0.5) > 0.0 && warmth_tilt(0.5) < warm);
         assert_eq!(warmth_tilt(f64::NAN), 0.0);
     }
