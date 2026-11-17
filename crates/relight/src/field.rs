@@ -112,14 +112,17 @@ fn edge_band(lz: &[f32], gi: &[f32], w: usize, h: usize) -> Vec<(u32, f32, f32)>
 /// the photo's brightness along, so the photo's own lines print into it). So log depth `lz` (`w × h`) is
 /// smoothed by a guided filter against the photo's luminance `gi` over a window of 6 % of the long side (a surface
 /// of one colour takes the mean of its terraces; at the photo's own edges the filter follows them), and a pixel
-/// takes that where it is within [`TERRACE`] of its own depth. Steps above about 11 % of depth (a cat against the
-/// floor) stay sharp; smaller ones on one colour soften, and the light there is smooth anyway.
+/// takes that where it is within [`TERRACE`] of its own depth, and within the depths of its own side near it
+/// ([`same_side`]). Steps above about 11 % of depth (a cat against the floor) stay sharp; smaller ones on one colour
+/// soften, and the light there is smooth anyway.
 fn deterrace(lz: &[f32], gi: &[f32], w: usize, h: usize) -> Vec<f32> {
     let r = ((w.max(h) as f32 * 0.03).round() as usize).max(2);
     let smooth = guided(gi, lz, w, h, r, 1.5e-2);
     lz.par_iter()
         .zip(&smooth)
-        .map(|(&a, &b)| {
+        .enumerate()
+        .map(|(i, (&a, &b))| {
+            let b = if b.is_finite() { same_side(lz, w, h, i, b) } else { b };
             // (the weight of the smoothed value: 1 within a terrace of the pixel's own depth, 0 past it)
             let t = ((a - b).abs() - TERRACE.0) / (TERRACE.1 - TERRACE.0);
             let t = 1.0 - t.clamp(0.0, 1.0);
@@ -127,6 +130,33 @@ fn deterrace(lz: &[f32], gi: &[f32], w: usize, h: usize) -> Vec<f32> {
             if b.is_finite() { a + (b - a) * keep } else { a }
         })
         .collect()
+}
+
+/// Pixels each side that [`same_side`] looks over.
+const SIDE_RADIUS: usize = 5;
+
+/// `b`, the smoothed depth of pixel `i` of `lz` (`w × h`), kept within the range of the depths around it on its own
+/// side of any step: the pixels within [`SIDE_RADIUS`] whose depth is within [`TERRACE`]'s upper end of its own.
+/// The guided filter fits the depth to the photo's luminance over a window that holds a step, so on a flat floor
+/// beside a figure it pulls the depth towards the figure's by a few percent, as far as the window reaches; that tilts
+/// the normals into a halo of wrong light along the outline. The floor never has a depth outside its own.
+fn same_side(lz: &[f32], w: usize, h: usize, i: usize, b: f32) -> f32 {
+    let (x, y) = (i % w.max(1), i / w.max(1));
+    let a = lz.get(i).copied().unwrap_or(b);
+    if (b - a).abs() < 1e-3 {
+        return b;
+    }
+    let (mut lo, mut hi) = (a, a);
+    for yy in y.saturating_sub(SIDE_RADIUS)..(y + SIDE_RADIUS + 1).min(h) {
+        for xx in x.saturating_sub(SIDE_RADIUS)..(x + SIDE_RADIUS + 1).min(w) {
+            let v = lz.get(yy * w + xx).copied().unwrap_or(a);
+            if (v - a).abs() < TERRACE.1 {
+                lo = lo.min(v);
+                hi = hi.max(v);
+            }
+        }
+    }
+    if lo <= hi { b.clamp(lo, hi) } else { b }
 }
 
 /// How far (log depth) a pixel may be from the smoothed depth and still be a terrace of it: fully smoothed under
