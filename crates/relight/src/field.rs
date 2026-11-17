@@ -188,15 +188,14 @@ fn air_of(lz: &[f32], y: &[f32], colour: impl Fn(usize) -> [f32; 3] + Sync) -> (
     (air, if bright.is_finite() { bright.max(0.0) } else { 0.0 })
 }
 
-/// Percentile `q` (0..1) of `v` (copied and sorted; `v` is not empty).
+/// Percentile `q` (0..1) of `v` (copied; the value a full sort would put there, found in linear time).
 fn percentile(v: &[f32], q: f64) -> f32 {
     let mut s: Vec<f32> = v.iter().copied().filter(|x| x.is_finite()).collect();
     if s.is_empty() {
         return 0.0;
     }
-    s.sort_by(f32::total_cmp);
-    let i = ((s.len() - 1) as f64 * q.clamp(0.0, 1.0)).round() as usize;
-    s.get(i).copied().unwrap_or(0.0)
+    let i = (((s.len() - 1) as f64 * q.clamp(0.0, 1.0)).round() as usize).min(s.len() - 1);
+    *s.select_nth_unstable_by(i, f32::total_cmp).1
 }
 
 /// Log depth of each value of `d`, relative to the median; values that can't be read (not finite, not positive

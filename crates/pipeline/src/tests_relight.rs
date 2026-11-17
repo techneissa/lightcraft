@@ -490,7 +490,7 @@ fn mist_off_changes_no_byte_whatever_its_height_and_fade() {
 }
 
 #[test]
-fn distance_fade_takes_the_far_walls_contrast_more_than_the_near_squares_and_a_draft_matches_the_export() {
+fn distance_fade_takes_the_far_walls_contrast_more_than_the_near_squares_and_a_small_render_matches_a_large_one() {
     // (issue #331) the textured wall is far, the square near: through the haze the wall's texture fades into the air's colour,
     // the square's much less
     let (src, info) = (scene(W, H), info());
@@ -506,9 +506,28 @@ fn distance_fade_takes_the_far_walls_contrast_more_than_the_near_squares_and_a_d
     let kept = |b| spread(&faded, b) / spread(&clear, b).max(1e-3);
     assert!(spread(&clear, wall) > 1.0, "the wall has no texture to fade: {}", spread(&clear, wall));
     assert!(kept(wall) < 0.8 && kept(wall) + 0.1 < kept(square), "the wall keeps {} of its contrast, the square {}", kept(wall), kept(square));
-    // the fade is the same plane at any size: a draft a quarter the size is the export's average
+    // the fade is the same plane at any size: a render a quarter the size is the full-size one's average
     let s = effect(|e| (e.haze, e.mist, e.fade) = (40.0, 50.0, 100.0));
     let (small, big) = (render(&src, &info, &s, &RenderRequest::fit(W / 4, H / 4)).image, render(&src, &info, &s, &req).image);
     let (a, b) = (mean(&small, wall), mean(&big, wall));
-    assert!((a - b).abs() < 2.0, "draft {a}, export {b}");
+    assert!((a - b).abs() < 2.0, "quarter size {a}, full size {b}");
+}
+
+#[test]
+fn two_lights_with_distance_fade_dim_far_things_as_one_does() {
+    // (issue #331) the fog is the scene's air, not a light's: two identical lights with Distance Fade fade the far wall as
+    // much as one of them alone (it used to fade it twice, exp(−2τ), with two glows)
+    let (_, info) = (scene(W, H), info());
+    let one = effect(|e| (e.haze, e.mist, e.fade) = (40.0, 50.0, 80.0));
+    let mut two = one.clone();
+    two.relight.lights.push(two.relight.lights[0].clone());
+    let input = info.relight.as_ref().unwrap();
+    // the air's optical depth in front of the far wall, summed over every fade the render applies
+    let tau = |s: &DevelopSettings| {
+        let lit = relight::lit(&info, s, false).unwrap();
+        lit.fades.iter().map(|f| input.field.plane_at(&f.plane, 1, 1, &|_, _| (0.8, 0.2))[0]).sum::<f32>()
+    };
+    let (a, b) = (tau(&one), tau(&two));
+    assert!(a > 0.05, "the far wall doesn't fade: {a}");
+    assert!((a - b).abs() < 1e-6, "one light {a}, two lights {b}");
 }

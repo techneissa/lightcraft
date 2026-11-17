@@ -47,6 +47,7 @@ impl PartialEq for Input {
 pub struct Lit {
     pub shading: Arc<Shading>,
     pub beams: Vec<Beamed>,
+    /// The photo's Distance Fade: at most one ([`fades_of`]).
     pub fades: Vec<Faded>,
     /// The field the beams' planes are on.
     pub field: Arc<Field>,
@@ -60,7 +61,7 @@ pub struct Beamed {
     pub colour: [f32; 3],
 }
 
-/// One light's Distance Fade (issue #331): the air's optical depth in front of each pixel of the field ([`Field::fade`]), and the
+/// The photo's Distance Fade (issue #331): the air's optical depth in front of each pixel of the field ([`Field::fade`]), and the
 /// air's colour (scene-linear Rec.2020, at the render's exposure) things fade to.
 #[derive(Clone)]
 pub struct Faded {
@@ -70,7 +71,7 @@ pub struct Faded {
 
 /// The ids the beams' planes take among the masks (after [`IDS`]), one per light.
 const BEAM_IDS: u32 = u32::MAX - 6;
-/// The ids the fades' planes take (after the beams'), two per light: the dimming and the air's glow.
+/// The ids the fade's planes take (after the beams'): the dimming and the air's glow.
 const FADE_IDS: u32 = BEAM_IDS - lightcraft_relight::MAX_LIGHTS as u32;
 
 /// The ids the light's planes take among the masks: brightening, darkening, warm colour, cool colour, and for a gel
@@ -490,37 +491,39 @@ fn fade_key(input: &Input, e: &Effects) -> u64 {
     hashed(|h| std::hash::Hash::hash(&(6u8, input.key, [e.haze, e.mist, e.mist_height, e.fade].map(f64::to_bits)), h))
 }
 
-/// The scene's Distance Fades (issue #331): each light with some, its plane (made once per set of the air's numbers and kept;
-/// the light's place, type and a drag don't change it) and the air's colour at exposure `ev`, from the photo's far colour and the
-/// light's own (Warmth and gel).
+/// The scene's Distance Fade (issue #331): the fog is the photo's air, not a light's, so there is one per photo, at most. It
+/// takes the strongest Distance Fade among the lights (the first of equals) with that light's Haze, Mist and Mist Height; its
+/// plane is made once per set of those numbers and kept (the lights' places, types and a drag don't change it). The air's colour
+/// at exposure `ev` is the photo's far colour with some of the summed colour (Warmth and gel) of every light with Distance Fade
+/// on, a rim or a fill as much as any other. One light gives what it gave alone.
 pub fn fades_of(input: &Input, scene: &Scene, ev: f64) -> Vec<Faded> {
     let none = Effects::default();
-    scene
-        .lights
-        .iter()
-        .take(MAX_LIGHTS)
-        .enumerate()
-        .filter_map(|(i, l)| {
-            let e = scene.effects.get(i).unwrap_or(&none);
-            if !(e.fade.is_finite() && e.fade > 0.0) {
-                return None;
-            }
-            let key = fade_key(input, e);
-            let plane = match FADES.get(key) {
-                Some(p) => p,
-                None => {
-                    let p = Arc::new(input.field.fade(e)?);
-                    FADES.put(key, p.clone());
-                    p
-                }
-            };
-            let (t, s) = e.light_colour(l.warmth);
-            let light = [1.0 + 0.3 * t, 1.0 - 0.22 * s, (1.0 - 0.3 * t).max(0.0)];
-            let gain = if ev.is_finite() { 2f32.powf(ev.clamp(-10.0, 10.0) as f32) } else { 1.0 };
-            let colour = input.field.air_colour(light).map(|c| c * gain);
-            Some(Faded { plane, colour })
-        })
-        .collect()
+    let on = |e: &Effects| e.fade.is_finite() && e.fade > 0.0;
+    let faded: Vec<(&Light, &Effects)> =
+        scene.lights.iter().take(MAX_LIGHTS).enumerate().map(|(i, l)| (l, scene.effects.get(i).unwrap_or(&none))).filter(|(_, e)| on(e)).collect();
+    // (the strongest: the first of equals, so one light, or two alike, give the first one's air)
+    let Some((_, e)) = faded.iter().copied().reduce(|a, b| if b.1.fade > a.1.fade { b } else { a }) else { return Vec::new() };
+    let key = fade_key(input, e);
+    let plane = match FADES.get(key) {
+        Some(p) => p,
+        None => {
+            let Some(p) = input.field.fade(e) else { return Vec::new() };
+            let p = Arc::new(p);
+            FADES.put(key, p.clone());
+            p
+        }
+    };
+    let colour = |(l, e): &(&Light, &Effects)| {
+        let (t, s) = e.light_colour(l.warmth);
+        [1.0 + 0.3 * t, 1.0 - 0.22 * s, (1.0 - 0.3 * t).max(0.0)]
+    };
+    let mut light = faded.first().map_or([1.0; 3], colour);
+    for c in faded.iter().skip(1).map(colour) {
+        light = [light[0] + c[0], light[1] + c[1], light[2] + c[2]];
+    }
+    let gain = if ev.is_finite() { 2f32.powf(ev.clamp(-10.0, 10.0) as f32) } else { 1.0 };
+    let colour = input.field.air_colour(light).map(|c| c * gain);
+    vec![Faded { plane, colour }]
 }
 
 /// `light`'s lobes on `input`'s field (`rig`: the light set up on it), seen through its pattern and with the shadows it
@@ -650,7 +653,7 @@ pub fn masks(plan: &Plan<'_>) -> Vec<Evaluated> {
         let added = b.colour.map(|c| f64::from(c * top));
         out.push(evaluated(BEAM_IDS - k as u32, w, h, alpha, LocalAdjustments { fork_added: added, ..LocalAdjustments::default() }));
     }
-    // (issue #331: each light's Distance Fade: the photo's light dimmed by the air in front of it, an exposure, and the air's own
+    // (issue #331: the photo's Distance Fade: the photo's light dimmed by the air in front of it, an exposure, and the air's own
     // glow in its colour, light added on top; so a pixel becomes `c · T + air · (1 − T)`, the beams on top of that)
     for (k, f) in lit.fades.iter().enumerate() {
         let tau = lit.field.plane_at(&f.plane, w, h, &|x, y| {
