@@ -31,11 +31,19 @@ fn row(f: &Field, l: &Light, v: f32) -> Vec<f32> {
     ones.m[y * W..(y + 1) * W].to_vec()
 }
 
-/// Where the wall's point in line from the light through the middle of the box (halfway through its assumed thickness) is, as a share of the photo's width.
+/// Where the wall's point in line from the light through the middle of the box is, as a share of the photo's width: the
+/// box is taken to be as deep as it is wide (`crate::occluder`), so its middle is half its width behind its front.
 fn shadow_middle(f: &Field, l: &Light) -> f32 {
+    in_line(f, l, (0.45, 0.5), -0.6, 0.1, 0.2)
+}
+
+/// Where the point of a wall at log depth `wall` lies (a share of the photo's width) that is in line from light `l` through
+/// the middle of a thing whose front is at `(u, v)` and log depth `front` and which is `width` of the photo wide (and so,
+/// taken to be as deep as it is wide, reaches `width · LENS` of its depth behind its front).
+fn in_line(f: &Field, l: &Light, (u, v): (f32, f32), front: f32, width: f32, wall: f32) -> f32 {
     let rig = f.rig(l, 0.0, 0.0);
-    let (lp, b) = (rig.position(), f.point(0.45, 0.5, -0.6 + 1.25f32.ln()));
-    let zw = 0.2f32.exp();
+    let (lp, b) = (rig.position(), f.point(u, v, front + (1.0 + 0.5 * width * LENS).ln()));
+    let zw = wall.exp();
     let s = (zw - lp[2]) / (b[2] - lp[2]);
     let x = lp[0] + s * (b[0] - lp[0]);
     x / (zw * LENS) + 0.5
@@ -103,7 +111,8 @@ fn a_sun_casts_parallel_shadows_and_hostile_numbers_give_finite_planes() {
     let f = box_before_wall();
     // a sun from the left and in front: the box shades the wall to its right
     let sun = light(0.1, LightKind::Sun(Sun { azimuth: -30.0, elevation: 10.0 }));
-    let wall = row(&f, &sun, 0.5);
+    // (a little above the box: its shadow falls lower on the wall than the box itself)
+    let wall = row(&f, &sun, 0.65);
     assert!(wall[(0.1 * W as f32) as usize] > 0.95 && wall.iter().any(|v| *v < 0.1), "{:?}", wall.iter().step_by(12).collect::<Vec<_>>());
     // nothing here is a number
     let bad =
@@ -309,32 +318,49 @@ fn subject_before_wall(wall: f32) -> Field {
     Field::from_parts(W, H, lz, vec![-2.0; W * H]).unwrap()
 }
 
-/// The share of the light the wall right of the subject (`u` 0.57 .. 0.63, the rows 0.45 .. 0.55) sees from a light left of it at `k` times
-/// the subject's depth.
-fn wall_right_of_the_subject(f: &Field, k: f32) -> f32 {
-    let d = f64::from((k.ln() - f.near + 0.6) / (f.far - f.near + 0.6));
-    let l = Light { x: 0.05, y: 0.5, depth: d, ..light(0.05, LightKind::Point) };
+/// The share of the light the wall right of the subject sees from a point light at `(x, 0.5)` and `k` times the subject's
+/// depth: over the rows 0.45 .. 0.55 and `u` from `from` to `to`.
+fn wall_light(f: &Field, x: f64, k: f32, (from, to): (f32, f32)) -> f32 {
+    let l = point_at(f, x, k);
     let plane = f.visibility_plane(&f.visibility(&f.rig(&l, 0.0, 0.0), &l, false).unwrap());
     let mut sum = 0.0;
     let mut n = 0.0;
     for y in (H * 45 / 100)..(H * 55 / 100) {
-        for x in (W * 57 / 100)..(W * 63 / 100) {
-            sum += plane[y * W + x];
+        for xx in ((from * W as f32) as usize)..((to * W as f32) as usize).max((from * W as f32) as usize + 1) {
+            sum += plane[y * W + xx];
             n += 1.0;
         }
     }
     sum / n
 }
 
+/// A small point light at `(x, 0.5)` and `k` times the depth of the subject at log depth 0.
+fn point_at(f: &Field, x: f64, k: f32) -> Light {
+    let d = f64::from((k.ln() - f.near + 0.6) / (f.far - f.near + 0.6));
+    Light { x, y: 0.5, depth: d, ..light(0.05, LightKind::Point) }
+}
+
+/// The share of the light the wall right of the subject (`u` 0.57 .. 0.63, the rows 0.45 .. 0.55) sees from a light left of it at `k` times
+/// the subject's depth.
+fn wall_right_of_the_subject(f: &Field, k: f32) -> f32 {
+    wall_light(f, 0.05, k, (0.57, 0.63))
+}
+
 #[test]
 fn a_wall_a_little_behind_a_subject_is_in_its_shadow_from_a_light_at_or_in_front_of_the_subject() {
-    // the wall 33 % and 30 % behind the subject (inside the thickness a thing is taken to have), the light to the left at 0.7, 0.9 and
-    // 1 times the subject's depth: the way to it crosses the subject's front
-    for wall in [1.33, 1.3] {
+    // the wall 33 % and 30 % behind the subject, the light to the left at 0.7, 0.9 and 1 times the subject's depth: the way from the
+    // wall where the line from the light through the subject lands crosses the subject (round 3 judged a ray by where it starts and
+    // left that wall lit)
+    for wall in [1.33f32, 1.3] {
         let f = subject_before_wall(wall);
-        for k in [0.7, 0.9, 1.0] {
-            let lit = wall_right_of_the_subject(&f, k);
-            assert!(lit < 0.3, "wall at {wall}, light at {k}: the wall right of the subject sees {lit} of the light");
+        // (the light nearer the subject on the picture the nearer it is to the subject's depth: a light level with it throws the
+        // shadow far to the side)
+        for (k, x) in [(0.7, 0.3), (0.9, 0.3), (1.0, 0.4)] {
+            let l = point_at(&f, x, k);
+            let mid = in_line(&f, &l, (0.5, 0.5), 0.0, 0.1, wall.ln());
+            assert!(mid > 0.56 && mid < 0.95, "wall at {wall}, light at {k}: the shadow's middle at {mid}");
+            let lit = wall_light(&f, x, k, ((mid - 0.015).max(0.56), mid + 0.015));
+            assert!(lit < 0.1, "wall at {wall}, light at {k}: the wall at {mid} sees {lit} of the light");
         }
     }
 }
@@ -370,4 +396,51 @@ fn subject_beside_a_surface(near_side: f32) -> Field {
         })
         .collect();
     Field::from_parts(W, H, lz, vec![-2.0; W * H]).unwrap()
+}
+
+#[test]
+fn a_things_shadow_from_a_small_light_is_dark_in_full() {
+    // a box and a pole (a tenth and a twenty-fifth of the photo wide) in front of a wall, lit from the left by a small point
+    // light, a small softbox and a sun: at Cast Shadows 100 the middle of the shadow keeps at most a tenth of the light (round 4
+    // faded a ray at its samples' place in a thing's depth and left a third more, and lost a thin thing's shadow)
+    for width in [0.1f32, 0.04] {
+        let lz: Vec<f32> = (0..W * H)
+            .map(|i| {
+                let (u, v) = ((i % W) as f32 / W as f32, (i / W) as f32 / H as f32);
+                // (tall enough to be more than 2 % of the photo: the nearest depth a light can take is under its own)
+                if (0.45..0.45 + width).contains(&u) && (0.2..0.8).contains(&v) { -0.6 } else { 0.2 }
+            })
+            .collect();
+        let f = Field::from_parts(W, H, lz, vec![-2.0; W * H]).unwrap();
+        // (the light at 0.6 times the thing's depth, left of it)
+        let depth = f64::from(((0.6f32).ln() - 0.6 - f.near + 0.6) / (f.far - f.near + 0.6));
+        for kind in [
+            LightKind::Point,
+            LightKind::Softbox(Softbox { width: 0.03, height: 0.03, rotation: 0.0 }),
+            LightKind::Sun(Sun { azimuth: -40.0, elevation: 0.0 }),
+        ] {
+            let l = Light { depth, ..light(0.05, kind) };
+            let rig = f.rig(&l, 0.0, 0.0);
+            // (where the shadow's middle lands: in line from the light, or along the sun's direction, through the thing's middle)
+            let mid = match kind {
+                LightKind::Sun(_) => {
+                    let b = f.point(0.45 + width / 2.0, 0.5, -0.6 + (1.0 + 0.5 * width * LENS).ln());
+                    let to = crate::kinds::sun_vector(-40.0, 0.0);
+                    let zw = 0.2f32.exp();
+                    let x = b[0] - to[0] * (zw - b[2]) / -to[2];
+                    x / (zw * LENS) + 0.5
+                }
+                _ => in_line(&f, &l, (0.45 + width / 2.0, 0.5), -0.6, width, 0.2),
+            };
+            assert!(mid > 0.45 + width && mid < 0.95, "{kind:?}, width {width}: the shadow's middle at {mid}");
+            for draft in [false, true] {
+                let vis = f.visibility(&rig, &l, draft).unwrap();
+                let lobe = f.lobe(&rig);
+                let shaded = f.shadowed(lobe.clone(), &vis, 1.0);
+                let i = (H / 2) * W + (mid * W as f32) as usize;
+                let kept = shaded.m[i] / lobe.m[i].max(1e-9);
+                assert!(kept <= 0.1, "{kind:?}, width {width}, draft {draft}: the shadow's middle at {mid} keeps {kept} of the light");
+            }
+        }
+    }
 }

@@ -19,6 +19,7 @@ pub mod field;
 pub mod filter;
 pub mod kinds;
 pub mod light;
+mod occluder;
 pub mod overlay;
 mod rim;
 pub mod shadow;

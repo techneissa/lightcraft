@@ -3,7 +3,7 @@
 //!
 //! `cargo run --release -p lightcraft-relight --example relight -- photo.jpg <depth dump dir> out-prefix
 //! [x y depth amount softness warmth darken wrap]` with, from the environment, `LC_KIND=sun|softbox` (anything else is a point light: this tool has no spot, rim or fill),
-//! `LC_SUN=azimuth,elevation`, `LC_BOX=width,height,rotation` and `LC_SHADOWS=0..1` and `LC_DRAFT=1` (the coarse shadows of a drag) and `LC_VISPIC=1` (also write `<prefix>-vis.png`, the shadow's visibility) (issue #315: how much the photo's own things
+//! `LC_SUN=azimuth,elevation`, `LC_BOX=width,height,rotation` and `LC_SHADOWS=0..1` and `LC_DRAFT=1` (the coarse shadows of a drag) and `LC_VISPIC=1` (also write `<prefix>-vis.png`, the shadow's visibility, and `<prefix>-blockers.png`, what blocks: red how sure, green how deep, a share of 0.5 at full) (issue #315: how much the photo's own things
 //! block the light; the time of each stage of one drag step is printed) (the dump dir is `lightcraft-depth`'s example `--dump`: `depth.f32`
 //! and `size.txt`). Writes `<prefix>-before.png`, `<prefix>-after.png`, `<prefix>-gain.png`, `<prefix>-normals.png`, `<prefix>-depth.png` (the field's depth, near light).
 
@@ -69,6 +69,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let t = std::time::Instant::now();
     let field = Field::prepare_model(DepthMap { width: dw, height: dh, values: &depth, kind: Kind::Depth }, &lin)?;
     eprintln!("field {w} × {h} in {:.0} ms", t.elapsed().as_secs_f64() * 1e3);
+    let draft = std::env::var_os("LC_DRAFT").is_some();
+    if shadows > 0.0 && light.kind.takes_shadows() {
+        // (the reduced field the march runs on is made once per field, as in the app: not part of a drag step)
+        let t = std::time::Instant::now();
+        let _ = field.visibility(&field.rig(&light, darken, 0.0), &light, draft);
+        eprintln!("reduced field and first march {:.1} ms", t.elapsed().as_secs_f64() * 1e3);
+    }
     let t = std::time::Instant::now();
     let rig = field.rig(&light, darken, 0.0);
     let probe = |u: f32, v: f32| field.depth_plane().data.get((v * h as f32) as usize * w + (u * w as f32) as usize).copied().unwrap_or(0.0);
@@ -76,7 +83,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let lobe = field.lobe(&rig);
     let t_lobe = t.elapsed().as_secs_f64() * 1e3;
     let lobe = if shadows > 0.0 && light.kind.takes_shadows() {
-        let vis = field.visibility(&rig, &light, std::env::var_os("LC_DRAFT").is_some()).ok_or("no shadow for this light")?;
+        let vis = field.visibility(&rig, &light, draft).ok_or("no shadow for this light")?;
         let t_vis = t.elapsed().as_secs_f64() * 1e3;
         if std::env::var_os("LC_VISPIC").is_some() {
             let plane = field.visibility_plane(&vis);
@@ -85,6 +92,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 pic.put_pixel((i % w) as u32, (i / w) as u32, image::Luma([(v.clamp(0.0, 1.0) * 255.0) as u8]));
             }
             pic.save(format!("{prefix}-vis.png"))?;
+            let (bw, bh, blk) = field.blocker_plane();
+            let mut pic = image::RgbImage::new(bw as u32, bh as u32);
+            for (i, [s, deep]) in blk.iter().enumerate() {
+                pic.put_pixel((i % bw) as u32, (i / bw) as u32, image::Rgb([(s * 255.0) as u8, ((deep * 2.0).clamp(0.0, 1.0) * 255.0) as u8, 0]));
+            }
+            pic.save(format!("{prefix}-blockers.png"))?;
         }
         let lobe = field.shadowed(lobe, &vis, shadows);
         eprintln!("lobe {t_lobe:.1} ms, march {:.1} ms, upsample {:.1} ms", t_vis - t_lobe, t.elapsed().as_secs_f64() * 1e3 - t_vis);

@@ -1,8 +1,13 @@
 //! Shadows (issue #315, `fork/relight.md`): a light is blocked by what the photo shows. For each pixel's surface point
 //! the light's rays are walked through the depth map towards the light (a ray towards the light's place for a point, a
-//! spot and a softbox, parallel rays along the direction for a sun); a ray is blocked where it runs behind a nearer
-//! surface of the photo that stands out of its surroundings ([`STAND`]), within the thickness a thing is taken to have ([`THICK`]), as in a
-//! screen-space shadow march.
+//! spot and a softbox, parallel rays along the direction for a sun), as in a screen-space shadow march. What blocks a
+//! ray is decided by [`crate::occluder`]: only a thing with farther stuff on both sides of it (a person, a box, a pole,
+//! not a floor, a wall or a staircase), taken to be about as deep as it is wide. A ray is blocked where it passes
+//! through such a thing: each step of the march covers a stretch of the ray, and the stretch's whole range of depth is
+//! held against the thing's at the step's pixel ([`held`]), so a thin thing between two samples' depths still blocks
+//! in full, and a light or a surface moving in depth changes the shadow smoothly (the thing fades in just behind its
+//! front and out behind its back). The darkest step decides the ray.
+//!
 //! The light's size is spread over several rays aimed across it (a disc for a point, a spot and a sun, the rectangle for
 //! a softbox), so a small light gives a hard shadow and a big one a soft shadow whose penumbra grows with the distance
 //! from the blocker, as it does in the world. A Rim and a Fill take no shadow.
@@ -23,43 +28,29 @@ use rayon::prelude::*;
 use crate::field::{Field, LENS};
 use crate::kinds::{LightKind, Shape};
 use crate::light::{Light, Lobe, Rig};
+use crate::occluder::Blocker;
+pub(crate) use crate::occluder::Reduced;
 
 /// The long side of the reduced field the march runs on (the reduction is the whole number of field pixels that brings
 /// it closest to this from above: 4 for the usual 1600-pixel field, 1 for a small one), for a drag's draft and for the full march.
 const LOW_SIDE_DRAFT: usize = 200;
 const LOW_SIDE: usize = 400;
-/// Steps along each ray.
-const STEPS: usize = 24;
+/// Steps along each ray: one per this many reduced pixels of its length on the picture, at least [`MIN_STEPS`] and at
+/// most [`MAX_STEPS`] (the full march's and a drag's).
+const STEP_PX: f32 = 2.0;
+const MIN_STEPS: usize = 6;
+const MAX_STEPS: (usize, usize) = (40, 20);
 /// Rays of the first pass (one at the light's middle and three round its edge); a pixel whose rays disagree (it is in
 /// a penumbra) gets [`MORE`] more across the whole light.
 const FIRST: usize = 4;
 const MORE: usize = 12;
-/// A ray point is behind a surface when its depth is more than this ratio of the surface's (a little over: the
-/// surface it starts on, and the depth model's small ripples, don't shadow it) ...
-const BIAS: f32 = 1.08;
-/// ... and a thing blocks the light only so far behind its visible surface: this ratio of the surface's depth is the
-/// thickness a thing is taken to have (about 0.4 in log depth), since the photo shows nothing behind a thing's front.
-const THICK: f32 = 1.5;
-/// The share of a band's near and far edges over which a ray sample counts as in it by degrees (the near one is narrow: a light just
-/// behind a person's front must still be hidden from the floor in front of them).
-const EDGE_FADE: (f32, f32) = (0.07, 0.06);
-/// A ray behind a surface is blocked only once it runs through more than this share of the surface's thickness, and in full when it
-/// runs through all of it (see [`March::let_through`]).
-const THROUGH_FROM: f32 = 0.6;
-/// A ray with an end in front of the surface's band is blocked in full; the block fades out above the band's near edge over this share of
-/// it for the receiver (an end at 1.08 to 1.08 · (1 + this) times the surface's depth) and over `.1` for the light, so a surface a little
-/// deeper than the subject, or a light a little behind its front, makes no visible line (the light's is the narrower: a light at 1.2
-/// times the subject's depth, inside its band, should hardly dim what lies behind it).
-const FRONT_FADE: (f32, f32) = (0.15, 0.08);
+/// A ray counts as inside a thing from this ratio of its front's depth and in full from the second (a little behind
+/// its front: the surface a ray starts on, a body's own curve and the depth model's ripples don't shadow it), or from a
+/// quarter and a half of the thing's depth when it is thinner (a pole: it still blocks in full).
+const FRONT: (f32, f32) = (1.03, 1.08);
 /// How far apart the first rays of a pixel may be before the penumbra pass runs (they agree on a partial value where a light is hidden in
 /// part: nothing to refine).
 const SPREAD: f32 = 0.05;
-/// Only a thing that stands out of its surroundings blocks: its log depth is this much nearer than the farthest of the pixels
-/// within [`STAND_REACH`] of the picture's width to its left or right ([`Reduced::stand`]). A receding floor, a staircase's treads and the depth model's ripples and
-/// terraces (a few to 20 % of depth) stand out of nothing, so rays grazing along them are not blocked and no speckle shows; a
-/// person in front of a wall, a box, a cat on a ledge do.
-const STAND: f32 = 0.2;
-const STAND_REACH: f32 = 0.1;
 /// How much of the light's own radius (the sphere its fall-off comes from) a point or a spot's shadow uses.
 const POINT_SHARE: f32 = 0.5;
 /// The sun's angular radius (radians) at Softness 0 and the most it adds at Softness 1.
@@ -82,52 +73,25 @@ impl LightKind {
     }
 }
 
-/// The field, reduced for the march: at the centre pixel of each `f × f` block its depth (linear and log) and the
-/// photo's brightness. Made once per field.
-#[derive(Clone, Debug)]
-pub(crate) struct Reduced {
-    f: usize,
-    w: usize,
-    h: usize,
-    z: Vec<f32>,
-    lz: Vec<f32>,
-    gi: Vec<f32>,
-    /// How far each pixel's log depth is nearer than the farthest pixel to its left or right within [`STAND_REACH`] (a thing standing out of its surroundings; see [`STAND`]).
-    stand: Vec<f32>,
-}
-
-impl Reduced {
-    pub(crate) fn of(field: &Field, low_side: usize) -> Reduced {
-        let (fw, fh) = (field.width.max(1), field.height.max(1));
-        let f = fw.max(fh).div_ceil(low_side.max(1)).max(1);
-        let (w, h) = (fw.div_ceil(f), fh.div_ceil(f));
-        let (mut z, mut lz, mut gi) = (Vec::with_capacity(w * h), Vec::with_capacity(w * h), Vec::with_capacity(w * h));
-        for y in 0..h {
-            let cy = (y * f + f / 2).min(fh - 1);
-            for x in 0..w {
-                let i = cy * fw + (x * f + f / 2).min(fw - 1);
-                let l = field.ln_z.get(i).copied().unwrap_or(0.0);
-                lz.push(l);
-                z.push(l.exp());
-                gi.push(field.gi.get(i).copied().unwrap_or(0.0));
-            }
-        }
-        // (along each row: a floor, a staircase and a wall are alike across it, a person or a box is nearer than what lies to its sides)
-        let r = ((STAND_REACH * w as f32).round() as usize).max(2);
-        let mut stand = vec![0f32; w * h];
-        stand.par_chunks_mut(w.max(1)).zip(lz.par_chunks(w.max(1))).for_each(|(out, row)| {
-            for (x, o) in out.iter_mut().enumerate() {
-                let far = row.get(x.saturating_sub(r)..(x + r + 1).min(row.len())).map_or(0.0, |win| win.iter().copied().fold(f32::MIN, f32::max));
-                *o = far - row.get(x).copied().unwrap_or(0.0);
-            }
-        });
-        Reduced { f, w, h, z, lz, gi, stand }
+/// How much of a ray whose depth runs over `lo ..= hi` at a pixel the thing there (front at depth `zs`, blocker `b`)
+/// holds back: the most of its presence over that range of depth, 0 (none) .. 1. The presence rises from 0 at
+/// [`FRONT`]`.0` times the front's depth to 1 at [`FRONT`]`.1` (sooner for a thin thing), stays 1 to the thing's `full`
+/// depth and falls to 0 at its `end`.
+pub(crate) fn held(zs: f32, b: &Blocker, lo: f32, hi: f32) -> f32 {
+    let deep = b.full - 1.0;
+    if !(b.s > 0.0 && zs > 0.0 && deep > 1e-4 && b.end >= b.full) {
+        return 0.0;
     }
-
-    /// Memory held (bytes).
-    pub(crate) fn bytes(&self) -> usize {
-        (self.z.len() + self.lz.len() + self.gi.len() + self.stand.len()) * 4
-    }
+    let (fa, fb) = (1.0 + (FRONT.0 - 1.0).min(0.25 * deep), 1.0 + (FRONT.1 - 1.0).min(0.5 * deep));
+    let (za, zb, zc, zd) = (zs * fa, zs * fb, zs * b.full, zs * b.end);
+    let (rise, fall) = ((zb - za).max(1e-9), (zd - zc).max(1e-9));
+    let up = |z: f32| ((z - za) / rise).clamp(0.0, 1.0);
+    let down = |z: f32| if z <= zc { 1.0 } else { ((zd - z) / fall).clamp(0.0, 1.0) };
+    // (the presence is a trapezoid: its top, or where its sides cross for a thin one, nearest the ray's range is the most of it there)
+    let top = ((za * fall + zd * rise) / (rise + fall)).clamp(za, zd);
+    let z = top.clamp(lo.min(hi), hi.max(lo));
+    let v = b.s * up(z).min(down(z));
+    if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 }
 }
 
 /// How much of a light each pixel of the reduced field sees: 1 all of it, 0 none.
@@ -208,6 +172,8 @@ fn offset(k: usize, turn: f32) -> (f32, f32) {
 
 /// The march's numbers for one reduced field and one light.
 struct March<'a> {
+    /// The most steps a ray takes ([`MAX_STEPS`]).
+    max_steps: usize,
     r: &'a Reduced,
     src: Source,
     /// The camera's half-extent per unit depth, on each axis.
@@ -245,30 +211,25 @@ impl March<'_> {
         if t.is_finite() { t.max(0.0) } else { 0.0 }
     }
 
-    /// How much of the light a surface of depth `zs` lets a ray through whose depth runs from `z0` to `z1` and which is in the
-    /// surface's band (a thing is taken to reach from [`BIAS`] to [`THICK`] times `zs`) at a sample: 1 all of it, 0 none.
-    ///
-    /// - A ray with an end in front of the band (the floor in front of a person, a light in front of the subject) crosses the surface's
-    ///   front, wherever its other end lies: it is blocked, and the block fades out over [`FRONT_FADE`] above the band's near edge
-    ///   (each end by its own), so the shadow has no line where a surface or a light passes 1.08 times the subject's depth.
-    /// - One with both ends in or behind the band (a wall behind a person, a light inside the band) is blocked by the share of the
-    ///   thickness it runs through beyond [`THROUGH_FROM`] of it, squared: a light inside the thing's band is hidden from what lies
-    ///   behind it only in part, and not at all when the band's far edge is where it is.
-    ///
-    /// So the shadow changes smoothly as a light's or a surface's depth crosses a band's edge: a light just behind a person still
-    /// shades the floor in front of them; a light a little behind a near subject does not shade the whole wall.
-    fn let_through(zs: f32, z0: f32, z1: f32) -> f32 {
-        let (lo, hi) = (zs * BIAS, zs * THICK);
-        let fade = |z: f32, share: f32| ((lo * (1.0 + share) - z) / (lo * share)).clamp(0.0, 1.0);
-        let front = fade(z0, FRONT_FADE.0).max(fade(z1, FRONT_FADE.1));
-        let overlap = (z0.max(z1).min(hi) - z0.min(z1).max(lo)).max(0.0);
-        let through = (overlap / (hi - lo).max(1e-6)).clamp(0.0, 1.0);
-        let g = ((through - THROUGH_FROM) / (1.0 - THROUGH_FROM)).clamp(0.0, 1.0);
-        1.0 - front.max(g * g)
+    /// Where `q` (a point of the scene) falls on the reduced field: its pixel's column and row (clamped to the picture), and
+    /// its place in reduced pixels.
+    fn pixel(&self, q: [f32; 3]) -> Option<((usize, usize), (f32, f32))> {
+        if q[2].is_nan() || q[2] <= 1e-6 {
+            return None;
+        }
+        let r = self.r;
+        let iz = 1.0 / q[2];
+        let (u, v) = ((q[0] * iz / self.kx + 0.5) * r.w as f32, (q[1] * iz / self.ky + 0.5) * r.h as f32);
+        if !(u.is_finite() && v.is_finite()) {
+            return None;
+        }
+        Some((((u.max(0.0) as usize).min(r.w - 1), (v.max(0.0) as usize).min(r.h - 1)), (u, v)))
     }
 
     /// How much of the light the ray from `p` along `d` (`d` spans the whole way to the light when `whole`, else it is a direction)
-    /// lets through: 1 when nothing blocks it, 0 when a thing does ([`March::let_through`]). `jit` (0..1) offsets the steps.
+    /// lets through: 1 when nothing blocks it, 0 when a thing does. The ray is cut into stretches, one per [`STEP_PX`] of its length
+    /// on the picture; each is looked up at one point (`jit`, 0..1, places it in the stretch) and held against the thing there over
+    /// the stretch's whole range of depth ([`held`]); the stretch that holds back most decides.
     fn clear(&self, p: [f32; 3], d: [f32; 3], whole: bool, jit: f32) -> f32 {
         let r = self.r;
         let mut end = self.exit(p, d);
@@ -278,31 +239,36 @@ impl March<'_> {
         if end.is_nan() || end <= 1e-6 {
             return 1.0;
         }
-        let (z0, z1) = (p[2], p[2] + d[2] * end);
+        // (only the part of the ray between the nearest blocker's front and the farthest one's end can be held back)
+        let (zlo, zhi) = r.span;
+        let (t_in, t_out) = if d[2].abs() > 1e-9 {
+            let (ta, tb) = ((zlo - p[2]) / d[2], (zhi - p[2]) / d[2]);
+            (ta.min(tb).max(0.0), ta.max(tb).min(end))
+        } else if (zlo..=zhi).contains(&p[2]) {
+            (0.0, end)
+        } else {
+            return 1.0;
+        };
+        if t_in.is_nan() || t_out.is_nan() || t_out <= t_in {
+            return 1.0;
+        }
+        let at = |t: f32| [p[0] + d[0] * t, p[1] + d[1] * t, p[2] + d[2] * t];
+        let len = match (self.pixel(at(t_in)), self.pixel(at(t_out))) {
+            (Some((_, a)), Some((_, b))) => (a.0 - b.0).hypot(a.1 - b.1),
+            _ => self.max_steps as f32 * STEP_PX,
+        };
+        let n = ((len / STEP_PX).ceil() as usize).clamp(MIN_STEPS, self.max_steps.max(MIN_STEPS));
+        let span = t_out - t_in;
         let mut through = 1.0f32;
-        let (lw, lh) = (r.w as f32, r.h as f32);
-        for i in 0..STEPS {
-            let t = end * (i as f32 + jit) / STEPS as f32;
-            let q = [p[0] + d[0] * t, p[1] + d[1] * t, p[2] + d[2] * t];
-            if q[2].is_nan() || q[2] <= 1e-6 {
+        for i in 0..n {
+            let (t0, t1) = (t_in + span * i as f32 / n as f32, t_in + span * (i + 1) as f32 / n as f32);
+            let Some(((ix, iy), _)) = self.pixel(at(t_in + span * (i as f32 + jit) / n as f32)) else { break };
+            let k = iy * r.w + ix;
+            let (Some(zs), Some(b)) = (r.z.get(k), r.blk.get(k)) else { continue };
+            let (za, zb) = (p[2] + d[2] * t0, p[2] + d[2] * t1);
+            through = through.min(1.0 - held(*zs, b, za.min(zb), za.max(zb)));
+            if through <= 0.0 {
                 break;
-            }
-            let iz = 1.0 / q[2];
-            let (u, v) = (q[0] * iz / self.kx + 0.5, q[1] * iz / self.ky + 0.5);
-            let (ix, iy) = (((u * lw).max(0.0) as usize).min(r.w - 1), ((v * lh).max(0.0) as usize).min(r.h - 1));
-            let Some(zs) = r.z.get(iy * r.w + ix) else { continue };
-            if r.stand.get(iy * r.w + ix).is_none_or(|s| *s < STAND) {
-                continue;
-            }
-            // (the sample counts as in the band by degrees over the first and last [`EDGE_FADE`] of it: a ray whose crossing of the subject
-            // passes the band's edge makes no line)
-            let (lo, hi) = (zs * BIAS, zs * THICK);
-            let inside = ((q[2] - lo) / (lo * EDGE_FADE.0)).clamp(0.0, 1.0).min(((hi - q[2]) / (hi * EDGE_FADE.1)).clamp(0.0, 1.0));
-            if inside > 0.0 {
-                through = through.min(1.0 - inside * (1.0 - Self::let_through(*zs, z0, z1)));
-                if through <= 0.0 {
-                    break;
-                }
             }
         }
         through
@@ -419,6 +385,7 @@ impl Field {
             z_cut: self.near.exp() * 0.5,
             z_cap: self.far.exp() * 3.0,
             sun_axes,
+            max_steps: if draft { MAX_STEPS.1 } else { MAX_STEPS.0 },
         };
         let mut v = vec![1f32; r.w * r.h];
         v.par_chunks_mut(r.w.max(1)).enumerate().for_each(|(y, row)| {
@@ -428,6 +395,14 @@ impl Field {
             }
         });
         Some(Visibility { w: r.w, h: r.h, v: smoothed(r, &v), draft })
+    }
+
+    /// What blocks light, on the reduced field of the full march (pictures): its width and height, and for each pixel how sure
+    /// it is the front of a thing (0..1) and how deep that thing is taken to be in full, as a share of its front's depth
+    /// (see [`crate::occluder`]).
+    pub fn blocker_plane(&self) -> (usize, usize, Vec<[f32; 2]>) {
+        let r = self.reduced(false);
+        (r.w, r.h, r.blk.iter().map(|b| [b.s, b.full - 1.0]).collect())
     }
 
     /// The visibility `vis` at the field's size, 0..1 per field pixel (pictures and tests; the render multiplies it into a lobe).
