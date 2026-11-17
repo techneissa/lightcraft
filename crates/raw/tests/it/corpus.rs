@@ -25,6 +25,15 @@ const KNOWN_UNSUPPORTED: &[&str] = &[
     "crw-canon-powershot-g5.crw", // Canon PowerShot G5 CRW: entropy coding anomaly (craft-libs crates/crw/clean-room/02-crw-format.md §4)
 ];
 
+/// Files whose own headers contradict their data, so decoding rightly stops with `Corrupt` instead of guessing a
+/// stride and filling the rest with black: matched against the lower-case file name.
+const KNOWN_CORRUPT: &[&str] = &[
+    // The DJI Mavic 3 sample (raw.pixls.us 5140) declares ImageWidth 5376 but stores 5280-wide rows (its ActiveArea):
+    // the strip is 41775360 bytes, 759552 short of 5376 x 3956 x 2. The decoder before the craft-raw cutover accepted
+    // it, and the sweep pinned that output; craft-raw refuses missing rows rather than zero-fill them.
+    "coverage-5140.dng",
+];
+
 #[test]
 fn corpus_raw_decodes() {
     let dir = corpus_root().join("raw");
@@ -72,8 +81,13 @@ fn corpus_raw_decodes() {
         let info = probe_info(&bytes);
         let di = t2.elapsed().as_secs_f64() * 1e3;
         match (&decoded, &info) {
-            (Ok(img), Ok(info)) => assert_eq!(&img.info(), info, "{name}: probe_info differs from decode"),
+            (Ok(img), Ok(info)) => {
+                assert_eq!(crate::probe_comparable(img.info()), crate::probe_comparable(info.clone()), "{name}: probe_info differs from decode")
+            }
             (Err(RawError::Unsupported(_)), Err(RawError::Unsupported(_))) => {}
+            (Err(RawError::Corrupt(d)), Err(RawError::Corrupt(i))) if KNOWN_CORRUPT.contains(&name.as_str()) => {
+                assert_eq!(d, i, "{name}: decode and probe_info disagree on why the file is corrupt");
+            }
             (d, i) => panic!("{name}: decode {:?} but probe_info {:?}", d.as_ref().err(), i.as_ref().err()),
         }
         eprintln!("{name:44} probe_info {di:.1} ms");
@@ -97,6 +111,9 @@ fn corpus_raw_decodes() {
                 assert!(KNOWN_UNSUPPORTED.iter().any(|k| name.contains(k)), "{name}: unexpectedly unsupported: {why}");
                 eprintln!("{name:44} {fmt:?} unsupported ({why}); preview {preview_kb} KB in {tp:.1} ms");
                 unsupported += 1;
+            }
+            Err(RawError::Corrupt(why)) if KNOWN_CORRUPT.contains(&name.as_str()) => {
+                eprintln!("{name:44} {fmt:?} known corrupt ({why}); preview {preview_kb} KB in {tp:.1} ms");
             }
             Err(e) => panic!("{name}: {e}"),
         }
