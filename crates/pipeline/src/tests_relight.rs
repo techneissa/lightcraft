@@ -226,6 +226,34 @@ fn two_lights_add_up_and_a_warm_and_a_cool_one_each_colour_their_side() {
     assert!(mean(&eight, (0.45, 0.4, 0.55, 0.6)) > mean(&one, (0.45, 0.4, 0.55, 0.6)) && (r - g).abs() < 2.0 && (g - b).abs() < 2.0, "{r} {g} {b}");
 }
 
+#[test]
+fn each_light_type_goes_through_the_render() {
+    let (src, info) = (scene(W, H), info());
+    let render_of = |s: &DevelopSettings| render(&src, &info, s, &RenderRequest::fit(W, H)).image;
+    let point = render_of(&lit(60.0));
+    // a spot aimed at the wall to the right of the square lights it, and leaves the left of the photo as it was
+    let mut spot = lit(100.0);
+    let l = &mut spot.relight.lights[0];
+    (l.x, l.y, l.depth) = (0.55, 0.5, 5.0);
+    for (id, v) in [("relight.kind", 1.0), ("relight.spotAimX", 0.85), ("relight.spotAimY", 0.5), ("relight.spotAngle", 14.0)] {
+        assert!(lightcraft_develop::relight::set(&mut spot, id, v));
+    }
+    let off = render_of(&DevelopSettings::default());
+    let spot = render_of(&spot);
+    let (lit_box, dark_box) = ((0.78, 0.4, 0.92, 0.6), (0.02, 0.8, 0.12, 0.95));
+    assert!(mean(&spot, lit_box) > mean(&off, lit_box) + 20.0, "{} {}", mean(&spot, lit_box), mean(&off, lit_box));
+    assert!((mean(&spot, dark_box) - mean(&off, dark_box)).abs() < 2.0);
+    // and every other type changes the photo, none like the point (the settings read back as saved)
+    for kind in [2.0, 3.0, 4.0, 5.0] {
+        let mut s = lit(100.0);
+        assert!(lightcraft_develop::relight::set(&mut s, "relight.kind", kind));
+        let back = DevelopSettings::from_json(&s.to_json()).unwrap();
+        assert_eq!(back.relight, s.relight);
+        let img = render_of(&s);
+        assert!(img.data != off.data && img.data != point.data, "kind {kind}");
+    }
+}
+
 /// Light 0 of the wall with the effects `f` set on it (Amount 70, in the middle).
 fn effect(f: impl FnOnce(&mut lightcraft_develop::relight_effects::LightEffects)) -> DevelopSettings {
     let mut s = wall_with(&[(0.5, 0.0)]);

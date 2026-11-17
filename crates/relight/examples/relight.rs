@@ -34,6 +34,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         softness: num(4, 0.5),
         warmth: num(5, 0.0),
         wrap: num(7, 0.4),
+        kind: lightcraft_relight::LightKind::Point,
     };
     let darken = num(6, 0.0);
     let img = image::open(photo)?.to_rgb8();

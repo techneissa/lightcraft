@@ -80,6 +80,7 @@
 //! | fork 11 | Relight (#288, `fork/relight.md`) | `DevelopSettings.fork_relight` (`amount`, `softness`, `warmth`, `x`, `y`, `depth`, `darken`, `wrap`), left out while default |
 //! | fork 12 | Relight's several lights (#299, `fork/relight.md`) | `DevelopSettings.fork_relight` is `{lights: [{amount, softness, warmth, x, y, depth, wrap}], darken}` (up to 8 lights); a block of fork 11's shape reads as one light |
 //! | fork 13 | Relight's gels, patterns and haze (#302, `fork/relight.md`) | each light in `DevelopSettings.fork_relight.lights` may hold `gelHue`, `gelStrength`, `pattern`, `patternScale`, `patternRotation`, `patternSoftness`, `haze`, each left out at its default; an older build drops them |
+//! | fork 14 | Relight's light types (#300, `fork/relight.md`) | each light in `DevelopSettings.fork_relight.lights` may hold `kind` (`spot`, `sun`, `softbox`, `rim` or `fill`; left out for a point) and `spotAimX`, `spotAimY`, `spotAngle`, `spotEdge`, `sunAzimuth`, `sunElevation`, `boxWidth`, `boxHeight`, `boxRotation`, `rimWidth`, `fillNear`, each left out at its default; an older build drops them |
 //!
 //! Versions 1–14 are `"format":"lightcraft-catalog"` (13 means the official Lens Blur or the fork's camera
 //! profiles; their fields differ, so either reads exactly); the fork writes `"format":"lightcraft-catalog-fork"` from
