@@ -80,13 +80,14 @@ pub struct Faded {
 /// The ids the beams' planes take among the masks (after [`IDS`]): `BEAM_IDS` minus the beam's slot, `u32::MAX - 6` down to
 /// `u32::MAX - 21` (a light's beam, then its source's bright point, issue #334, `MAX_LIGHTS` slots on).
 const BEAM_IDS: u32 = u32::MAX - 6;
-/// The ids the fade's planes take (after the beams'): the dimming and the air's glow.
-const FADE_IDS: u32 = BEAM_IDS - lightcraft_relight::MAX_LIGHTS as u32;
+/// The ids the fade's planes take (after the beams' and the sources', which use `2 · MAX_LIGHTS` slots): the dimming and the
+/// air's glow, `u32::MAX - 22` down.
+const FADE_IDS: u32 = BEAM_IDS - 2 * lightcraft_relight::MAX_LIGHTS as u32;
 
 /// The ids the water's planes take (issue #333): exposure, temperature (cool, warm), tint (green, magenta), the veil's red,
 /// green and blue, `u32::MAX - 101` up to `u32::MAX - 94`, and the shafts' beam `u32::MAX - 120`. Ranges among the masks: the
 /// light's planes `u32::MAX - 5` up, the beams' and the sources' `u32::MAX - 21` to `u32::MAX - 6`, Distance Fade's (issue
-/// #331) from `u32::MAX - 14` down by two for each fade (one, today), the water's far below all of those.
+/// #331) from `u32::MAX - 22` down by two for each fade (one, today), the water's far below all of those.
 const WATER_IDS: u32 = u32::MAX - 93;
 const SHAFT_ID: u32 = u32::MAX - 120;
 
