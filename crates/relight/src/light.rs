@@ -232,7 +232,7 @@ pub fn warmth_tilt(w: f64) -> f32 {
 /// one new lobe; the others stay).
 #[derive(Clone, Debug)]
 pub struct Lobe {
-    m: Vec<f32>,
+    pub(crate) m: Vec<f32>,
 }
 
 impl Lobe {
@@ -243,18 +243,25 @@ impl Lobe {
 }
 
 /// One light's share in a [`Shading`]: its lobe, its strength (the Amount times [`PEAK_GAIN`], as in [`Rig`]) and its
-/// colour as a tilt ([`warmth_tilt`]).
+/// colour as a red–blue tilt ([`warmth_tilt`]) and a green–magenta tint (a gel, `effects::Effects::light_colour`; 0
+/// for a light with none).
 #[derive(Clone, Copy, Debug)]
 pub struct Part<'a> {
     pub lobe: &'a Lobe,
     pub gain: f32,
     pub tilt: f32,
+    pub tint: f32,
 }
 
 impl Rig {
     /// The strength [`Part::gain`] takes: the Amount times [`PEAK_GAIN`].
     pub fn gain(&self) -> f32 {
         self.amount
+    }
+
+    /// The light's place in the field's camera space (the effects project a pattern from it).
+    pub(crate) fn position(&self) -> [f32; 3] {
+        self.pos
     }
 }
 
@@ -272,6 +279,9 @@ pub struct Shading {
     pub height: usize,
     /// Each pixel's gain (stops) and the share of its light that is the new lights' with a warm tilt and with a cool one.
     px: Vec<[f32; 3]>,
+    /// The same for a gel's green–magenta tint: the share with a magenta tint and with a green one. Empty (no memory
+    /// held) while no light has a tint.
+    tn: Vec<[f32; 2]>,
     /// The largest brightening and darkening (stops, both ≥ 0).
     pub up_top: f32,
     pub down_top: f32,
@@ -279,12 +289,17 @@ pub struct Shading {
     /// stage's temperature for the warm plane and for the cool plane (0: no such plane).
     pub tilt_up: f32,
     pub tilt_down: f32,
+    /// The strongest magenta tint among the lights and the strongest green one (positive): the finish stage's tint for
+    /// the magenta plane and for the green plane (0: no such plane).
+    pub tint_up: f32,
+    pub tint_down: f32,
 }
 
 /// A render's planes of the light, finished for the finish stage ([`Shading::split`]): the brightening gain over
 /// [`Shading::up_top`], the darkening over [`Shading::down_top`] (each 0..1), and the light's colour as one plane
 /// of the share of warm-tilted light (applied with [`Shading::tilt_up`]) and one of cool-tilted light (with
-/// −[`Shading::tilt_down`]), each 0..1.
+/// −[`Shading::tilt_down`]), and for a gel one of magenta-tinted light (with [`Shading::tint_up`]) and one of
+/// green-tinted light (with −[`Shading::tint_down`]), each 0..1.
 pub struct Split {
     pub width: usize,
     pub height: usize,
@@ -292,6 +307,8 @@ pub struct Split {
     pub down: Vec<f32>,
     pub warm: Option<Vec<f32>>,
     pub cool: Option<Vec<f32>>,
+    pub magenta: Option<Vec<f32>>,
+    pub green: Option<Vec<f32>>,
 }
 
 /// The guided filter's regularization along an edge (a variance of the cube-root luminance).
@@ -316,7 +333,7 @@ impl Field {
     /// The light of `rig` alone over the field (its lobe, made here).
     pub fn shading(&self, rig: &Rig) -> Shading {
         let lobe = self.lobe(rig);
-        self.shading_of(&[Part { lobe: &lobe, gain: rig.amount, tilt: 1.0 }], rig.ambient, rig.ev)
+        self.shading_of(&[Part { lobe: &lobe, gain: rig.amount, tilt: 1.0, tint: 0.0 }], rig.ambient, rig.ev)
     }
 
     /// The lights `parts` together over the field, with `ambient` (1 less what Darken Surroundings takes, [`Rig`]) for a
@@ -325,43 +342,41 @@ impl Field {
         let (w, h) = (self.width, self.height);
         let n = w * h;
         let parts: Vec<Part<'_>> = parts.iter().filter(|p| p.lobe.m.len() == n && p.gain.is_finite() && p.gain > 0.0).copied().collect();
-        let tilt_up = parts.iter().map(|p| p.tilt).filter(|t| t.is_finite()).fold(0f32, f32::max);
-        let tilt_down = parts.iter().map(|p| -p.tilt).filter(|t| t.is_finite()).fold(0f32, f32::max);
-        // each light's weight in the warm plane and in the cool one (its tilt over the strongest)
-        let weights: Vec<(f32, f32)> = parts
-            .iter()
-            .map(|p| {
-                (
-                    if tilt_up > 0.0 { (p.tilt / tilt_up).clamp(0.0, 1.0) } else { 0.0 },
-                    if tilt_down > 0.0 { (-p.tilt / tilt_down).clamp(0.0, 1.0) } else { 0.0 },
-                )
-            })
-            .collect();
+        // the colour components: warm and cool (a tilt's sign), magenta and green (a tint's sign), each with the
+        // strongest of the lights' values as its top
+        let comp = |p: &Part<'_>, k: usize| -> f32 {
+            let v = if k < 2 { p.tilt } else { p.tint };
+            let v = if k.is_multiple_of(2) { v } else { -v };
+            if v.is_finite() { v.max(0.0) } else { 0.0 }
+        };
+        let tops: [f32; 4] = std::array::from_fn(|k| parts.iter().map(|p| comp(p, k)).fold(0f32, f32::max));
+        let (tilt_up, tilt_down, tint_up, tint_down) = (tops[0], tops[1], tops[2], tops[3]);
+        // each light's weight in each component (its value over the strongest)
+        let weights: Vec<[f32; 4]> =
+            parts.iter().map(|p| std::array::from_fn(|k| if tops[k] > 0.0 { (comp(p, k) / tops[k]).clamp(0.0, 1.0) } else { 0.0 })).collect();
+        let want_tint = tint_up > 0.0 || tint_down > 0.0;
         let ev = if ev.is_finite() { ev.clamp(-10.0, 10.0) } else { 0.0 };
         let mut stops = vec![0f32; n];
-        let mut warm = vec![0f32; n];
-        let mut cool = vec![0f32; n];
-        stops.par_chunks_mut(w.max(1)).zip(warm.par_chunks_mut(w.max(1))).zip(cool.par_chunks_mut(w.max(1))).enumerate().for_each(
-            |(y, ((st, wa), co))| {
-                for (x, ((a, b), c)) in st.iter_mut().zip(wa.iter_mut()).zip(co.iter_mut()).enumerate() {
-                    let i = y * w + x;
-                    let (mut total, mut sum_warm, mut sum_cool) = (0f32, 0f32, 0f32);
-                    for (p, (ww, wc)) in parts.iter().zip(&weights) {
-                        let added = p.gain * p.lobe.m.get(i).copied().unwrap_or(0.0);
-                        total += added;
-                        sum_warm += added * ww;
-                        sum_cool += added * wc;
-                    }
-                    let (_, _, lum) = self.at_px(i);
-                    let s = grade(ambient, ev, total, lum);
-                    *a = s.stops;
-                    if total > 0.0 {
-                        *b = s.share * (sum_warm / total);
-                        *c = s.share * (sum_cool / total);
+        let mut col = vec![[0f32; 4]; n];
+        stops.par_chunks_mut(w.max(1)).zip(col.par_chunks_mut(w.max(1))).enumerate().for_each(|(y, (st, co))| {
+            for (x, (a, c)) in st.iter_mut().zip(co.iter_mut()).enumerate() {
+                let i = y * w + x;
+                let (mut total, mut sums) = (0f32, [0f32; 4]);
+                for (p, wk) in parts.iter().zip(&weights) {
+                    let added = p.gain * p.lobe.m.get(i).copied().unwrap_or(0.0);
+                    total += added;
+                    for (s, k) in sums.iter_mut().zip(wk) {
+                        *s += added * k;
                     }
                 }
-            },
-        );
+                let (_, _, lum) = self.at_px(i);
+                let s = grade(ambient, ev, total, lum);
+                *a = s.stops;
+                if total > 0.0 {
+                    *c = sums.map(|v| s.share * (v / total));
+                }
+            }
+        });
         let r = crate::field::BAND_RADIUS;
         let refine = |p: &[f32]| -> Vec<(usize, f32)> {
             if self.band.is_empty() || p.iter().all(|v| *v == 0.0) {
@@ -396,23 +411,26 @@ impl Field {
                 *v = q;
             }
         }
-        for plane in [&mut warm, &mut cool] {
-            for (i, q) in refine(plane) {
+        // (a plane that no light has a component for stays 0 and is refined for nothing)
+        for k in 0..if want_tint { 4 } else { 2 } {
+            let mut plane: Vec<f32> = col.iter().map(|c| c.get(k).copied().unwrap_or(0.0)).collect();
+            for (i, q) in refine(&plane) {
                 if let Some(v) = plane.get_mut(i) {
                     *v = q.clamp(0.0, 1.0);
+                }
+            }
+            for (c, v) in col.iter_mut().zip(plane) {
+                if let Some(slot) = c.get_mut(k) {
+                    *slot = v;
                 }
             }
         }
         let up_top = stops.iter().copied().fold(0f32, f32::max);
         let down_top = stops.iter().copied().fold(0f32, |a, v| a.max(-v));
-        let px = stops.into_iter().zip(warm).zip(cool).map(|((a, b), c)| [a, b, c]).collect();
-        Shading { width: w, height: h, px, up_top, down_top, tilt_up, tilt_down }
+        let tn = if want_tint { col.iter().map(|c| [c[2], c[3]]).collect() } else { Vec::new() };
+        let px = stops.into_iter().zip(&col).map(|(a, c)| [a, c[0], c[1]]).collect();
+        Shading { width: w, height: h, px, tn, up_top, down_top, tilt_up, tilt_down, tint_up, tint_down }
     }
-}
-
-/// The `h` rows (`row` pixels each) of `plane`, or `h` empty slots when it isn't `wanted`.
-fn rows_of(plane: &mut [f32], row: usize, h: usize, wanted: bool) -> Vec<Option<&mut [f32]>> {
-    if wanted { plane.chunks_mut(row).map(Some).collect() } else { (0..h).map(|_| None).collect() }
 }
 
 /// The summed-area table of `p` (`w × h`): `(w + 1) × (h + 1)` sums, in f64 (exact enough for any window).
@@ -447,35 +465,40 @@ pub struct Planes {
 impl Shading {
     /// Memory held (bytes).
     pub fn bytes(&self) -> usize {
-        self.px.len() * 12
+        self.px.len() * 12 + self.tn.len() * 8
     }
 
     /// The light at normalized photo coordinates `(u, v)` (bilinear, clamped at the borders); its `share` is the
-    /// warm and the cool plane together.
+    /// warm and the cool plane together (or the magenta and the green, for a light with a gel and no tilt).
     #[inline]
     pub fn at(&self, u: f32, v: f32) -> Shade {
-        let [stops, warm, cool] = self.sample(u * self.width as f32, v * self.height as f32);
-        Shade { stops, share: (warm + cool).min(1.0) }
+        let [stops, warm, cool, magenta, green] = self.sample(u * self.width as f32, v * self.height as f32);
+        Shade { stops, share: (warm + cool).max(magenta + green).min(1.0) }
     }
 
-    /// The three values at field position `(x, y)` (pixel centres at `i + 0.5`), bilinear, clamped.
+    /// The values at field position `(x, y)` (pixel centres at `i + 0.5`): the gain, then the warm, cool, magenta and
+    /// green planes; bilinear, clamped.
     #[inline]
-    fn sample(&self, x: f32, y: f32) -> [f32; 3] {
+    fn sample(&self, x: f32, y: f32) -> [f32; 5] {
         let (w, h) = (self.width, self.height);
-        let (Some(xm), Some(ym)) = (w.checked_sub(1), h.checked_sub(1)) else { return [0.0; 3] };
+        let (Some(xm), Some(ym)) = (w.checked_sub(1), h.checked_sub(1)) else { return [0.0; 5] };
         let fx = (x - 0.5).clamp(0.0, xm as f32);
         let fy = (y - 0.5).clamp(0.0, ym as f32);
         let (x0, y0) = (fx as usize, fy as usize);
         let (x1, y1) = ((x0 + 1).min(xm), (y0 + 1).min(ym));
         let (tx, ty) = (fx - x0 as f32, fy - y0 as f32);
-        let at = |x: usize, y: usize| self.px.get(y * w + x).copied().unwrap_or([0.0; 3]);
+        let at = |x: usize, y: usize| {
+            let [a, b, c] = self.px.get(y * w + x).copied().unwrap_or([0.0; 3]);
+            let [d, e] = self.tn.get(y * w + x).copied().unwrap_or([0.0; 2]);
+            [a, b, c, d, e]
+        };
         let (a, b, c, d) = (at(x0, y0), at(x1, y0), at(x0, y1), at(x1, y1));
         let lerp = |k: usize| {
             let top = a[k] + (b[k] - a[k]) * tx;
             let bottom = c[k] + (d[k] - c[k]) * tx;
             top + (bottom - top) * ty
         };
-        [lerp(0), lerp(1), lerp(2)]
+        [lerp(0), lerp(1), lerp(2), lerp(3), lerp(4)]
     }
 
     /// [`Planes`] over `w × h` pixels; `to_photo` maps a pixel centre to normalized photo coordinates (a pixel it
@@ -499,40 +522,53 @@ impl Shading {
     }
 
     /// The render's planes, finished (see [`Split`]), in one pass over its `w × h` pixels; `to_photo` maps a pixel
-    /// centre to normalized photo coordinates. A colour plane is made only when some light has that tilt.
+    /// centre to normalized photo coordinates. A colour plane is made only when some light has that tilt or tint.
     pub fn split(&self, w: usize, h: usize, to_photo: &(dyn Fn(f64, f64) -> (f64, f64) + Sync)) -> Split {
         let n = w.saturating_mul(h);
         let (ku, kd) = (if self.up_top > 0.0 { 1.0 / self.up_top } else { 0.0 }, if self.down_top > 0.0 { 1.0 / self.down_top } else { 0.0 });
         let (fw, fh) = (self.width as f32, self.height as f32);
-        let (want_warm, want_cool) = (self.tilt_up > 0.0, self.tilt_down > 0.0);
+        let want = [self.tilt_up > 0.0, self.tilt_down > 0.0, self.tint_up > 0.0, self.tint_down > 0.0];
         let mut up = vec![0f32; n];
         let mut down = vec![0f32; n];
-        let mut warm = vec![0f32; if want_warm { n } else { 0 }];
-        let mut cool = vec![0f32; if want_cool { n } else { 0 }];
+        let mut planes: [Vec<f32>; 4] = std::array::from_fn(|k| vec![0f32; if want[k] { n } else { 0 }]);
         let row = w.max(1);
         // (a colour plane that isn't wanted has no rows: its chunks are empty)
-        let (wr, cr) = (rows_of(&mut warm, row, h, want_warm), rows_of(&mut cool, row, h, want_cool));
-        up.par_chunks_mut(row).zip(down.par_chunks_mut(row)).zip(wr.into_par_iter().zip(cr)).enumerate().for_each(
-            |(y, ((ur, dr), (mut wr, mut cr)))| {
-                for x in 0..ur.len() {
-                    let (u, v) = to_photo(x as f64 + 0.5, y as f64 + 0.5);
-                    if !(u.is_finite() && v.is_finite()) {
-                        continue;
-                    }
-                    let [stops, a, b] = self.sample(u as f32 * fw, v as f32 * fh);
-                    if let (Some(p), Some(q)) = (ur.get_mut(x), dr.get_mut(x)) {
-                        (*p, *q) = ((stops * ku).clamp(0.0, 1.0), (-stops * kd).clamp(0.0, 1.0));
-                    }
-                    if let Some(c) = wr.as_deref_mut().and_then(|r| r.get_mut(x)) {
-                        *c = a.clamp(0.0, 1.0);
-                    }
-                    if let Some(c) = cr.as_deref_mut().and_then(|r| r.get_mut(x)) {
-                        *c = b.clamp(0.0, 1.0);
+        let mut rows: Vec<[Option<&mut [f32]>; 4]> = (0..h).map(|_| [None, None, None, None]).collect();
+        for (k, plane) in planes.iter_mut().enumerate() {
+            for (slot, chunk) in rows.iter_mut().zip(plane.chunks_mut(row)) {
+                if let Some(s) = slot.get_mut(k) {
+                    *s = Some(chunk);
+                }
+            }
+        }
+        up.par_chunks_mut(row).zip(down.par_chunks_mut(row)).zip(rows.into_par_iter()).enumerate().for_each(|(y, ((ur, dr), mut cr))| {
+            for x in 0..ur.len() {
+                let (u, v) = to_photo(x as f64 + 0.5, y as f64 + 0.5);
+                if !(u.is_finite() && v.is_finite()) {
+                    continue;
+                }
+                let [stops, a, b, c, d] = self.sample(u as f32 * fw, v as f32 * fh);
+                if let (Some(p), Some(q)) = (ur.get_mut(x), dr.get_mut(x)) {
+                    (*p, *q) = ((stops * ku).clamp(0.0, 1.0), (-stops * kd).clamp(0.0, 1.0));
+                }
+                for (slot, value) in cr.iter_mut().zip([a, b, c, d]) {
+                    if let Some(cell) = slot.as_deref_mut().and_then(|r| r.get_mut(x)) {
+                        *cell = value.clamp(0.0, 1.0);
                     }
                 }
-            },
-        );
-        Split { width: w, height: h, up, down, warm: want_warm.then_some(warm), cool: want_cool.then_some(cool) }
+            }
+        });
+        let [warm, cool, magenta, green] = planes;
+        Split {
+            width: w,
+            height: h,
+            up,
+            down,
+            warm: want[0].then_some(warm),
+            cool: want[1].then_some(cool),
+            magenta: want[2].then_some(magenta),
+            green: want[3].then_some(green),
+        }
     }
 }
 
@@ -661,8 +697,12 @@ mod tests {
         let rigs: Vec<Rig> =
             lights.iter().map(|(x, w)| f.rig(&Light { x: *x, amount: 0.5, warmth: *w, softness: 0.2, ..light() }, 0.0, 0.0)).collect();
         let lobes: Vec<Lobe> = rigs.iter().map(|r| f.lobe(r)).collect();
-        let parts: Vec<Part<'_>> =
-            rigs.iter().zip(&lobes).zip(lights).map(|((r, l), (_, w))| Part { lobe: l, gain: r.gain(), tilt: warmth_tilt(w / 100.0) }).collect();
+        let parts: Vec<Part<'_>> = rigs
+            .iter()
+            .zip(&lobes)
+            .zip(lights)
+            .map(|((r, l), (_, w))| Part { lobe: l, gain: r.gain(), tilt: warmth_tilt(w / 100.0), tint: 0.0 })
+            .collect();
         f.shading_of(&parts, 1.0, 0.0)
     }
 
@@ -690,14 +730,14 @@ mod tests {
         let rig = f.rig(&Light { amount: 0.6, ..light() }, 0.3, 0.0);
         let alone = f.shading(&rig);
         let lobe = f.lobe(&rig);
-        let set = f.shading_of(&[Part { lobe: &lobe, gain: rig.gain(), tilt: 1.0 }], rig.ambient, rig.ev);
+        let set = f.shading_of(&[Part { lobe: &lobe, gain: rig.gain(), tilt: 1.0, tint: 0.0 }], rig.ambient, rig.ev);
         assert_eq!(alone.px, set.px);
         // many lights on top of each other never take a pixel past the ceiling
-        let eight = f.shading_of(&[Part { lobe: &lobe, gain: rig.gain(), tilt: 0.0 }; MAX_LIGHTS], 1.0, 0.0);
+        let eight = f.shading_of(&[Part { lobe: &lobe, gain: rig.gain(), tilt: 0.0, tint: 0.0 }; MAX_LIGHTS], 1.0, 0.0);
         let top = (0..96).map(|x| eight.at((x as f32 + 0.5) / 96.0, 0.5).stops).fold(0f32, f32::max);
         assert!(-2.0 + top <= CEILING + 0.01, "{top}");
         // a lobe of another size adds nothing
         let small = Field::from_parts(8, 8, vec![0.0; 64], vec![-2.0; 64]).unwrap();
-        assert_eq!(small.shading_of(&[Part { lobe: &lobe, gain: 7.0, tilt: 0.0 }], 1.0, 0.0).up_top, 0.0);
+        assert_eq!(small.shading_of(&[Part { lobe: &lobe, gain: 7.0, tilt: 0.0, tint: 0.0 }], 1.0, 0.0).up_top, 0.0);
     }
 }

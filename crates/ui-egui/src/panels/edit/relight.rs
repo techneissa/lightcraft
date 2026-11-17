@@ -13,6 +13,8 @@ use serde_json::{Value, json};
 
 use super::{Icon, LightcraftApp, Tokens, control, register};
 
+mod effects;
+
 /// How near a press must be to a handle to take it (points).
 const HIT: f32 = 12.0;
 
@@ -136,6 +138,8 @@ pub(super) fn relight(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSet
         control(app, ui, d, "relight.darken", true);
         control(app, ui, d, &format!("relight.{sel}.wrap"), true);
     }
+    // (issue #302: the light's gel, pattern and haze)
+    effects::effects(app, ui, d, sel);
 }
 
 /// The photo's lights, one row each (a click selects it), and Add Light, Duplicate and Delete under them.
@@ -160,7 +164,7 @@ fn lights_list(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings, 
                 t.inset
             },
         );
-        p.circle_filled(pos2(r.left() + 14.0, r.center().y), 5.0, light_tint(l.warmth));
+        p.circle_filled(pos2(r.left() + 14.0, r.center().y), 5.0, effects::dot(light_tint(l.warmth), &l.effects));
         let label = crate::i18n::tr_format!("Light {n}", n = i + 1);
         p.text(pos2(r.left() + 28.0, r.center().y), Align2::LEFT_CENTER, label, t.font(12.0), t.text);
         let amount = if l.amount > 0.0 { format!("{}", l.amount.round()) } else { crate::i18n::tr("Off").to_string() };

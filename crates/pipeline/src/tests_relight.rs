@@ -146,7 +146,8 @@ fn a_warm_light_warms_a_neutral_wall_and_a_cool_one_cools_it() {
     };
     for warmth in [-100.0, -67.0, 67.0, 100.0] {
         let mut s = DevelopSettings::default();
-        s.relight.lights[0] = LightSettings { amount: 48.0, softness: 84.0, wrap: 28.0, x: 0.5, y: 0.5, depth: 10.0, warmth };
+        s.relight.lights[0] =
+            LightSettings { amount: 48.0, softness: 84.0, wrap: 28.0, x: 0.5, y: 0.5, depth: 10.0, warmth, ..LightSettings::default() };
         let img = render(&src, &wall, &s, &RenderRequest::fit(W, H)).image;
         for (name, b) in [("left", (0.1, 0.4, 0.2, 0.6)), ("middle", (0.45, 0.4, 0.55, 0.6)), ("right", (0.8, 0.4, 0.9, 0.6))] {
             let [r, g, b] = mean_rgb(&img, b);
@@ -164,8 +165,10 @@ fn a_warm_light_warms_a_neutral_wall_and_a_cool_one_cools_it() {
 /// A flat grey wall field, lit by `lights` (place; Warmth), each at Amount 60.
 fn wall_with(lights: &[(f64, f64)]) -> DevelopSettings {
     let mut s = DevelopSettings::default();
-    s.relight.lights =
-        lights.iter().map(|&(x, warmth)| LightSettings { amount: 60.0, softness: 30.0, wrap: 28.0, x, y: 0.5, depth: 10.0, warmth }).collect();
+    s.relight.lights = lights
+        .iter()
+        .map(|&(x, warmth)| LightSettings { amount: 60.0, softness: 30.0, wrap: 28.0, x, y: 0.5, depth: 10.0, warmth, ..LightSettings::default() })
+        .collect();
     s
 }
 
@@ -183,7 +186,8 @@ fn a_block_saved_with_one_light_renders_as_that_light() {
     let old = serde_json::json!({"fork_relight": {"amount": 70.0, "softness": 35.0, "warmth": 40.0, "x": 0.3, "y": 0.45, "depth": 10.0, "darken": 25.0, "wrap": 30.0}});
     let read = DevelopSettings { relight: DevelopSettings::from_json(&old).unwrap().relight, ..DevelopSettings::default() };
     let mut built = DevelopSettings::default();
-    built.relight.lights[0] = LightSettings { amount: 70.0, softness: 35.0, warmth: 40.0, x: 0.3, y: 0.45, depth: 10.0, wrap: 30.0 };
+    built.relight.lights[0] =
+        LightSettings { amount: 70.0, softness: 35.0, warmth: 40.0, x: 0.3, y: 0.45, depth: 10.0, wrap: 30.0, ..LightSettings::default() };
     built.relight.darken = 25.0;
     let req = RenderRequest::fit(W, H);
     let (a, b) = (render(&src, &info, &read, &req).image, render(&src, &info, &built, &req).image);
@@ -220,4 +224,52 @@ fn two_lights_add_up_and_a_warm_and_a_cool_one_each_colour_their_side() {
     let (one, eight) = (alone(0.5, 0.0), render(&src, &info, &wall_with(&[(0.5, 0.0); 8]), &req).image);
     let [r, g, b] = mean_rgb(&eight, (0.45, 0.4, 0.55, 0.6));
     assert!(mean(&eight, (0.45, 0.4, 0.55, 0.6)) > mean(&one, (0.45, 0.4, 0.55, 0.6)) && (r - g).abs() < 2.0 && (g - b).abs() < 2.0, "{r} {g} {b}");
+}
+
+/// Light 0 of the wall with the effects `f` set on it (Amount 70, in the middle).
+fn effect(f: impl FnOnce(&mut lightcraft_develop::relight_effects::LightEffects)) -> DevelopSettings {
+    let mut s = wall_with(&[(0.5, 0.0)]);
+    s.relight.lights[0].amount = 70.0;
+    f(&mut s.relight.lights[0].effects);
+    s
+}
+
+#[test]
+fn a_red_gel_reddens_a_grey_wall_and_a_wall_without_one_is_as_it_was() {
+    let (src, info) = wall();
+    let req = RenderRequest::fit(W, H);
+    let plain = render(&src, &info, &effect(|_| {}), &req).image;
+    let red = render(&src, &info, &effect(|e| (e.gel_hue, e.gel_strength) = (0.0, 100.0)), &req).image;
+    let [r, g, b] = mean_rgb(&red, (0.4, 0.4, 0.6, 0.6));
+    assert!(red.data.iter().all(|p| p[3] == 255) && r > 2.0 * g.max(b), "{r} {g} {b}");
+    let [pr, pg, pb] = mean_rgb(&plain, (0.4, 0.4, 0.6, 0.6));
+    assert!((pr - pg).abs() < 2.0 && (pg - pb).abs() < 2.0, "{pr} {pg} {pb}");
+    // a gel at no strength is no gel: the same picture, to the byte
+    let none = render(&src, &info, &effect(|e| (e.gel_hue, e.gel_strength) = (200.0, 0.0)), &req).image;
+    assert!(none.data == plain.data);
+    // teal and magenta go to their sides
+    let teal = mean_rgb(&render(&src, &info, &effect(|e| (e.gel_hue, e.gel_strength) = (178.0, 80.0)), &req).image, (0.4, 0.4, 0.6, 0.6));
+    assert!(teal[0] < teal[1] && teal[0] < teal[2], "{teal:?}");
+    let magenta = mean_rgb(&render(&src, &info, &effect(|e| (e.gel_hue, e.gel_strength) = (305.0, 80.0)), &req).image, (0.4, 0.4, 0.6, 0.6));
+    assert!(magenta[1] < magenta[0] && magenta[1] < magenta[2], "{magenta:?}");
+}
+
+#[test]
+fn a_pattern_stripes_the_wall_and_haze_brightens_around_the_light() {
+    let (photo, field) = (scene(W, H), info());
+    let (src, info) = wall();
+    let req = RenderRequest::fit(W, H);
+    let plain = render(&src, &info, &effect(|_| {}), &req).image;
+    let blinds = render(&src, &info, &effect(|e| (e.pattern, e.pattern_scale, e.pattern_softness) = (1.0, 60.0, 10.0)), &req).image;
+    // down a column the light goes on and off (the wall under no light is about 70)
+    let col: Vec<f32> = (0..H).map(|y| luma(blinds.get(W / 2, y))).collect();
+    let flips = col.windows(2).filter(|p| (p[0] > 85.0) != (p[1] > 85.0)).count();
+    assert!(flips >= 4, "{flips} edges");
+    assert!(blinds.data != plain.data);
+    // haze adds light, more over the far wall than over the near square at the same distance from the light (a wall
+    // with no depth to it has no haze: nothing is farther than anything)
+    let (plain, hazy) = (render(&photo, &field, &effect(|_| {}), &req).image, render(&photo, &field, &effect(|e| e.haze = 100.0), &req).image);
+    let (far, near) = ((0.65, 0.4, 0.75, 0.6), (0.25, 0.4, 0.35, 0.6));
+    assert!(mean(&hazy, far) > mean(&plain, far) + 1.0, "{} {}", mean(&hazy, far), mean(&plain, far));
+    assert!(mean(&hazy, far) - mean(&plain, far) > mean(&hazy, near) - mean(&plain, near), "haze is no stronger over what is far");
 }
