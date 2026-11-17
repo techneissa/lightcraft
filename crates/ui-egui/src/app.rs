@@ -167,6 +167,7 @@ impl LightcraftApp {
             display_error: None,
             screen_profile: None,
             screen_profile_read: None,
+            background: Default::default(),
             library_problem: None,
             library_window_input: Default::default(),
             alt_asks_for_library: false,
