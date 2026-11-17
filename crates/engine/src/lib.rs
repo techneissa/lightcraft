@@ -56,6 +56,7 @@ pub mod glare_repair;
 mod gpu_run;
 pub mod guard;
 pub mod hair_edges;
+pub mod idle;
 pub mod import;
 mod import_move;
 pub mod lama_fill;

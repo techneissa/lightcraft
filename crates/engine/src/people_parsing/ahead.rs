@@ -137,7 +137,7 @@ impl PeopleParsing {
 
     /// Whether a parse can run now: the chosen set is downloaded (or a test runner stands in for it).
     pub(crate) fn can_parse(&self) -> bool {
-        lock(&self.inner.runner).is_some() || self.installed(self.model_set())
+        lock(&self.inner.runner).is_some() || self.installed_lately(self.model_set())
     }
 
     /// The parse filed under `key`, from memory or disk (no run); kept in memory as the newest.

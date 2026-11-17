@@ -23,9 +23,6 @@ pub mod vision;
 
 /// The newest mattes kept in memory (4 MB each).
 const IN_MEMORY: usize = 4;
-/// How long the model stays loaded after its last use.
-#[cfg(feature = "sam")]
-const KEEP_LOADED: std::time::Duration = std::time::Duration::from_secs(120);
 /// The folder of the model under the models folder.
 pub const MODEL_DIR: &str = "birefnet-matting";
 /// The model file's size, in bytes (pinned with its SHA-256 in `lightcraft-birefnet`'s `Variant::Matting`).
@@ -171,7 +168,6 @@ struct Loaded {
     model: lightcraft_birefnet::BiRefNet,
     /// The engine asked for when it loaded.
     runtime: lightcraft_coreml::Runtime,
-    last_used: std::time::Instant,
 }
 
 struct Inner {
@@ -185,8 +181,9 @@ struct Inner {
     runs: AtomicUsize,
     #[cfg(feature = "sam")]
     loaded: Mutex<Option<Loaded>>,
+    /// Lets the model go after a while without use.
     #[cfg(feature = "sam")]
-    watcher: AtomicBool,
+    idle: std::sync::OnceLock<crate::idle::Tracker>,
     #[cfg(feature = "sam")]
     download: crate::segment::download::Downloader,
     /// The GPU failed once: run on the CPU from now on ([`on_devices`]).
@@ -227,7 +224,7 @@ impl HairEdges {
                 #[cfg(feature = "sam")]
                 loaded: Mutex::new(None),
                 #[cfg(feature = "sam")]
-                watcher: AtomicBool::new(false),
+                idle: std::sync::OnceLock::new(),
                 #[cfg(feature = "sam")]
                 download: Default::default(),
                 gpu_refused: AtomicBool::new(false),

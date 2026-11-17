@@ -140,6 +140,12 @@ impl MediaCache {
         }
     }
 
+    /// Let go of every full-resolution original, also the one of the photo on screen (the window is in the
+    /// background: nobody pans it; the next window render decodes it again).
+    pub fn release_originals(&mut self) {
+        self.full.clear();
+    }
+
     fn trim_full(&mut self) {
         while self.full.len() > self.full_capacity {
             let oldest = self.full.iter().enumerate().min_by_key(|(_, e)| e.2).map(|(i, _)| i).unwrap_or(0);

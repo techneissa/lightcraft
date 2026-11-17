@@ -30,6 +30,8 @@ impl PeopleParsing {
     }
 
     fn set_download(&self, set: ModelSet, d: Download) {
+        // (what is in the models folder may have changed)
+        self.forget_installed();
         lock(&self.inner.downloads).insert(set, d);
     }
 

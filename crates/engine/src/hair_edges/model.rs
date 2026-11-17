@@ -6,7 +6,7 @@ use std::sync::{Arc, Weak};
 
 use lightcraft_birefnet::{BiRefNet, Variant};
 
-use super::{Attempt, HairEdges, Inner, KEEP_LOADED, Loaded, MODEL_BYTES, Matte, lock, on_devices};
+use super::{Attempt, HairEdges, Inner, Loaded, MODEL_BYTES, Matte, lock, on_devices};
 use crate::segment::DownloadStatus;
 
 /// What the user reads when the file is there but cannot be used.
@@ -58,10 +58,9 @@ impl HairEdges {
                     model.backend(),
                     if model.device().is_cpu() { "CPU" } else { "GPU" }
                 );
-                *slot = Some(Loaded { model, runtime, last_used: std::time::Instant::now() });
+                *slot = Some(Loaded { model, runtime });
             }
             let Some(l) = slot.as_mut() else { return Attempt::Fail("the BiRefNet Matting model did not load".into()) };
-            l.last_used = std::time::Instant::now();
             l.model.set_cancel(Some(cancel.clone()));
             let out = l.model.matte(rgb, w, h);
             l.model.set_cancel(None);
@@ -79,32 +78,27 @@ impl HairEdges {
         match &out {
             // (a model that failed, or panicked mid-run, is not kept)
             Err(_) => *lock(&self.inner.loaded) = None,
-            Ok(_) => self.watch(),
+            Ok(_) => self.idle().touch(),
         }
         out
     }
 
-    /// Drop the model once it has been idle for [`KEEP_LOADED`] (one watcher thread at a time).
-    fn watch(&self) {
-        if self.inner.watcher.swap(true, Ordering::AcqRel) {
-            return;
-        }
-        let weak: Weak<Inner> = Arc::downgrade(&self.inner);
-        let spawned = std::thread::Builder::new().name("matting-idle".into()).spawn(move || {
-            loop {
-                std::thread::sleep(std::time::Duration::from_secs(10));
-                let Some(inner) = weak.upgrade() else { return };
-                let mut slot = lock(&inner.loaded);
-                if slot.as_ref().is_none_or(|l| l.last_used.elapsed() >= KEEP_LOADED) {
-                    *slot = None;
-                    inner.watcher.store(false, Ordering::Release);
-                    return;
-                }
-            }
-        });
-        if spawned.is_err() {
-            self.inner.watcher.store(false, Ordering::Release);
-        }
+    /// The shared idle rule's handle (`crate::idle`): the model is let go after a while without use. A run holds the
+    /// `loaded` lock, so a model found locked is in use.
+    fn idle(&self) -> &crate::idle::Tracker {
+        self.inner.idle.get_or_init(|| {
+            let weak: Weak<Inner> = Arc::downgrade(&self.inner);
+            crate::idle::register("BiRefNet Matting", move || {
+                use crate::idle::Unload;
+                let Some(inner) = weak.upgrade() else { return Unload::Nothing };
+                let old = match inner.loaded.try_lock() {
+                    Ok(mut slot) => slot.take(),
+                    Err(std::sync::TryLockError::Poisoned(p)) => p.into_inner().take(),
+                    Err(std::sync::TryLockError::WouldBlock) => return Unload::Busy,
+                };
+                if old.is_some() { Unload::Freed } else { Unload::Nothing }
+            })
+        })
     }
 
     /// The download's state.

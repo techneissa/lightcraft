@@ -122,6 +122,9 @@ struct Shared {
     /// The session is setting up an export's render ([`Session::relight_held`]): it takes a kept field and starts
     /// none (the export's worker makes it).
     hold: AtomicBool,
+    /// The shared idle rule (`crate::idle`, issue #304): the depth model (about 3.4 GB on the GPU while loaded) and
+    /// all fields but the newest go after a while without use.
+    idle: std::sync::OnceLock<crate::idle::Tracker>,
 }
 
 /// One of the store's flags while the session sets up renders.
@@ -132,12 +135,47 @@ enum Flag {
 }
 
 impl Shared {
+    fn idle(self: &Arc<Self>) -> &crate::idle::Tracker {
+        self.idle.get_or_init(|| {
+            let weak = Arc::downgrade(self);
+            crate::idle::register("Relight", move || weak.upgrade().map_or(crate::idle::Unload::Nothing, |s| s.let_go()))
+        })
+    }
+
+    /// Drop the depth model and every field but the newest (the photo in front: its light keeps its field).
+    fn let_go(&self) -> crate::idle::Unload {
+        use crate::idle::Unload;
+        // (what is dropped is dropped after its lock is released)
+        #[cfg(feature = "sam")]
+        let model = match self.model.try_lock() {
+            Ok(mut m) => m.take(),
+            Err(std::sync::TryLockError::Poisoned(p)) => p.into_inner().take(),
+            Err(std::sync::TryLockError::WouldBlock) => return Unload::Busy,
+        };
+        let fields = match self.state.try_lock() {
+            Ok(mut st) => all_but_newest(&mut st),
+            Err(std::sync::TryLockError::Poisoned(p)) => all_but_newest(&mut p.into_inner()),
+            Err(std::sync::TryLockError::WouldBlock) => return Unload::Busy,
+        };
+        #[cfg(feature = "sam")]
+        let freed = model.is_some() || !fields.is_empty();
+        #[cfg(not(feature = "sam"))]
+        let freed = !fields.is_empty();
+        if freed { Unload::Freed } else { Unload::Nothing }
+    }
+
     fn flag(&self, f: Flag) -> &AtomicBool {
         match f {
             Flag::Building => &self.building,
             Flag::Hold => &self.hold,
         }
     }
+}
+
+/// Take every kept field but the newest out of `st`.
+fn all_but_newest(st: &mut State) -> Vec<(String, Arc<Made>)> {
+    let at = st.made.len().min(1);
+    st.made.split_off(at)
 }
 
 /// A flag set by [`RelightStore::raise`], put back as it was when dropped, also when a panic unwinds past it (a
@@ -189,6 +227,7 @@ impl RelightStore {
 
     /// Field `key`, when it is kept (it becomes the most recently used).
     fn get(&self, key: &str) -> Option<Arc<Made>> {
+        self.shared.idle().touch();
         let mut st = self.lock();
         let i = st.made.iter().position(|(k, _)| k == key)?;
         let hit = st.made.remove(i);
@@ -199,6 +238,7 @@ impl RelightStore {
 
     /// Keep field `key`, or why it could not be made.
     fn put(&self, key: &str, result: Result<Made, String>) {
+        self.shared.idle().touch();
         let mut st = self.lock();
         st.busy.retain(|k| k != key);
         st.failed.retain(|(k, _)| k != key);
@@ -431,6 +471,8 @@ fn model_depth(store: &RelightStore, img: &Rgba8, cancel: Option<Arc<AtomicBool>
         return Ok(tests::fake_depth(img));
     }
     let dir = store.model_dir().filter(|d| lightcraft_depth::is_model_dir(d)).ok_or(MISSING)?;
+    // (the model is not let go while it runs, and its idle time counts from the end)
+    let _in_use = store.shared.idle().using();
     let mut slot = store.shared.model.lock().unwrap_or_else(PoisonError::into_inner);
     if slot.is_none() {
         *slot = Some(lightcraft_depth::DepthModel::load(&dir).map_err(|e| e.to_string())?);
@@ -747,6 +789,25 @@ mod tests {
         store.lock().budget = Some(1);
         store.put("k4", Ok(field_made("k4")));
         assert_eq!(store.lock().made.len(), 1);
+    }
+
+    #[test]
+    fn letting_go_after_a_while_keeps_only_the_newest_field_and_never_one_in_use() {
+        use crate::idle::Unload;
+        let store = RelightStore::default();
+        for i in 0..3 {
+            store.put(&format!("k{i}"), Ok(field_made(&format!("k{i}"))));
+        }
+        // a job holding the state lock is in the middle of using it: not touched, asked again later
+        {
+            let _held = store.lock();
+            assert_eq!(store.shared.let_go(), Unload::Busy);
+        }
+        assert!(store.get("k0").is_some());
+        assert_eq!(store.shared.let_go(), Unload::Freed);
+        let keys: Vec<String> = store.lock().made.iter().map(|(k, _)| k.clone()).collect();
+        assert_eq!(keys, ["k0"], "the photo in front keeps its field");
+        assert_eq!(store.shared.let_go(), Unload::Nothing);
     }
 
     #[test]

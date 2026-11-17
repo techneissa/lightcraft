@@ -8,7 +8,7 @@
 //! and so do crops under [`MIN_SIDE`]. A Core ML fill that fails hands that fill and every later one to candle
 //! (Automatic) or is the fill's error (Core ML).
 //!
-//! The loaded model is kept, not released after [`super::KEEP_LOADED`] like candle's: it holds 50–100 MB of the
+//! The loaded model is kept, not released after [`crate::idle::MODEL_IDLE`] like candle's: it holds 50–100 MB of the
 //! process (130 MB at its peak, against candle's 2.8 GB), dropping it gave none of that back, and a reload takes 2–3 s,
 //! or a minute when macOS has dropped its Neural Engine plan, during which the fills would go to candle (#268).
 
