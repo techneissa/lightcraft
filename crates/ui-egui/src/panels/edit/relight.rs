@@ -128,7 +128,7 @@ pub(super) fn relight(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSet
     // (issue #301: one click sets up several lights round the subject)
     presets::presets(app, ui, d, id);
     egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 6, bottom: 4 }).show(ui, |ui| {
-        lights_list(app, ui, d, sel);
+        lights_list(app, ui, d, id, sel);
         ui.add_space(8.0);
         depth_box(app, ui, d, id, made.as_deref(), sel);
     });
@@ -164,7 +164,7 @@ pub(super) fn relight(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSet
 }
 
 /// The photo's lights, one row each (a click selects it), and Add Light, Duplicate and Delete under them.
-fn lights_list(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings, sel: usize) {
+fn lights_list(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings, photo: PhotoId, sel: usize) {
     let t = Tokens::get(ui.ctx());
     let count = d.relight.lights.len();
     let mut picked = None;
@@ -194,6 +194,15 @@ fn lights_list(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings, 
         if resp.clicked() {
             picked = Some(i);
         }
+        // (issue #342: Save This Light as Preset… names this one light; an off light is no preset)
+        crate::widgets::context_menu(&resp, |ui| {
+            ui.add_enabled_ui(l.amount > 0.0, |ui| {
+                if ui.button(crate::i18n::tr("Save This Light as Preset…")).clicked() {
+                    presets::begin_save_light(app, ui.ctx(), photo, i);
+                    ui.close();
+                }
+            });
+        });
     }
     if let Some(i) = picked
         && let Err(e) = app.run("relight.selectLight", json!({"index": i}))

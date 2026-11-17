@@ -23,7 +23,7 @@ use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
 
-use crate::relight::{KindSettings, LightSettings, Relight};
+use crate::relight::{KindSettings, LightSettings, MAX_LIGHTS, Relight};
 use crate::relight_effects::LightEffects;
 use crate::{DevelopSettings, SegMask};
 
@@ -203,7 +203,8 @@ pub fn selection_box(seg: &SegMask) -> Option<[f64; 4]> {
 pub struct LightPreset {
     pub id: String,
     pub name: String,
-    /// The lights and Darken Surroundings, in the preset frame.
+    /// The lights and Darken Surroundings, in the preset frame; its `water` is the Underwater the preset sets (off: the
+    /// photo's is left alone, which is also how a file written before presets held it reads).
     pub lights: Relight,
     /// Ships with the app: never saved, never renamed or deleted.
     #[serde(skip)]
@@ -216,22 +217,68 @@ impl LightPreset {
         subject.place(&self.lights)
     }
 
+    /// Whether the preset sets the photo's Underwater (it was saved with it on); without it the photo's water is left alone.
+    pub fn has_water(&self) -> bool {
+        self.lights.water.is_on()
+    }
+
+    /// Whether the preset is a single light.
+    pub fn is_single(&self) -> bool {
+        self.lights.lights.len() == 1
+    }
+
     /// `d` with this preset's lights round `subject` instead of its own, and the Relight section's eye on (a preset that
-    /// changes nothing the photo shows would look like a button that does nothing).
+    /// changes nothing the photo shows would look like a button that does nothing). The photo's water stays as it is unless
+    /// the preset has Underwater, and its Darken Surroundings when the preset is one light with none of its own.
     pub fn onto(&self, d: &DevelopSettings, subject: &Subject) -> DevelopSettings {
         let mut out = d.clone();
         out.relight = self.placed(subject);
-        // (a preset is lights: the photo's water stays as it is)
-        out.relight.water = d.relight.water;
+        out.relight.water = if self.has_water() { self.lights.water } else { d.relight.water };
+        // (a single light saved on its own carries no Darken Surroundings: the photo's stays; a built-in single light that
+        // sets one, like Split, still does)
+        if self.is_single() && self.lights.darken == 0.0 {
+            out.relight.darken = d.relight.darken;
+        }
         out.disabled_sections.retain(|s| s != crate::relight::SECTION);
         out
     }
 
-    /// A preset of the lights `r` has round `subject`.
+    /// `d` with this preset's lights round `subject` added after the photo's own, up to [`MAX_LIGHTS`]; with how many were
+    /// left out for want of room and the index of the first added light (`None` when none was). Darken Surroundings stays the
+    /// photo's, its water too unless the preset has Underwater. A photo with one light that is still the default (off, nothing
+    /// set) has nothing to keep: the preset's lights take its place.
+    pub fn added_to(&self, d: &DevelopSettings, subject: &Subject) -> (DevelopSettings, usize, Option<usize>) {
+        let mut out = d.clone();
+        let placed = self.placed(subject).lights;
+        let mut lights = if d.relight.lights == [LightSettings::default()] { Vec::new() } else { d.relight.lights.clone() };
+        let first = lights.len();
+        let room = MAX_LIGHTS.saturating_sub(first);
+        let left_out = placed.len().saturating_sub(room);
+        lights.extend(placed.into_iter().take(room));
+        let added = (lights.len() > first).then_some(first);
+        out.relight.lights = lights;
+        if self.has_water() {
+            out.relight.water = self.lights.water;
+        }
+        out.relight.sanitize();
+        out.disabled_sections.retain(|s| s != crate::relight::SECTION);
+        (out, left_out, added)
+    }
+
+    /// A preset of the lights `r` has round `subject`, with its Underwater when that is on.
     pub fn capture(id: &str, name: &str, r: &Relight, subject: &Subject) -> LightPreset {
         let mut lights = subject.capture(r);
-        lights.water = crate::relight_water::WaterSettings::default();
+        if !lights.water.is_on() {
+            lights.water = crate::relight_water::WaterSettings::default();
+        }
         LightPreset { id: id.into(), name: name.into(), lights, builtin: false }
+    }
+
+    /// A preset of light `index` of `r` alone (no Darken Surroundings, no water) round `subject`; `None` for an index the
+    /// photo has no light at.
+    pub fn capture_light(id: &str, name: &str, r: &Relight, index: usize, subject: &Subject) -> Option<LightPreset> {
+        let one = Relight { lights: vec![r.lights.get(index)?.clone()], ..Relight::default() };
+        Some(LightPreset { id: id.into(), name: name.into(), lights: subject.capture(&one), builtin: false })
     }
 }
 
@@ -584,6 +631,82 @@ mod tests {
         assert!(odd.id.is_empty());
         assert_eq!(clean_name("  A   Warm \n Look  ").as_deref(), Some("A Warm Look"));
         assert_eq!(clean_name("   "), None);
+    }
+
+    #[test]
+    fn one_light_saved_lands_round_another_subject_and_keeps_no_water() {
+        let a = Subject::from_face([0.2, 0.2, 0.3, 0.35]).unwrap();
+        let b = Subject::from_face([0.6, 0.4, 0.7, 0.55]).unwrap();
+        let mut r = a.place(&built_in()[0].lights);
+        r.darken = 30.0;
+        r.water.amount = 50.0;
+        let one = LightPreset::capture_light("mine-1", "Key", &r, 0, &a).unwrap();
+        assert!(one.is_single() && !one.has_water() && one.lights.darken == 0.0);
+        assert!(LightPreset::capture_light("mine-2", "Gone", &r, 9, &a).is_none());
+        // the same face-sized offset from the other face (the faces are the same size)
+        let (la, lb) = (&r.lights[0], &one.placed(&b).lights[0]);
+        assert!((lb.x - la.x - 0.4).abs() < 1e-9 && (lb.y - la.y - 0.2).abs() < 1e-9, "{la:?} {lb:?}");
+    }
+
+    #[test]
+    fn underwater_is_set_only_by_a_preset_that_has_it() {
+        let s = Subject::CENTRE;
+        let mut r = built_in()[0].placed(&s);
+        let mut d = DevelopSettings::default();
+        d.relight.water.amount = 40.0;
+        // saved with the water off: the photo's own water stays
+        let dry = LightPreset::capture("mine-1", "Dry", &r, &s);
+        assert!(!dry.has_water());
+        assert_eq!(dry.onto(&d, &s).relight.water.amount, 40.0);
+        // saved with it on: applying sets it
+        r.water.amount = 80.0;
+        r.water.tint = -30.0;
+        let wet = LightPreset::capture("mine-2", "Wet", &r, &s);
+        assert!(wet.has_water());
+        assert_eq!(wet.onto(&DevelopSettings::default(), &s).relight.water, r.water);
+        assert_eq!(wet.added_to(&DevelopSettings::default(), &s).0.relight.water, r.water);
+        // a file written before presets held water has no such field and reads as having none
+        let old = r#"{"id": "u1", "name": "Old", "lights": {"lights": [{"amount": 50}], "darken": 10}}"#;
+        let old: LightPreset = serde_json::from_str(old).unwrap();
+        assert!(!old.has_water() && old.lights.darken == 10.0);
+        // and the water is written back only when the preset has it
+        assert!(!serde_json::to_string(&dry).unwrap().contains("water"));
+        assert_eq!(serde_json::from_str::<LightPreset>(&serde_json::to_string(&wet).unwrap()).unwrap(), wet);
+    }
+
+    #[test]
+    fn a_one_light_preset_keeps_the_photos_darken_surroundings() {
+        let s = Subject::CENTRE;
+        let mut d = DevelopSettings::default();
+        d.relight.darken = 45.0;
+        let mut r = built_in()[0].placed(&s);
+        r.darken = 60.0;
+        let one = LightPreset::capture_light("mine-1", "Key", &r, 0, &s).unwrap();
+        assert_eq!(one.onto(&d, &s).relight.darken, 45.0);
+        // a preset of several lights sets its own, and a built-in single light that has one keeps it
+        assert_eq!(LightPreset::capture("mine-2", "Both", &r, &s).onto(&d, &s).relight.darken, 60.0);
+        let split = built_in().iter().find(|p| p.id == "split").unwrap();
+        assert_eq!(split.onto(&d, &s).relight.darken, split.lights.darken);
+    }
+
+    #[test]
+    fn adding_a_preset_appends_after_the_photos_lights_up_to_the_cap() {
+        let s = Subject::CENTRE;
+        let three = built_in().iter().find(|p| p.lights.lights.len() >= 3).unwrap().clone();
+        let n = three.lights.lights.len();
+        let mut d = DevelopSettings::default();
+        d.relight.darken = 25.0;
+        d.relight.lights = vec![LightSettings { amount: 40.0, ..LightSettings::default() }; MAX_LIGHTS - 1];
+        let (out, left, first) = three.added_to(&d, &s);
+        assert_eq!((out.relight.lights.len(), left, first), (MAX_LIGHTS, n - 1, Some(MAX_LIGHTS - 1)));
+        assert_eq!(out.relight.lights[0].amount, 40.0);
+        assert_eq!(out.relight.darken, 25.0, "Darken Surroundings stays the photo's");
+        // a full photo takes none
+        let (full, left, first) = three.added_to(&out, &s);
+        assert_eq!((full.relight.lights.len(), left, first), (MAX_LIGHTS, n, None));
+        // a photo with nothing set has nothing to keep
+        let (fresh, left, first) = three.added_to(&DevelopSettings::default(), &s);
+        assert_eq!((fresh.relight.lights.len(), left, first), (n, 0, Some(0)));
     }
 
     #[test]
