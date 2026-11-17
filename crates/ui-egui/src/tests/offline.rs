@@ -212,12 +212,15 @@ fn import_reads_files_off_the_ui_thread_and_can_be_cancelled() {
     assert!(h.app.fonts_ready, "the UI is initialized");
     let undo0 = h.app.session.undo.len();
     crate::import::start_paths(&mut h.app, vec![dir.to_string_lossy().to_string()]).unwrap();
-    // every read is held: frames go on, and the import's row shows (after 0.5 s) with its ✕
+    // every read is held: frames go on, and the ring shows (after 0.5 s)
     frames_while_asleep(&mut h, &nas, 20, "import");
     assert!(h.app.import.is_some(), "importing");
     let id = h.app.session.activity.list().first().map(|t| t.id).expect("an import row");
     let cross = format!("activity:cancel:{id}");
-    assert!(h.step_until(Duration::from_secs(60), |h| h.app.widgets.iter().any(|(w, _)| *w == cross)), "the row shows");
+    // the ring shows once the task is half a second old; its list, opened by a click, has the ✕
+    assert!(h.step_until(Duration::from_secs(60), |h| h.app.widgets.iter().any(|(w, _)| w == "icon:activityRing")), "the ring shows");
+    assert_eq!(h.request("ui.clickWidget", json!({"id": "icon:activityRing"}), Duration::from_secs(10))["ok"], true);
+    assert!(h.step_until(Duration::from_secs(60), |h| h.app.widgets.iter().any(|(w, _)| *w == cross)), "the ring's list shows the ✕");
     assert!(!nas.forced(), "an import frame waited for the sleeping drive");
     // the drive answers one batch of reads: it joins the catalog while the next batch waits
     let batch = lightcraft_engine::import::batch_size();
@@ -231,7 +234,7 @@ fn import_reads_files_off_the_ui_thread_and_can_be_cancelled() {
     assert!(h.app.import.is_some(), "still importing");
     let status = h.app.import.as_ref().map(crate::import::ImportTask::status).unwrap_or_default();
     assert!(status["imported"].as_u64().unwrap_or(0) >= 8 && status["total"].as_u64().unwrap_or(0) >= 8, "{status}");
-    // Cancel (the ✕ of its row in the activity stack): the files being read finish, nothing new starts
+    // Cancel (the ✕ in the ring's list): the files being read finish, nothing new starts
     let r = h.request("ui.clickWidget", json!({"id": cross}), Duration::from_secs(10));
     assert_eq!(r["ok"], true, "{r}");
     nas.wake();

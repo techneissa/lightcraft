@@ -3529,10 +3529,13 @@ fn folder_scan_cancel_and_busy() {
     assert!(!h.app.scan.as_ref().unwrap().copy, "the running scan keeps its options");
     let r = h.request("ui.inspect", json!({}), t);
     assert!(r["result"]["scan"].is_object(), "{r}");
-    // Cancel is the ✕ of the scan's row in the activity stack (shown once it is half a second old)
+    // Cancel is the ✕ in the ring's list (the ring shows once the task is half a second old)
     let id = h.app.session.activity.list().first().map(|t| t.id).expect("a scan row");
     let cross = format!("activity:cancel:{id}");
-    assert!(h.step_until(t, |h| h.app.widgets.iter().any(|(w, _)| *w == cross)), "the row shows");
+    // the ring shows once the task is half a second old; its list, opened by a click, has the ✕
+    assert!(h.step_until(t, |h| h.app.widgets.iter().any(|(w, _)| w == "icon:activityRing")), "the ring shows");
+    assert_eq!(h.request("ui.clickWidget", json!({"id": "icon:activityRing"}), Duration::from_secs(10))["ok"], true);
+    assert!(h.step_until(t, |h| h.app.widgets.iter().any(|(w, _)| *w == cross)), "the ring's list shows the ✕");
     let r = h.request("ui.clickWidget", json!({"id": cross}), t);
     assert_eq!(r["ok"], true, "{r}");
     h.step();

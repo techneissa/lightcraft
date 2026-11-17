@@ -1,5 +1,10 @@
 # Long-running tasks and the activity stack
 
+> **This fork (issue #295):** every task shows in the top-bar ring, none in a corner stack. The ring lists each task
+> (name, what it is on, count) with ✕ for the ones that can stop, whether it is `background` or not; `background` is
+> still reported by `activity.list` and `ui.inspect`. Read "stack" and "row" below as the ring's list and its lines.
+> See `fork/activity-ring-only.md`.
+
 Everything that takes a while runs off the UI thread and shows up in **one** place: the activity stack in the
 top-left corner under the top bar (issue #345). Each task has a row with its name, a progress bar (a sweep while
 the amount of work isn't known), the count and what it's working on, and ✕ if it can stop. Quitting asks first while
@@ -135,4 +140,4 @@ let photo = batch.child("denoise", "AI Denoise"); // the photo in progress, unde
 Assert the row (`session.activity.list()`: kind, label, total, `cancellable`), that `activity.cancel(id)` stops the
 job, and that the row is gone once the job ends. `crates/ui-egui/src/tests/activity.rs` has the helpers, and the
 job-specific tests show the pattern (`tests_sync.rs`, `export_task.rs`, `tests_denoise.rs`…). A row only appears
-on screen once its task is 0.5 s old, so tests that click its ✕ wait for `activity:cancel:<id>` first.
+on screen once its task is 0.5 s old, so tests that click its ✕ click the ring (`icon:activityRing`) and wait for `activity:cancel:<id>` first.
