@@ -849,6 +849,24 @@ impl Session {
     /// [`EngineError::NotSaved`]) only when the queued ops couldn't be written; they stay queued.
     pub fn persist(&mut self) -> Result<()> {
         let Some(lib) = self.library.as_mut() else { return Ok(()) };
+        // (a snapshot of an older format that couldn't be rewritten when the library opened: the log takes nothing
+        // under it, so try again now. The snapshot is of what is in memory, which includes the queued ops: they are
+        // saved by it, as in `close_library`. Not mid-interaction: the catalog then holds a preview value.)
+        if lib.journal.upgrade_pending() && self.interaction.is_none() && lib.retry_at.is_none_or(|t| web_time::Instant::now() >= t) {
+            let unlogged = self.pending_log.len() as u64;
+            match lib.journal.snapshot_with_unlogged(&self.catalog, unlogged) {
+                Ok(()) => {
+                    self.pending_log.clear();
+                    lib.unsaved_error = None;
+                    lib.retry_at = None;
+                    lib.last_error = None;
+                }
+                Err(e) => {
+                    log::warn!("library: can't rewrite the older snapshot yet: {e}");
+                    lib.retry_at = Some(web_time::Instant::now() + RETRY_BACKOFF);
+                }
+            }
+        }
         if !self.pending_log.is_empty() {
             if let Err(e) = lib.journal.append(&self.pending_log) {
                 // the ops stay queued (and applied in memory): the next persist retries them
@@ -915,7 +933,11 @@ impl Session {
         let presets_unsaved = self.library.as_ref().is_some_and(|l| l.presets_error.is_some());
         // records the log's thread can't write: a snapshot (a fresh file holding everything) is due
         let log_held = self.library.as_ref().is_some_and(|l| l.log_held.is_some());
-        if self.library.is_some() && (!self.pending_log.is_empty() || presets_unsaved || self.denoise_auto_pending() || log_held) && !backing_off {
+        let upgrading = self.library.as_ref().is_some_and(|l| l.journal.upgrade_pending());
+        if self.library.is_some()
+            && (!self.pending_log.is_empty() || presets_unsaved || self.denoise_auto_pending() || log_held || upgrading)
+            && !backing_off
+        {
             let _ = self.persist();
         } else if let Some(lib) = self.library.as_mut() {
             poll_compaction(lib);
