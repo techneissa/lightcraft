@@ -8,6 +8,7 @@
 
 pub mod adaptive;
 pub mod controls;
+pub mod mask_presets;
 pub mod presets;
 pub mod reflection_area;
 pub mod relight;

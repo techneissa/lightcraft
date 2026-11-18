@@ -118,7 +118,8 @@ fn masking_contents_fit_the_right_panel_at_any_width() {
     );
     assert_eq!(r["ok"], true, "{r}");
     let long = "The person standing beside the very long fence across the background";
-    let r = h.request("engine.execute", json!({"command": "mask.rename", "params": {"id": 1, "name": long}}), T);
+    // (a mask's name is at most 40 characters, as a preset's is)
+    let r = h.request("engine.execute", json!({"command": "mask.rename", "params": {"id": 1, "name": "The person beside the very long fence"}}), T);
     assert_eq!(r["ok"], true, "{r}");
     for width in [RIGHT_WIDTH.min, RIGHT_WIDTH.default, 330.0, RIGHT_WIDTH.max] {
         // a long Describe prompt being typed: the field and its Select button stay in the panel

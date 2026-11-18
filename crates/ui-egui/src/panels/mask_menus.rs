@@ -96,6 +96,13 @@ pub fn mask_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, id: u32, name: &str
     let can_paste = app.session.mask_effect_clipboard.is_some();
     run(app, ui, menu_label("Copy Mask Effect"), true, "mask.copyEffect", json!({"id": id}));
     run(app, ui, menu_label("Paste Mask Effect"), can_paste, "mask.pasteEffect", json!({"id": id}));
+    // (fork, issue #329: the mask as a preset to add to other photos; the name is typed in the Mask Presets list)
+    let b = ui.button(crate::i18n::tr("Save Mask as Preset…"));
+    register(ui, "maskMenu:savePreset", b.rect);
+    if b.clicked() {
+        super::mask_presets::start_naming(app, ui.ctx(), id);
+        ui.close();
+    }
     ui.separator();
     for (label, op) in [("Add to Mask", MaskOp::Add), ("Subtract from Mask", MaskOp::Subtract), ("Intersect Mask with", MaskOp::Intersect)] {
         let button = crate::widgets::menu_button(ui, crate::i18n::tr(label), |ui| kinds_menu(app, ui, id, op));

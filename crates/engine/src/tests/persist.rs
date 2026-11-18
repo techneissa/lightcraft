@@ -216,3 +216,26 @@ fn a_preset_that_cannot_be_written_counts_as_unsaved_until_it_is() {
     assert!(s.unsaved().is_none(), "written once the disk works again");
     assert!(String::from_utf8_lossy(&stored(&files)).contains("Mine"));
 }
+
+/// Opening another library clears the presets lists: presets that couldn't be written are tried once more first, and
+/// the switch is refused (the presets kept) while they still can't be, never silently lost.
+#[test]
+fn opening_another_library_does_not_lose_presets_that_could_not_be_saved() {
+    let files = Flaky::default();
+    let mut s = Session::new();
+    let stores = LibraryStores { dir: "flaky".into(), catalog: Box::new(MemStore::new()), files: Box::new(files.clone()), on_disk: false };
+    s.open_library_in(stores, true).unwrap();
+    files.set_failing(true);
+    s.execute("preset.create", &json!({"name": "Mine"})).unwrap();
+    assert!(s.unsaved().is_some());
+    let other = LibraryStores { dir: "other".into(), catalog: Box::new(MemStore::new()), files: Box::new(MemStore::new()), on_disk: false };
+    let err = s.open_library_in(other, false).expect_err("refused while the presets can't be written");
+    assert!(matches!(err, EngineError::NotSaved(_)), "{err}");
+    assert!(s.presets.iter().any(|p| p.name == "Mine"), "kept");
+    // the disk works again: the switch saves them first
+    files.set_failing(false);
+    let other = LibraryStores { dir: "other".into(), catalog: Box::new(MemStore::new()), files: Box::new(MemStore::new()), on_disk: false };
+    s.open_library_in(other, false).unwrap();
+    let stored = files.files.files.lock().unwrap().get("presets.json").cloned().unwrap_or_default();
+    assert!(String::from_utf8_lossy(&stored).contains("Mine"), "written before the switch");
+}

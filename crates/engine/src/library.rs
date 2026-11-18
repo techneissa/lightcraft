@@ -210,6 +210,9 @@ struct PresetsFile {
     profile_recent: Vec<String>,
     /// The user's light presets (fork, issue #301).
     relight_presets: Vec<lightcraft_develop::relight_presets::LightPreset>,
+
+    /// The user's mask presets (fork, issue #329).
+    mask_presets: Vec<lightcraft_develop::mask_presets::MaskPreset>,
 }
 
 /// presets.json as it is read: every list holds its entries as they are written, and each is read alone, so one entry that
@@ -228,6 +231,9 @@ struct PresetsRead {
     profile_recent: Vec<serde_json::Value>,
     #[serde(deserialize_with = "entries")]
     relight_presets: Vec<serde_json::Value>,
+
+    #[serde(deserialize_with = "entries")]
+    mask_presets: Vec<serde_json::Value>,
 }
 
 /// A list's entries; anything that isn't a list is an empty one.
@@ -261,6 +267,8 @@ struct PresetsSaved {
     profile_favorites: Vec<String>,
     profile_recent: Vec<String>,
     relight_presets: Vec<lightcraft_develop::relight_presets::LightPreset>,
+
+    mask_presets: Vec<lightcraft_develop::mask_presets::MaskPreset>,
     /// Hash of the bytes written: a list borrowed mutably but left as it was isn't rewritten.
     hash: u64,
 }
@@ -272,6 +280,8 @@ impl PresetsSaved {
             profile_favorites: s.profile_favorites.clone(),
             profile_recent: s.profile_recent.clone(),
             relight_presets: s.relight_presets.clone(),
+
+            mask_presets: s.mask_presets.clone(),
             hash: 0,
         }
     }
@@ -282,6 +292,7 @@ impl PresetsSaved {
             || self.profile_favorites != s.profile_favorites
             || self.profile_recent != s.profile_recent
             || self.relight_presets != s.relight_presets
+            || self.mask_presets != s.mask_presets
     }
 }
 
@@ -429,6 +440,8 @@ fn presets_json(s: &Session) -> String {
         profile_favorites: s.profile_favorites.clone(),
         profile_recent: s.profile_recent.clone(),
         relight_presets: s.relight_presets.clone(),
+
+        mask_presets: s.mask_presets.clone(),
     };
     serde_json::to_string_pretty(&f).unwrap_or_default()
 }
@@ -669,6 +682,18 @@ impl Session {
         }
     }
 
+    /// Presets that couldn't be written are this library's only copy of them (opening another clears the lists): try once
+    /// more, and stay on this library when they still can't be written, so they are never lost silently.
+    fn presets_before_switch(&mut self) -> Result<()> {
+        if self.library.as_ref().is_some_and(|l| l.presets_error.is_some()) {
+            let _ = self.persist();
+            if let Some(why) = self.library.as_ref().and_then(|l| l.presets_error.clone()) {
+                return Err(EngineError::NotSaved(format!("the open library's presets aren't saved yet, so it stays open: {why}")));
+            }
+        }
+        Ok(())
+    }
+
     /// Open `stores`; the new library takes `lock` once nothing can fail any more. `folder` is the
     /// folder they write to, when they write to one: the thumbnail cache asks it too.
     fn open_stores(&mut self, stores: LibraryStores, seed_demo: bool, lock: &mut Option<LibraryLock>, folder: Option<OpenedFolder>) -> Result<()> {
@@ -692,6 +717,7 @@ impl Session {
                 log::error!("library: {e} (every change is in its snapshot)");
             }
         }
+        self.presets_before_switch()?;
         // what Auto AI Denoise recorded belongs to the library being left
         self.denoise_auto_flush(true);
         self.media.smart_dir = on_disk.then(|| crate::smart::dir(&dir));
@@ -798,6 +824,8 @@ impl Session {
         self.profile_favorites.clear();
         self.profile_recent.clear();
         self.relight_presets.clear();
+
+        self.mask_presets.clear();
         if let Some(f) = settings.read::<PresetsRead>(files.as_mut(), "presets.json") {
             let favorites = strings(f.favorites);
             for p in &mut self.presets {
@@ -824,6 +852,18 @@ impl Session {
             let bad = bad_user + bad_light + bad_names;
             if bad > 0 {
                 settings.set_aside(files.as_mut(), "presets.json", &format!("{bad} preset(s) in it aren't valid or were left out or cut"));
+            }
+
+            // mask presets (fork, issue #329): read entry by entry too, the bad ones kept in a copy of the file
+            let (masks, bad_masks) = read_each::<lightcraft_develop::mask_presets::MaskPreset>(f.mask_presets);
+            let (masks, bad_mask_names) = crate::mask_presets::read_user(masks);
+            self.mask_presets = masks;
+            if bad_masks + bad_mask_names > 0 {
+                settings.set_aside(
+                    files.as_mut(),
+                    "presets.json",
+                    &format!("{} mask preset(s) in it aren't valid or were left out or cut", bad_masks + bad_mask_names),
+                );
             }
         }
         // view state
