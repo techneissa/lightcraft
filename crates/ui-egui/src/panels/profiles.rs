@@ -2,23 +2,21 @@
 //! profile as a live thumbnail of the current photo, grouped (Favorites first), with a favourite
 //! star, the applied profile's amount, a temporary loupe preview while hovering and apply on click.
 
-use egui::{Align2, Color32, Rect, Sense, Stroke, pos2, vec2};
+use egui::{Align2, Color32, Rect, Sense, pos2, vec2};
 use lightcraft_catalog::PhotoId;
 use lightcraft_develop::DevelopSettings;
 use lightcraft_engine::presets::{PROFILES, profile_groups};
 use serde_json::json;
 
-use super::presets::cover_uv;
 use crate::icons::{Icon, paint};
 use crate::state::RightPanel;
 use crate::theme::Tokens;
+use crate::widgets::preset_grid::{Card, Grid, Item};
 use crate::widgets::{divider, icon_button, one_line, register};
 use crate::{HoverPreview, LightcraftApp};
 
 /// Long edge of the variant thumbnails (px).
 const THUMB_EDGE: usize = 256;
-/// Thumbnail columns.
-const COLUMNS: usize = 2;
 
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let t = Tokens::get(ui.ctx());
@@ -104,16 +102,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         if !open {
             continue;
         }
-        let gap = 8.0;
-        let cw = ((ui.available_width() - 44.0 - gap * (COLUMNS as f32 - 1.0)) / COLUMNS as f32).max(40.0);
-        let th = (cw * 0.75).round();
-        for row in list.chunks(COLUMNS) {
-            let (rr, _) = ui.allocate_exact_size(vec2(ui.available_width(), th + 30.0), Sense::hover());
-            for (i, p) in row.iter().enumerate() {
-                let cell = Rect::from_min_size(pos2(rr.left() + 22.0 + i as f32 * (cw + gap), rr.top()), vec2(cw, th + 24.0));
-                cell_ui(app, ui, &d, id, tag, p, cell, th);
-            }
-        }
+        cards(app, ui, &d, id, (tag, if imported { "lut" } else { "" }, title), &list);
         ui.add_space(6.0);
     }
     ui.add_space(30.0);
@@ -146,45 +135,48 @@ fn with_profile_id(d: &DevelopSettings, profile_id: &str) -> DevelopSettings {
     s
 }
 
-#[allow(clippy::too_many_arguments)]
-fn cell_ui(
+/// A section's profiles as cards in a grid that follows the panel's width (issue #344): each one's live thumbnail of the
+/// photo, its name and a favourite star.
+fn cards(
     app: &mut LightcraftApp,
     ui: &mut egui::Ui,
     d: &DevelopSettings,
     id: PhotoId,
-    tag: &str,
-    p: &(String, String, String),
-    cell: Rect,
-    th: f32,
+    (tag, kind, title): (&str, &str, &str),
+    list: &[(String, String, String)],
 ) {
+    let items: Vec<Item> = list
+        .iter()
+        .map(|(p_id, p_name, _)| Item {
+            key: if tag.is_empty() { format!("profileCell:{p_id}") } else { format!("profileCell:{tag}:{p_id}") },
+            // (a long name wraps under the thumbnail)
+            name: crate::i18n::profile_label(p_id, p_name).to_string(),
+            applied: d.profile.id == *p_id,
+            ..Item::default()
+        })
+        .collect();
+    Grid::new(("profiles", kind, tag, title)).inset(16.0, 16.0).show(ui, &items, |ui, i, card| {
+        if let Some(p) = list.get(i) {
+            cell_ui(app, ui, d, id, tag, p, card);
+        }
+    });
+}
+
+fn cell_ui(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings, id: PhotoId, tag: &str, p: &(String, String, String), card: &Card) {
     let (p_id, p_name, p_group) = (p.0.as_str(), p.1.as_str(), p.2.as_str());
     let t = Tokens::get(ui.ctx());
-    let key = if tag.is_empty() { format!("profileCell:{p_id}") } else { format!("profileCell:{tag}:{p_id}") };
-    let resp = ui.interact(cell, egui::Id::unique(&key), Sense::click());
-    crate::widgets::announce(&resp, p_name.to_string());
-    register(ui, key, cell);
-    let thumb = Rect::from_min_size(cell.min, vec2(cell.width(), th));
+    let resp = &card.resp;
     let s = with_profile_id(d, p_id);
-    let painter = ui.painter();
-    painter.rect_filled(thumb, 3.0, t.canvas);
     if let Some(job) = app.session.variant_job(id, &s, THUMB_EDGE)
         && let Some(tex) = app.renderer.variant(job)
     {
-        painter.image(tex.id(), thumb, cover_uv(thumb, tex.size), Color32::WHITE);
+        card.paint_picture(ui, tex.id(), tex.size);
     }
     let applied = d.profile.id == p_id;
-    if applied {
-        painter.rect_stroke(thumb.expand(1.0), 4.0, Stroke::new(2.0, t.pick), egui::StrokeKind::Outside);
-    } else if resp.hovered() {
-        painter.rect_stroke(thumb, 3.0, Stroke::new(1.0, t.text_dim), egui::StrokeKind::Outside);
-    }
-    let name_color = if applied { t.text } else { t.text_label };
-    // cut short (with …) to the cell, so it never runs into its neighbour; the full name on hover
-    let g = one_line(painter, crate::i18n::profile_label(p_id, p_name), t.font(12.0), name_color, cell.width() - 2.0);
-    painter.galley(pos2(cell.left() + 2.0, thumb.bottom() + 12.0 - g.size().y / 2.0), g, name_color);
+    let painter = ui.painter();
     // favourite star (always shown when set, on hover otherwise)
     let fav = app.session.profile_favorites.iter().any(|f| f == p_id);
-    let star = Rect::from_center_size(pos2(thumb.right() - 13.0, thumb.top() + 13.0), vec2(20.0, 20.0));
+    let star = card.corner(vec2(20.0, 20.0), 3.0);
     register(ui, format!("profileStar:{}{}", if tag.is_empty() { "" } else { "fav:" }, p_id), star);
     let over_star = resp.hover_pos().is_some_and(|q| star.contains(q));
     if fav || resp.hovered() {
@@ -199,7 +191,7 @@ fn cell_ui(
         // resting on the applied profile shows it (no preview), not the last other profile hovered
         ui.data_mut(|m| m.remove::<(PhotoId, String)>(egui::Id::unique("last-profile-hover")));
     }
-    let resp = resp.on_hover_text(format!(
+    let resp = resp.clone().on_hover_text(format!(
         "{} ({})",
         crate::i18n::profile_label(p_id, p_name),
         crate::i18n::builtin_label(p_group, lightcraft_engine::presets::profile(p_id).is_some())
@@ -223,56 +215,35 @@ fn camera_cells(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings,
     // (a local profile is not a way of matching the camera: the heading names the colour source then)
     let heading = if rows.len() > 2 { "Camera Colour" } else { "Camera Matching" };
     ui.painter().text(pos2(r.left() + 24.0, r.center().y), Align2::LEFT_CENTER, crate::i18n::tr(heading), t.semibold(13.0), t.text_label);
-    let gap = 8.0;
-    let cw = ((ui.available_width() - 44.0 - gap * (COLUMNS as f32 - 1.0)) / COLUMNS as f32).max(40.0);
-    let th = (cw * 0.75).round();
-    let lines = rows.len().div_ceil(COLUMNS).max(1);
-    let (rr, _) = ui.allocate_exact_size(vec2(ui.available_width(), (th + 30.0) * lines as f32), Sense::hover());
-    for (i, row) in rows.iter().enumerate() {
-        let (label, tip, colour) = (row.label.as_str(), row.tip.as_str(), row.colour);
-        let (line, column) = (i / COLUMNS, i % COLUMNS);
-        let cell =
-            Rect::from_min_size(pos2(rr.left() + 22.0 + column as f32 * (cw + gap), rr.top() + line as f32 * (th + 30.0)), vec2(cw, th + 24.0));
-        let key = format!("cameraColourCell:{}", row.key());
-        let resp = ui.interact(cell, egui::Id::unique(&key), if row.enabled { Sense::click() } else { Sense::hover() });
-        crate::widgets::announce(&resp, label.to_string());
-        register(ui, key, cell);
-        let thumb = Rect::from_min_size(cell.min, vec2(cell.width(), th));
+    let items: Vec<Item> = rows
+        .iter()
+        .map(|row| Item {
+            key: format!("cameraColourCell:{}", row.key()),
+            // (a local profile's name is the user's own: it is not translated)
+            name: if row.colour == lightcraft_develop::CameraColour::Local { row.label.clone() } else { crate::i18n::tr(&row.label).to_string() },
+            applied: row.applied(d),
+            dim: !row.enabled,
+            ..Item::default()
+        })
+        .collect();
+    Grid::new("cameraColour").inset(16.0, 16.0).show(ui, &items, |ui, i, card| {
+        let (Some(row), Some(item)) = (rows.get(i), items.get(i)) else { return };
+        let resp = &card.resp;
         let s = row.with(d);
-        let painter = ui.painter();
-        painter.rect_filled(thumb, 3.0, t.canvas);
         if row.enabled
             && let Some(job) = app.session.variant_job(id, &s, THUMB_EDGE)
             && let Some(tex) = app.renderer.variant(job)
         {
-            painter.image(tex.tex.id(), thumb, cover_uv(thumb, tex.size), Color32::WHITE);
+            card.paint_picture(ui, tex.tex.id(), tex.size);
         }
-        let applied = row.applied(d);
-        if applied {
-            painter.rect_stroke(thumb.expand(1.0), 4.0, Stroke::new(2.0, t.pick), egui::StrokeKind::Outside);
-        } else if resp.hovered() {
-            painter.rect_stroke(thumb, 3.0, Stroke::new(1.0, t.text_dim), egui::StrokeKind::Outside);
+        if resp.hovered() && !item.applied && row.enabled {
+            app.hover_preview = Some(HoverPreview { label: crate::i18n::tr_format!("Profile: {}", item.name), settings: s });
         }
-        let name_color = if applied {
-            t.text
-        } else if row.enabled {
-            t.text_label
-        } else {
-            t.text_dim
-        };
-        // (a local profile's name is the user's own: it is not translated)
-        let shown = if colour == lightcraft_develop::CameraColour::Local { label.to_string() } else { crate::i18n::tr(label).to_string() };
-        let g = one_line(painter, &shown, t.font(12.0), name_color, cell.width() - 2.0);
-        painter.galley(pos2(cell.left() + 2.0, thumb.bottom() + 12.0 - g.size().y / 2.0), g, name_color);
-        if resp.hovered() && !applied && row.enabled {
-            let shown = if colour == lightcraft_develop::CameraColour::Local { label.to_string() } else { crate::i18n::tr(label).to_string() };
-            app.hover_preview = Some(HoverPreview { label: crate::i18n::tr_format!("Profile: {}", shown), settings: s });
-        }
-        let resp = resp.on_hover_text(tip.to_string());
-        if resp.clicked() && !applied && row.enabled {
+        let resp = resp.clone().on_hover_text(row.tip.to_string());
+        if resp.clicked() && !item.applied && row.enabled {
             let _ = app.run("develop.profile", row.params());
         }
-    }
+    });
     ui.add_space(6.0);
     divider(ui);
 }

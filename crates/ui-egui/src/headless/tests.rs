@@ -1545,7 +1545,7 @@ fn presets_panel_with_thousands_of_presets_builds_only_visible_rows() {
     // scroll far down over the list: later presets come into view
     let r = h.request("ui.hoverWidget", json!({"id": first[first.len() / 2]}), t);
     assert_eq!(r["ok"], true, "{r}");
-    for _ in 0..20 {
+    for _ in 0..60 {
         h.request("ui.scroll", json!({"dy": -2000}), t);
         h.step();
     }

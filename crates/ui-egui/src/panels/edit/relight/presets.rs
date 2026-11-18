@@ -1,26 +1,24 @@
-//! Fork (issue #301, `fork/relight.md`): the Light Presets flyout of the Relight section. One row for each preset (the
-//! built-in ones, then your own) with a small picture of the current photo lit by it; resting on a row previews it on
-//! the photo, a click applies it (`relight.applyPreset`, one undo step). Your own presets rename and delete from the row's
-//! menu; Save Lights as Preset… names the photo's lights (`relight.savePreset`). Every row's menu and a small Add button
-//! on the row under the pointer add the preset's lights to the photo's instead (`relight.applyPreset` with `add`), and a
+//! Fork (issue #301, `fork/relight.md`): the Light Presets flyout of the Relight section. One card for each preset (the
+//! built-in ones, then your own; a grid that follows the panel's width, `widgets/preset_grid.rs`, issue #344) with a
+//! picture of the current photo lit by it; resting on a card previews it on the photo, a click applies it (`relight.applyPreset`, one undo step). Your own presets rename and delete from the row's
+//! menu; Save Lights as Preset… names the photo's lights (`relight.savePreset`). Every card's menu and a small Add button
+//! on the card under the pointer add the preset's lights to the photo's instead (`relight.applyPreset` with `add`), and a
 //! light's own menu names one light as a preset (`relight.saveLightPreset`, [`begin_save_light`]).
 
-use egui::{Align2, Color32, Rect, Sense, pos2, vec2};
+use egui::{Align2, Rect, vec2};
 use lightcraft_catalog::PhotoId;
 use lightcraft_develop::DevelopSettings;
-use lightcraft_develop::relight_presets::LightPreset;
+use lightcraft_develop::relight_presets::{LightPreset, Subject};
 use serde_json::json;
 
-use super::super::{Icon, LightcraftApp, Tokens, register};
+use super::super::{Icon, LightcraftApp, Tokens};
 use crate::HoverPreview;
+use crate::widgets::preset_grid::{Card, Grid, Item};
 
 /// The long edge of a row's picture (pixels).
 const THUMB_EDGE: usize = 128;
-/// A row's least height (points) and where its text starts from the row's left edge.
-const ROW_H: f32 = 52.0;
-const TEXT_X: f32 = 4.0 + 66.0 + 10.0;
-/// The width of a row's Add button.
-const ADD_W: f32 = 20.0;
+/// The size of a card's Add button.
+const ADD_SIZE: egui::Vec2 = vec2(20.0, 18.0);
 
 /// What the flyout remembers between frames: the name being typed for a new preset, and a rename under way.
 #[derive(Clone, Default)]
@@ -49,7 +47,7 @@ pub(super) fn begin_save_light(app: &mut LightcraftApp, ctx: &egui::Context, pho
     ctx.data_mut(|x| x.insert_temp(state_id(), edit));
 }
 
-/// The flyout's header row and, open, its rows and the Save button.
+/// The flyout's header row and, open, its cards and the Save button.
 pub(super) fn presets(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings, id: PhotoId) {
     let open = app.ui.flyout_open("relightPresets");
     if crate::widgets::flyout_row(ui, "relightPresets", "Light Presets", Icon::Presets, open).clicked() {
@@ -69,17 +67,15 @@ pub(super) fn presets(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSet
     }
     let subject = app.session.relight_subject(id).0;
     let list = app.session.relight_preset_list();
-    egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 4, bottom: 4 }).show(ui, |ui| {
+    egui::Frame::NONE.inner_margin(egui::Margin { left: 16, right: 14, top: 4, bottom: 4 }).show(ui, |ui| {
         ui.spacing_mut().item_spacing.y = 4.0;
-        let mut user_label = false;
-        for p in &list {
-            if !p.builtin && !user_label {
-                user_label = true;
-                let t = Tokens::get(ui.ctx());
-                ui.add_space(4.0);
-                ui.label(egui::RichText::new(crate::i18n::tr("My Presets")).size(11.0).color(t.text_dim));
-            }
-            row(app, ui, d, id, p, &p.onto(d, &subject), &mut edit);
+        let (builtin, own): (Vec<&LightPreset>, Vec<&LightPreset>) = list.iter().partition(|p| p.builtin);
+        cards(app, ui, (d, &subject), id, &builtin, "builtin", &mut edit);
+        if !own.is_empty() {
+            let t = Tokens::get(ui.ctx());
+            ui.add_space(4.0);
+            ui.label(egui::RichText::new(crate::i18n::tr("My Presets")).size(11.0).color(t.text_dim));
+            cards(app, ui, (d, &subject), id, &own, "own", &mut edit);
         }
         ui.add_space(4.0);
         save_box(app, ui, d, &mut edit);
@@ -145,52 +141,70 @@ fn sub_text(p: &LightPreset) -> String {
     parts.join(" · ")
 }
 
-/// One preset's row: its picture, its name and how many lights it sets.
-fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, _d: &DevelopSettings, photo: PhotoId, p: &LightPreset, look: &DevelopSettings, edit: &mut Edit) {
+/// The cards of `presets`: each one's picture, its name and what it sets (how many lights, Underwater).
+fn cards(
+    app: &mut LightcraftApp,
+    ui: &mut egui::Ui,
+    (d, subject): (&DevelopSettings, &Subject),
+    photo: PhotoId,
+    presets: &[&LightPreset],
+    salt: &str,
+    edit: &mut Edit,
+) {
+    let items: Vec<Item> = presets
+        .iter()
+        .map(|p| Item {
+            key: format!("relight:preset:{}", p.id),
+            // (the name wraps, whatever its length: a long one makes the card taller)
+            name: if p.builtin { crate::i18n::builtin_label(&p.name, true).to_string() } else { p.name.clone() },
+            label: sub_text(p),
+            applied: false,
+            dim: false,
+            editing: edit.renaming.as_ref().is_some_and(|(id, _)| *id == p.id),
+        })
+        .collect();
+    Grid::new(("relightPresets", salt)).show(ui, &items, |ui, i, card| {
+        if let Some(p) = presets.get(i) {
+            card_actions(app, ui, photo, p, &p.onto(d, subject), card, items.get(i).is_some_and(|it| it.editing), edit);
+        }
+    });
+}
+
+/// What a card does: shows its look as the picture, previews it on the photo while the pointer rests on it, applies it on
+/// a click, adds its lights from the Add button, and opens its menu.
+#[allow(clippy::too_many_arguments)]
+fn card_actions(
+    app: &mut LightcraftApp,
+    ui: &mut egui::Ui,
+    photo: PhotoId,
+    p: &LightPreset,
+    look: &DevelopSettings,
+    card: &Card,
+    renaming: bool,
+    edit: &mut Edit,
+) {
     let t = Tokens::get(ui.ctx());
-    // (the name wraps, whatever its length: a long one makes the row taller)
-    let name = if p.builtin { crate::i18n::builtin_label(&p.name, true).to_string() } else { p.name.clone() };
-    // (clear of the Add button at the row's right)
-    let wrap_w = (ui.available_width() - TEXT_X - ADD_W - 8.0).max(40.0);
-    let galley = ui.painter().layout(name, t.font(13.0), t.text_label, wrap_w);
-    // (what the preset is: its lights, one light, Underwater; wrapped like the name)
-    let sub = sub_text(p);
-    let sub_galley = ui.painter().layout(sub, t.font(11.0), t.text_dim, wrap_w);
-    let row_h = ROW_H.max(galley.size().y + sub_galley.size().y + 18.0);
-    let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), row_h), Sense::click());
-    crate::widgets::announce(&resp, p.name.clone());
-    register(ui, format!("relight:preset:{}", p.id), r);
-    let renaming = edit.renaming.as_ref().is_some_and(|(id, _)| *id == p.id);
-    if resp.hovered() {
-        ui.painter().rect_filled(r, 4.0, t.hover.gamma_multiply(0.7));
-    }
-    let tr = Rect::from_min_size(pos2(r.left() + 4.0, r.top() + 4.0), vec2(66.0, ROW_H - 8.0));
-    ui.painter().rect_filled(tr, 2.0, t.canvas);
+    let resp = &card.resp;
     if let Some(job) = app.session.variant_job(photo, look, THUMB_EDGE)
         && let Some(tex) = app.renderer.variant(job)
     {
-        ui.painter().image(tex.id(), tr, crate::panels::presets::cover_uv(tr, tex.size), Color32::WHITE);
+        card.paint_picture(ui, tex.id(), tex.size);
     }
-    let x = r.left() + TEXT_X;
     if renaming {
-        let field = Rect::from_min_max(pos2(x, r.top() + 6.0), pos2(r.right() - 6.0, r.top() + 30.0));
+        let field = Rect::from_min_size(card.text.min, vec2(card.text.width(), 24.0));
         rename_field(app, ui, p, field, edit);
-    } else {
-        let below = r.top() + 8.0 + galley.size().y + 4.0;
-        ui.painter().galley(pos2(x, r.top() + 8.0), galley, t.text_label);
-        ui.painter().galley(pos2(x, below), sub_galley, t.text_dim);
     }
     // resting on a preset shows it on the photo (no undo step)
     if resp.hovered() && !renaming {
         let label = crate::i18n::tr_format!("Light Preset: {name}", name = p.name);
         app.hover_preview = Some(HoverPreview { label, settings: look.clone() });
     }
-    // (a small Add button on the row under the pointer, over the row's own click)
+    // (a small Add button on the card under the pointer, over the card's own click)
     let mut add = false;
     if (resp.hovered() || resp.contains_pointer()) && !renaming {
-        let btn = Rect::from_min_size(pos2(r.right() - ADD_W - 4.0, r.center().y - 9.0), vec2(ADD_W, 18.0));
-        let br = ui.interact(btn, resp.id.with("add"), Sense::click());
-        register(ui, format!("relight:presetAdd:{}", p.id), btn);
+        let btn = card.corner(ADD_SIZE, 4.0);
+        let br = ui.interact(btn, resp.id.with("add"), egui::Sense::click());
+        crate::widgets::register(ui, format!("relight:presetAdd:{}", p.id), btn);
         let fill = if br.hovered() { t.pressed } else { t.inset };
         ui.painter().rect_filled(btn, 4.0, fill);
         ui.painter().text(btn.center(), Align2::CENTER_CENTER, "+", t.font(13.0), t.text);
@@ -201,7 +215,7 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, _d: &DevelopSettings, photo: 
         let ctx = ui.ctx().clone();
         apply(app, &ctx, edit, photo, &p.id, add);
     }
-    crate::widgets::context_menu(&resp, |ui| {
+    crate::widgets::context_menu(resp, |ui| {
         if ui.button(crate::i18n::tr("Add to Lights")).clicked() {
             let ctx = ui.ctx().clone();
             apply(app, &ctx, edit, photo, &p.id, true);

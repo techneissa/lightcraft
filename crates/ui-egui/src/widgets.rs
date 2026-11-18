@@ -1677,6 +1677,7 @@ pub(crate) mod label_column;
 #[cfg(test)]
 #[path = "widgets/tests_numeric_entry.rs"]
 mod numeric_entry_tests;
+pub mod preset_grid;
 pub mod progress;
 pub mod rating;
 pub mod text_field;

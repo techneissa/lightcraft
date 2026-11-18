@@ -1,6 +1,6 @@
 //! The Presets column (opens to the left of the Edit panel): grouped presets with hover preview
 //! (the loupe shows the photo with the preset while the pointer rests on it; nothing is
-//! committed), optional live thumbnails, amount slider, create/favourite, import/export of preset
+//! committed), optional live thumbnails (then each group is a grid of cards, issue #344), amount slider, create/favourite, import/export of preset
 //! files.
 
 use std::collections::BTreeMap;
@@ -13,6 +13,7 @@ use serde_json::json;
 
 use crate::icons::{Icon, paint};
 use crate::theme::Tokens;
+use crate::widgets::preset_grid::{Grid, Item};
 use crate::widgets::{divider, icon_button, register, slider};
 use crate::{HoverPreview, LightcraftApp};
 
@@ -159,7 +160,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         let active = app.session.active();
         let marked = AppliedByPhoto::of(ui.ctx(), &app.session, active);
         let thumbs = app.ui.preset_thumbs && active.is_some();
-        let row_h = if thumbs { 54.0 } else { 26.0 };
+        let row_h = 26.0;
         let groups = grouped(ui.ctx(), &app.session.presets);
         let scroll = egui::ScrollArea::vertical().id_salt("presets-scroll").auto_shrink([false, false]).show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 0.0;
@@ -201,6 +202,12 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 if !open {
                     continue;
                 }
+                let shared = Shared { favorites, active, amt_id, groups: &groups };
+                // with thumbnails on, the presets are cards in a grid that follows the panel's width (issue #344)
+                if thumbs && let Some(photo) = active {
+                    cards(app, ui, &shared, grp, photo, marked.as_deref(), (g.as_str(), favorites));
+                    continue;
+                }
                 let (first, end) = rows_in_view(ui.cursor().top(), row_h, grp.items.len(), visible);
                 if first > 0 {
                     ui.allocate_space(vec2(ui.available_width(), first as f32 * row_h));
@@ -220,18 +227,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                         ui.painter().rect_filled(r, 0.0, t.hover.gamma_multiply(0.7));
                     }
                     // the preview is what a click commits: the same composition as `preset.apply` (`Session::preset_applied`)
-                    let look = if thumbs || resp.hovered() { active.and_then(|id| app.session.preset_applied(id, &pr, 1.0)) } else { None };
-                    let mut text_x = r.left() + 40.0;
-                    if thumbs && let (Some(id), Some(s)) = (active, look.as_ref()) {
-                        let tr = Rect::from_min_size(pos2(r.left() + 36.0, r.top() + 5.0), vec2(66.0, row_h - 10.0));
-                        ui.painter().rect_filled(tr, 2.0, t.canvas);
-                        if let Some(job) = app.session.variant_job(id, s, THUMB_EDGE)
-                            && let Some(tex) = app.renderer.variant(job)
-                        {
-                            ui.painter().image(tex.id(), tr, cover_uv(tr, tex.size), Color32::WHITE);
-                        }
-                        text_x = tr.right() + 10.0;
-                    }
+                    let look = if resp.hovered() { active.and_then(|id| app.session.preset_applied(id, &pr, 1.0)) } else { None };
+                    let text_x = r.left() + 40.0;
                     // renamed in place (in its group's row; a starred preset's second row shows the old name)
                     let kind = crate::inline_rename::Kind::Preset(pid.clone());
                     let renaming = !favorites && app.ui.rename_row.as_ref().is_some_and(|rr| rr.kind == kind);
@@ -253,72 +250,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                             t.star,
                         );
                     }
-                    // resting on a preset previews it in the loupe (no history entry)
-                    if resp.hovered()
-                        && !renaming
-                        && let Some(s) = look
-                    {
-                        let label = crate::i18n::tr_format!("Preset: {name}", name = name);
-                        app.hover_preview = Some(HoverPreview { label: label.clone(), settings: s });
-                        if let Some(id) = active {
-                            ui.data_mut(|d| d.insert_temp(egui::Id::unique("last-preset-hover"), (id, pr.clone(), label)));
-                        }
-                    }
-                    if resp.clicked()
-                        && !renaming
-                        && let Ok(applied) = app.run("preset.apply", json!({"id": pid, "amount": 100}))
-                    {
-                        AppliedByPhoto::remember(ui.ctx(), &app.session, &pid);
-                        ui.data_mut(|d| d.insert_temp(amt_id, AppliedPreset::new(&app.session, pid.clone(), 100.0)));
-                        ui.data_mut(|d| d.remove::<(lightcraft_catalog::PhotoId, Preset, String)>(egui::Id::unique("last-preset-hover")));
-                        let text = crate::i18n::tr_format!("Preset: {name}", name = name);
-                        crate::macos_colour::picker::preset_applied(app, ui.ctx(), text, &applied);
-                    }
-                    let (builtin, group) = (pr.builtin, pr.group.clone());
-                    crate::widgets::context_menu(&resp, |ui| {
-                        if ui.button(crate::i18n::tr(if fav { "Remove from Favorites" } else { "Add to Favorites" })).clicked() {
-                            let _ = app.run("preset.favorite", json!({"id": pid}));
-                        }
-                        if builtin {
-                            return;
-                        }
-                        ui.separator();
-                        if ui
-                            .add_enabled(app.session.active().is_some(), egui::Button::new(crate::i18n::tr("Update with Current Settings")))
-                            .clicked()
-                        {
-                            match app.run("preset.update", json!({"id": pid})) {
-                                Ok(_) => app.toast(ui.ctx(), crate::i18n::tr_format!("Updated “{name}”", name = name)),
-                                Err(e) => app.toast(ui.ctx(), e),
-                            }
-                        }
-                        if ui.button(crate::i18n::tr("Rename…")).clicked() {
-                            crate::inline_rename::begin(app, crate::inline_rename::Kind::Preset(pid.clone()));
-                            ui.close();
-                        }
-                        crate::widgets::menu_button(ui, crate::i18n::tr("Move to Group"), |ui| {
-                            for g in groups.iter().filter(|x| x.user && x.name != group).map(|x| &x.name) {
-                                if ui.button(g).clicked() {
-                                    let _ = app.run("preset.move", json!({"id": pid, "group": g}));
-                                }
-                            }
-                            if ui.button(crate::i18n::tr("New Group…")).clicked() {
-                                crate::panels::dialogs::prompt(
-                                    app,
-                                    "Move Preset to New Group",
-                                    "Group name",
-                                    "",
-                                    "preset.move",
-                                    json!({"id": pid}),
-                                    "group",
-                                );
-                            }
-                        });
-                        ui.separator();
-                        if ui.button(crate::i18n::tr("Delete Preset")).clicked() {
-                            let _ = app.run("preset.delete", json!({"id": pid}));
-                        }
-                    });
+                    preset_actions(app, ui, &resp, &pr, &name, look, renaming, &shared);
                 }
                 if end < grp.items.len() {
                     ui.allocate_space(vec2(ui.available_width(), (grp.items.len() - end) as f32 * row_h));
@@ -340,6 +272,143 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             }
         } else {
             ui.data_mut(|d| d.remove::<(lightcraft_catalog::PhotoId, Preset, String)>(last_hover_id));
+        }
+    });
+}
+
+/// What the panel's rows and cards share about the group being drawn.
+struct Shared<'a> {
+    /// The Favorites section (a starred preset is listed in it and in its group).
+    favorites: bool,
+    active: Option<lightcraft_catalog::PhotoId>,
+    amt_id: egui::Id,
+    groups: &'a [Group],
+}
+
+/// The group's presets as cards: each one's picture (the active photo with the preset), its name and, for a portrait
+/// preset, whom it follows. `marked` is the preset the photo was given.
+fn cards(
+    app: &mut LightcraftApp,
+    ui: &mut egui::Ui,
+    shared: &Shared,
+    grp: &Group,
+    photo: lightcraft_catalog::PhotoId,
+    marked: Option<&str>,
+    group: (&str, bool),
+) {
+    let t = Tokens::get(ui.ctx());
+    let listed: Vec<usize> = grp.items.iter().copied().filter(|i| app.session.presets.get(*i).is_some()).collect();
+    let items: Vec<Item> = listed
+        .iter()
+        .filter_map(|&i| app.session.presets.get(i))
+        .map(|pr| Item {
+            // a starred preset is listed twice: in Favorites and in its group
+            key: if shared.favorites { format!("presetFavorite:{}", pr.id) } else { format!("preset:{}", pr.id) },
+            name: crate::i18n::builtin_label(&pr.name, pr.builtin).to_string(),
+            // a portrait preset says whom it follows, or All Faces (fork, `fork/portrait-presets.md`)
+            label: super::portrait::preset_tag(pr).unwrap_or_default(),
+            applied: marked == Some(pr.id.as_str()),
+            dim: false,
+            // renamed in place (in its group's card; a starred preset's second card shows the old name)
+            editing: !shared.favorites && app.ui.rename_row.as_ref().is_some_and(|rr| rr.kind == crate::inline_rename::Kind::Preset(pr.id.clone())),
+        })
+        .collect();
+    Grid::new(("presets", group.1, group.0)).inset(16.0, 16.0).show(ui, &items, |ui, n, card| {
+        let (Some(&i), Some(item)) = (listed.get(n), items.get(n)) else { return };
+        let Some(pr) = app.session.presets.get(i).cloned() else { return };
+        let resp = &card.resp;
+        if item.applied {
+            register(ui, "presetApplied", card.rect);
+        }
+        // the preview is what a click commits: the same composition as `preset.apply` (`Session::preset_applied`)
+        let look = app.session.preset_applied(photo, &pr, 1.0);
+        if let Some(s) = look.as_ref()
+            && let Some(job) = app.session.variant_job(photo, s, THUMB_EDGE)
+            && let Some(tex) = app.renderer.variant(job)
+        {
+            card.paint_picture(ui, tex.id(), tex.size);
+        }
+        if item.editing {
+            let kind = crate::inline_rename::Kind::Preset(pr.id.clone());
+            let field = Rect::from_min_size(card.text.min, vec2(card.text.width(), 24.0));
+            crate::inline_rename::field(app, ui, &kind, field);
+        }
+        if pr.favorite {
+            let star = card.corner(vec2(18.0, 18.0), 4.0);
+            ui.painter().circle_filled(star.center(), 10.0, Color32::from_black_alpha(110));
+            crate::rating::paint_star(ui.painter(), star.shrink(2.0), true, t.star);
+        }
+        preset_actions(app, ui, resp, &pr, &item.name, look, item.editing, shared);
+    });
+}
+
+/// What a row or card of a preset does: previews it in the loupe while the pointer rests on it, applies it on a click and
+/// opens its menu.
+#[allow(clippy::too_many_arguments)]
+fn preset_actions(
+    app: &mut LightcraftApp,
+    ui: &mut egui::Ui,
+    resp: &egui::Response,
+    pr: &Preset,
+    name: &str,
+    look: Option<lightcraft_develop::DevelopSettings>,
+    renaming: bool,
+    shared: &Shared,
+) {
+    let (pid, fav, active, amt_id) = (pr.id.clone(), pr.favorite, shared.active, shared.amt_id);
+    // resting on a preset previews it in the loupe (no history entry)
+    if resp.hovered()
+        && !renaming
+        && let Some(s) = look
+    {
+        let label = crate::i18n::tr_format!("Preset: {name}", name = name);
+        app.hover_preview = Some(HoverPreview { label: label.clone(), settings: s });
+        if let Some(id) = active {
+            ui.data_mut(|d| d.insert_temp(egui::Id::unique("last-preset-hover"), (id, pr.clone(), label)));
+        }
+    }
+    if resp.clicked()
+        && !renaming
+        && let Ok(applied) = app.run("preset.apply", json!({"id": pid, "amount": 100}))
+    {
+        AppliedByPhoto::remember(ui.ctx(), &app.session, &pid);
+        ui.data_mut(|d| d.insert_temp(amt_id, AppliedPreset::new(&app.session, pid.clone(), 100.0)));
+        ui.data_mut(|d| d.remove::<(lightcraft_catalog::PhotoId, Preset, String)>(egui::Id::unique("last-preset-hover")));
+        let text = crate::i18n::tr_format!("Preset: {name}", name = name);
+        crate::macos_colour::picker::preset_applied(app, ui.ctx(), text, &applied);
+    }
+    let (builtin, group) = (pr.builtin, pr.group.clone());
+    crate::widgets::context_menu(resp, |ui| {
+        if ui.button(crate::i18n::tr(if fav { "Remove from Favorites" } else { "Add to Favorites" })).clicked() {
+            let _ = app.run("preset.favorite", json!({"id": pid}));
+        }
+        if builtin {
+            return;
+        }
+        ui.separator();
+        if ui.add_enabled(app.session.active().is_some(), egui::Button::new(crate::i18n::tr("Update with Current Settings"))).clicked() {
+            match app.run("preset.update", json!({"id": pid})) {
+                Ok(_) => app.toast(ui.ctx(), crate::i18n::tr_format!("Updated “{name}”", name = name)),
+                Err(e) => app.toast(ui.ctx(), e),
+            }
+        }
+        if ui.button(crate::i18n::tr("Rename…")).clicked() {
+            crate::inline_rename::begin(app, crate::inline_rename::Kind::Preset(pid.clone()));
+            ui.close();
+        }
+        crate::widgets::menu_button(ui, crate::i18n::tr("Move to Group"), |ui| {
+            for g in shared.groups.iter().filter(|x| x.user && x.name != group).map(|x| &x.name) {
+                if ui.button(g).clicked() {
+                    let _ = app.run("preset.move", json!({"id": pid, "group": g}));
+                }
+            }
+            if ui.button(crate::i18n::tr("New Group…")).clicked() {
+                crate::panels::dialogs::prompt(app, "Move Preset to New Group", "Group name", "", "preset.move", json!({"id": pid}), "group");
+            }
+        });
+        ui.separator();
+        if ui.button(crate::i18n::tr("Delete Preset")).clicked() {
+            let _ = app.run("preset.delete", json!({"id": pid}));
         }
     });
 }
