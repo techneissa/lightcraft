@@ -418,3 +418,21 @@ fn an_old_presets_file_without_water_loads_unchanged() {
     assert!(entry["lights"].get("water").is_none(), "an old preset is written back without a water field: {entry}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Hovering a Light Preset previews it on the photo (#344): the preview render of a photo whose own light is off still
+/// carries the depth field the preset's lights need, and is not the unlit photo's render.
+#[test]
+fn a_hovered_preset_previews_with_its_lights_on_a_photo_whose_light_is_off() {
+    let (mut s, ids) = session();
+    let id = ids[0];
+    let own = (*s.develop_of(id).unwrap()).clone();
+    assert!(!own.relight.is_on());
+    let subject = s.relight_subject(id).0;
+    let lit = built_in()[0].onto(&own, &subject);
+    assert!(lit.relight.is_on());
+    let unlit_job = s.preview_job(id, 200, 150, true, &own).unwrap();
+    let lit_job = s.preview_job(id, 200, 150, true, &lit).unwrap();
+    assert!(unlit_job.info.relight.is_none());
+    assert!(lit_job.info.relight.is_some(), "the preview has no depth field, so Relight draws nothing");
+    assert_ne!(unlit_job.key, lit_job.key);
+}
