@@ -16,6 +16,7 @@ use super::{Icon, LightcraftApp, Tokens, control, register};
 mod effects;
 mod kinds;
 mod presets;
+mod sky;
 mod water;
 
 /// How near a press must be to a handle to take it (points).
@@ -161,6 +162,8 @@ pub(super) fn relight(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSet
             control(app, ui, d, &format!("relight.{sel}.wrap"), true);
         }
     }
+    // (issue #330: a sun's rays between clouds)
+    sky::sky(app, ui, d, sel, made.as_deref());
     // (issue #302: the light's gel, pattern and haze)
     effects::effects(app, ui, d, sel);
     // (issue #333: the photo's own underwater look)

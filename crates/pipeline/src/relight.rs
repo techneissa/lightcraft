@@ -50,6 +50,8 @@ pub struct Lit {
     pub beams: Vec<Beamed>,
     /// The photo's Distance Fade: at most one ([`fades_of`]).
     pub fades: Vec<Faded>,
+    /// Each sun's rays between clouds (issue #330).
+    pub rays: Vec<crate::relight_sky::Rayed>,
     /// The field the beams' planes are on.
     pub field: Arc<Field>,
     /// The underwater look's colour planes (issue #333); `None` while it has no water.
@@ -87,7 +89,8 @@ const FADE_IDS: u32 = BEAM_IDS - 2 * lightcraft_relight::MAX_LIGHTS as u32;
 /// The ids the water's planes take (issue #333): exposure, temperature (cool, warm), tint (green, magenta), the veil's red,
 /// green and blue, `u32::MAX - 101` up to `u32::MAX - 94`, and the shafts' beam `u32::MAX - 120`. Ranges among the masks: the
 /// light's planes `u32::MAX - 5` up, the beams' and the sources' `u32::MAX - 21` to `u32::MAX - 6`, Distance Fade's (issue
-/// #331) from `u32::MAX - 22` down by two for each fade (one, today), the water's far below all of those.
+/// #331) from `u32::MAX - 22` down by two for each fade (one, today), a sun's rays in the sky (issue #330) `u32::MAX - 40` to
+/// `u32::MAX - 71`, the water's below all of those.
 const WATER_IDS: u32 = u32::MAX - 93;
 const SHAFT_ID: u32 = u32::MAX - 120;
 
@@ -115,18 +118,18 @@ pub struct Lobes {
 }
 
 /// A few values most recently used first, by key.
-struct Memo<T> {
+pub(crate) struct Memo<T> {
     kept: Mutex<Vec<(u64, Arc<T>)>>,
     keep: usize,
 }
 
 impl<T> Memo<T> {
-    const fn new(keep: usize) -> Self {
+    pub(crate) const fn new(keep: usize) -> Self {
         Memo { kept: Mutex::new(Vec::new()), keep }
     }
 
     /// The value of `key`, which becomes the most recently used (so what is asked for every step of a drag stays).
-    fn get(&self, key: u64) -> Option<Arc<T>> {
+    pub(crate) fn get(&self, key: u64) -> Option<Arc<T>> {
         let mut kept = self.kept.lock().unwrap_or_else(PoisonError::into_inner);
         let at = kept.iter().position(|(k, _)| *k == key)?;
         let entry = kept.remove(at);
@@ -136,14 +139,14 @@ impl<T> Memo<T> {
     }
 
     /// Keep `value` for `key` as the most recently used, pushing out the least.
-    fn put(&self, key: u64, value: Arc<T>) {
+    pub(crate) fn put(&self, key: u64, value: Arc<T>) {
         let mut kept = self.kept.lock().unwrap_or_else(PoisonError::into_inner);
         kept.retain(|(k, _)| *k != key);
         kept.insert(0, (key, value));
         kept.truncate(self.keep);
     }
 
-    fn clear(&self) {
+    pub(crate) fn clear(&self) {
         self.kept.lock().unwrap_or_else(PoisonError::into_inner).clear();
     }
 
@@ -194,6 +197,7 @@ pub fn forget() {
     GLOW_LOBES.clear();
     ADDED_LOBES.clear();
     HALVED.clear();
+    crate::relight_sky::forget();
 }
 
 // (the settings and the light's numbers keep to the same cap)
@@ -213,6 +217,8 @@ pub struct Scene {
     /// Lights that only show their beam (the water's shafts, issue #333): each with its effects. They add no light to the
     /// surfaces and take no place among `lights`.
     pub beams: Vec<(Light, Effects)>,
+    /// Each of those lights' rays between clouds (issue #330), in the same order.
+    pub skies: Vec<crate::relight_sky::SkyLight>,
 }
 
 impl Scene {
@@ -249,7 +255,8 @@ pub fn scene_of(s: &DevelopSettings) -> Option<Scene> {
         .collect();
     let mut effects: Vec<Effects> = on().map(|l| effects_of(&l.effects)).collect();
     let (water, beams) = underwater(&r.water, &mut lights, &mut effects);
-    Some(Scene { lights, effects, darken: r.darken / 100.0, water, beams })
+    let skies = on().map(|l| crate::relight_sky::SkyLight::of(&l.effects)).collect();
+    Some(Scene { lights, effects, darken: r.darken / 100.0, water, beams, skies })
 }
 
 /// The underwater look (issue #333) as the scene takes it: the water's colour, the sun of the caustics added to `lights`
@@ -415,7 +422,16 @@ pub fn lit_for(info: &SourceInfo, s: &DevelopSettings, tier: Tier) -> Option<Lit
     let (_, shading) = shading_in(input, &scene, ev, draft, keep);
     let water = water_for(input, &scene.water, ev, keep);
     let beams = beams_in(input, &scene, draft, keep);
-    Some(Lit { shading, beams, fades: fades_in(input, &scene, ev, keep), field: input.field.clone(), water })
+    // (issue #330: a sun's rays in the sky, on the same field as the rest: a drag's are traced on the half-size field)
+    let rays = if scene.skies.iter().any(crate::relight_sky::SkyLight::is_on) {
+        let tone = crate::finish::base_tone(s, info, 1.0);
+        let guide = crate::finish::base_tone(&DevelopSettings::default(), info, 1.0);
+        let room = crate::relight_sky::Headroom::of(&tone, &guide, ev);
+        crate::relight_sky::rays_of(input, &scene, &room)
+    } else {
+        Vec::new()
+    };
+    Some(Lit { shading, beams, fades: fades_in(input, &scene, ev, keep), rays, field: input.field.clone(), water })
 }
 
 /// `input`'s field at half its size, under a key of its own (so nothing made on it is taken for the whole field's), made
@@ -453,7 +469,7 @@ fn water_for(input: &Input, water: &Water, ev: f64, keep: bool) -> Option<Arc<Wa
     Some(planes)
 }
 
-fn hashed(parts: impl FnOnce(&mut std::collections::hash_map::DefaultHasher)) -> u64 {
+pub(crate) fn hashed(parts: impl FnOnce(&mut std::collections::hash_map::DefaultHasher)) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     parts(&mut h);
     std::hash::Hasher::finish(&h)
@@ -933,7 +949,7 @@ fn shading_in(input: &Input, scene: &Scene, ev: f64, draft: bool, keep: bool) ->
 }
 
 /// One of the light's planes as a mask the finish stage applies, with `adjust` per unit of it.
-fn evaluated(id: u32, width: usize, height: usize, data: Vec<f32>, adjust: LocalAdjustments) -> Evaluated {
+pub(crate) fn evaluated(id: u32, width: usize, height: usize, data: Vec<f32>, adjust: LocalAdjustments) -> Evaluated {
     Evaluated { id, alpha: Arc::new(MaskAlpha::from_plane(Plane { width, height, data })), amount: 1.0, adjust }
 }
 
@@ -1016,6 +1032,11 @@ pub fn masks(plan: &Plan<'_>) -> Vec<Evaluated> {
             (q.x, q.y)
         }));
     }
+    // (issue #330: each sun's rays between clouds)
+    out.extend(crate::relight_sky::masks(&lit.field, &lit.rays, w, h, &|x, y| {
+        let q = map.apply(Point::new(x, y));
+        (q.x, q.y)
+    }));
     if let Some(t) = t {
         eprintln!("    relight planes ({w} × {h}): {:.1} ms", t.elapsed().as_secs_f64() * 1e3);
     }

@@ -31,7 +31,9 @@ pub mod probe;
 mod projector;
 mod rim;
 pub mod shadow;
+pub mod sky;
 pub mod source;
+pub mod sun_rays;
 #[cfg(test)]
 mod tests_aim;
 #[cfg(test)]
@@ -53,6 +55,8 @@ mod tests_rim;
 #[cfg(test)]
 mod tests_shadow;
 #[cfg(test)]
+mod tests_sky;
+#[cfg(test)]
 mod tests_stage;
 #[cfg(test)]
 mod tests_water;
@@ -66,6 +70,8 @@ pub use kinds::{Fill, LightKind, MIN_ANGLE, Rim, Softbox, Spot, Sun};
 pub use light::{Light, Lobe, MAX_LIGHTS, Part, Planes, Rig, Shade, Shading, Split, ambient, warmth_tilt};
 pub use mist::{Ground, Medium};
 pub use shadow::Visibility;
+pub use sky::{Rays, SkyRays};
+pub use sun_rays::{RayField, RayShape};
 pub use water::{Water, WaterPlanes};
 
 #[derive(Debug, Clone, PartialEq, Eq)]

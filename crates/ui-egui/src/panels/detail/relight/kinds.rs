@@ -5,7 +5,8 @@
 //!   widen or narrow the cone, in degrees as the photo shows them).
 //! - **Sun / Window:** an arrow from the light's handle to a tip: its direction on the photo is the sun's azimuth, its
 //!   length the height (the longest arrow is a sun overhead, a short one a low sun in front of the scene). A hollow tip: the sun is
-//!   behind the scene.
+//!   behind the scene. With its rays between clouds on (issue #330), a sun symbol where they centre (placed, or found from
+//!   the sky): drag it onto the sun in the photo (or above the frame) to place it.
 //! - **Softbox:** the rectangle (the handle is its middle), a corner grip that resizes it and a knob above its top
 //!   edge that turns it, and a tip on an arrow from its middle: the way it shines (issue #335; like the sun's arrow, its
 //!   direction on the photo is the direction the box leans to and its length how far; hollow while it shines straight in).
@@ -41,6 +42,7 @@ enum Handle {
     BoxSize,
     BoxTurn,
     BoxAim,
+    RaysCentre,
 }
 
 fn grab_id() -> egui::Id {
@@ -137,6 +139,26 @@ fn aim_dragged(base: egui::Vec2, from: egui::Vec2, to: egui::Vec2) -> (f64, f64)
     aim_of_offset(base + (to - from))
 }
 
+/// Where a sun's rays centre on the screen (issue #330): where they are placed, or the centre found from the sky (`auto`,
+/// once a render has found it); none while the rays are off.
+fn rays_centre(map: &CanvasMap, l: &LightSettings, auto: Option<(f32, f32)>) -> Option<Pos2> {
+    let e = &l.effects;
+    if e.sky_rays <= 0.0 && e.opposite_rays <= 0.0 {
+        return None;
+    }
+    if e.rays_placed >= 0.5 {
+        return Some(map.screen(Point::new(e.rays_x, e.rays_y)));
+    }
+    auto.map(|(x, y)| map.screen(Point::new(f64::from(x), f64::from(y))))
+}
+
+/// The centre a sun's rays take from the sky on the active photo, once a render has found it.
+fn auto_centre(app: &LightcraftApp, l: &LightSettings) -> Option<(f32, f32)> {
+    let rays = if l.effects.sky_rays > 0.0 { lightcraft_relight::Rays::Sun } else { lightcraft_relight::Rays::Opposite };
+    let made = app.session.relight_made(app.session.active()?)?;
+    made.input.field.rays_centre_known(rays)
+}
+
 /// The softbox's half-sizes on the screen, and its corner, turning knob and stem on it.
 fn box_frame(map: &CanvasMap, l: &LightSettings, c: Pos2) -> (egui::Vec2, [Pos2; 4], Pos2) {
     let (w, h) = photo_size(map);
@@ -148,7 +170,7 @@ fn box_frame(map: &CanvasMap, l: &LightSettings, c: Pos2) -> (egui::Vec2, [Pos2;
 }
 
 /// The handles of the selected light's type, where they are on the screen.
-fn handles(map: &CanvasMap, l: &LightSettings, c: Pos2) -> Vec<(Handle, Pos2)> {
+fn handles(map: &CanvasMap, l: &LightSettings, c: Pos2, auto: Option<(f32, f32)>) -> Vec<(Handle, Pos2)> {
     match l.kind.index() {
         1 => {
             let (dir, len) = spot_axis(map, l, c);
@@ -157,7 +179,13 @@ fn handles(map: &CanvasMap, l: &LightSettings, c: Pos2) -> Vec<(Handle, Pos2)> {
                 (Handle::Cone, c + turned(dir, l.kind.spot_angle as f32) * len),
             ]
         }
-        2 => vec![(Handle::SunTip, sun_tip(l, c))],
+        2 => {
+            let mut v = vec![(Handle::SunTip, sun_tip(l, c))];
+            if let Some(at) = rays_centre(map, l, auto) {
+                v.push((Handle::RaysCentre, at));
+            }
+            v
+        }
         3 => {
             let (_, corners, knob) = box_frame(map, l, c);
             vec![(Handle::BoxSize, corners[2]), (Handle::BoxTurn, knob), (Handle::BoxAim, aim_tip(l, c))]
@@ -189,7 +217,7 @@ fn grip(p: &egui::Painter, at: Pos2, tint: Color32, hot: bool, hollow: bool) {
     }
 }
 
-fn paint(p: &egui::Painter, map: &CanvasMap, l: &LightSettings, c: Pos2, hot: Option<Handle>) {
+fn paint(p: &egui::Painter, map: &CanvasMap, l: &LightSettings, c: Pos2, hot: Option<Handle>, auto: Option<(f32, f32)>) {
     let tint = light_tint(l.warmth);
     let on = |h: Handle| hot == Some(h);
     match l.kind.index() {
@@ -221,6 +249,14 @@ fn paint(p: &egui::Painter, map: &CanvasMap, l: &LightSettings, c: Pos2, hot: Op
             }
             // (a hollow tip: the sun is behind the scene)
             grip(p, tip, tint, on(Handle::SunTip), l.kind.sun_azimuth.abs() > 90.0);
+            // (the rays' centre: a small sun)
+            if let Some(at) = rays_centre(map, l, auto) {
+                for k in 0..8 {
+                    let d = turned(vec2(0.0, -1.0), 45.0 * k as f32);
+                    halo(p, vec![at + d * 8.0, at + d * 13.0], tint, false);
+                }
+                grip(p, at, tint, on(Handle::RaysCentre), true);
+            }
         }
         3 => {
             let (_, corners, knob) = box_frame(map, l, c);
@@ -275,6 +311,11 @@ fn values(map: &CanvasMap, l: &LightSettings, c: Pos2, h: Handle, q: Pos2, aim_g
             let az = (p.x / cos_el).clamp(-1.0, 1.0).asin().to_degrees();
             json!({"relight.sunAzimuth": f64::from(az).round(), "relight.sunElevation": f64::from(sin_el.asin().to_degrees()).round()})
         }
+        Handle::RaysCentre => {
+            let n = map.norm(q);
+            // (a drag places the centre: it leaves the one found from the sky)
+            json!({"relight.raysPlaced": 1, "relight.raysX": (n.x.clamp(-0.5, 1.5) * 1000.0).round() / 1000.0, "relight.raysY": (n.y.clamp(-1.0, 1.5) * 1000.0).round() / 1000.0})
+        }
         Handle::BoxSize => {
             let (w, h) = photo_size(map);
             let local = turned(q - c, -(l.kind.box_rotation as f32));
@@ -302,6 +343,7 @@ fn control_of(h: Handle) -> &'static str {
         Handle::BoxSize => "relight.boxWidth",
         Handle::BoxTurn => "relight.boxRotation",
         Handle::BoxAim => "relight.boxAimH",
+        Handle::RaysCentre => "relight.raysX",
     }
 }
 
@@ -313,6 +355,7 @@ fn label_of(h: Handle) -> &'static str {
         Handle::BoxSize => "Relight Box Size",
         Handle::BoxTurn => "Relight Box Turn",
         Handle::BoxAim => "Relight Box Aim",
+        Handle::RaysCentre => "Relight Rays Centre",
     }
 }
 
@@ -332,7 +375,8 @@ pub(super) fn overlay(
     if cfg!(target_arch = "wasm32") {
         return false;
     }
-    let found = handles(map, l, c);
+    let auto = auto_centre(app, l);
+    let found = handles(map, l, c, auto);
     if found.is_empty() || !clip.contains(c) {
         // (a drag that began on a handle ends where its light's handles stop)
         return ui.ctx().data(|m| m.get_temp::<Handle>(grab_id())).is_some() && finish(app, ui, resp);
@@ -346,7 +390,7 @@ pub(super) fn overlay(
             .min_by(|a, b| a.1.distance(q).total_cmp(&b.1.distance(q)))
             .map(|(h, _)| *h)
     };
-    paint(&ui.painter_at(clip), map, l, c, grab.or_else(|| hover.and_then(near)));
+    paint(&ui.painter_at(clip), map, l, c, grab.or_else(|| hover.and_then(near)), auto);
     for (h, at) in &found {
         register(ui, format!("relight:kind:{}", control_of(*h).trim_start_matches("relight.")), Rect::from_center_size(*at, vec2(16.0, 16.0)));
     }

@@ -262,7 +262,7 @@ pub fn warmth_tilt(w: f64) -> f32 {
 /// before Amount. It depends on the light's place, depth, Softness and Wrap and on the photo's field, and not on
 /// Amount, Warmth or Darken Surroundings, so a caller makes one per light and keeps it (dragging one light makes
 /// one new lobe; the others stay).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct Lobe {
     pub(crate) m: Vec<f32>,
 }

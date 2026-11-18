@@ -774,8 +774,8 @@ fn a_fork_18_log_patch_replays_with_no_water_and_a_water_patch_replays() {
     assert!(!m.files.lock().unwrap().keys().any(|k| k.contains("damaged")));
 }
 
-/// Fork 23 (#332) made a fork 18 library an older one: its log's patches replay as they are, and Edge Glow and Sunburst
-/// read as off. A fork 18 snapshot with a hazy light and a log patch on its haze opens with the patch applied and nothing
+/// Fork 23 (#332) and fork 24 (#330) made a fork 18 library an older one: its log's patches replay as they are, and Edge
+/// Glow, Sunburst, Sky Rays and Opposite Rays read as off. A fork 18 snapshot with a hazy light and a log patch on its haze opens with the patch applied and nothing
 /// set aside.
 #[test]
 fn a_fork_18_log_patch_of_a_hazy_light_is_applied_and_edge_glow_is_off() {
@@ -800,6 +800,7 @@ fn a_fork_18_log_patch_of_a_hazy_light_is_applied_and_edge_glow_is_off() {
     let e = loaded.photo(id).unwrap().develop.relight.lights[0].effects;
     assert_eq!((e.haze, e.dust), (55.0, 20.0), "the patch on the haze was lost");
     assert_eq!((e.edge_glow, e.sunburst), (0.0, 0.0));
+    assert_eq!((e.sky_rays, e.opposite_rays, e.ray_count), (0.0, 0.0, 7.0));
     assert!(
         !m.files.lock().unwrap().keys().any(|k| k.contains("damaged")),
         "a log was set aside: {:?}",

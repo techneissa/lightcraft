@@ -34,7 +34,7 @@ use crate::occluder::{Blocker, TILE};
 /// The long side of the reduced field the march runs on (the reduction is the whole number of field pixels that brings
 /// it closest to this from above: 4 for the usual 1600-pixel field, 1 for a small one), for a drag's draft and for the full march.
 const LOW_SIDE_DRAFT: usize = 200;
-const LOW_SIDE: usize = 400;
+pub(crate) const LOW_SIDE: usize = 400;
 /// Rays of the first pass (one at the light's middle and three round its edge); a pixel whose rays disagree (it is in
 /// a penumbra) gets [`MORE`] more across the whole light.
 pub(crate) const FIRST: usize = 4;
