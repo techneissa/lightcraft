@@ -44,7 +44,8 @@ impl Field {
         let long = w.max(h) as f32;
         let r = (R_MIN + (R_MAX - R_MIN) * strength) * long;
         let (cx, cy) = (light.x as f32 * w as f32, light.y as f32 * h as f32);
-        // (the halo has reached nothing by 9 radii)
+        // (the halo fades smoothly to nothing from 5 radii to 9, round: it used to stop at the square round 9 radii, a hard
+        // rectangle in a dark photo's haze, issue #346)
         let reach = (9.0 * r).ceil();
         let (x0, x1) = ((cx - reach).floor().max(0.0) as usize, ((cx + reach).ceil() as usize).min(w));
         let (y0, y1) = ((cy - reach).floor().max(0.0) as usize, ((cy + reach).ceil() as usize).min(h));
@@ -54,7 +55,7 @@ impl Field {
                 let (dx, dy) = (x as f32 + 0.5 - cx, y as f32 + 0.5 - cy);
                 let d = (dx * dx + dy * dy).sqrt() / r;
                 // (a hot core and a soft halo round it)
-                let glow = (-(d / 0.5) * (d / 0.5)).exp() + 0.2 * (-d / 1.6).exp();
+                let glow = ((-(d / 0.5) * (d / 0.5)).exp() + 0.2 * (-d / 1.6).exp()) * (1.0 - smooth(5.0, 9.0, d));
                 let (surface, _, _) = self.at_px(y * w + x);
                 let seen = 1.0 - smooth(VISIBLE, HIDDEN, lz - surface);
                 let v = PEAK * glow * seen;
@@ -62,5 +63,31 @@ impl Field {
             }
         });
         Some(Lobe { m })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{Field, Light, LightKind};
+
+    #[test]
+    fn the_glow_fades_to_nothing_before_the_square_it_is_drawn_in() {
+        // (issue #346) along the row and the column through the source, the glow only falls, and the last values before it is cut
+        // off are nothing next to its peak: no edge of a rectangle shows in a dark photo's haze
+        let (w, h) = (400, 300);
+        #[allow(clippy::unwrap_used)]
+        let f = Field::from_parts(w, h, vec![0.4; w * h], vec![-4.0; w * h]).unwrap();
+        let l = Light { x: 0.5, y: 0.5, depth: 0.2, amount: 1.0, softness: 0.5, warmth: 0.0, wrap: 0.4, kind: LightKind::Point };
+        let rig = f.rig(&l, 0.0, 0.0);
+        #[allow(clippy::unwrap_used)]
+        let m = f.source(&l, &rig, 1.0).unwrap().m;
+        let peak = m.iter().copied().fold(0f32, f32::max);
+        let row: Vec<f32> = (200..w).map(|x| m[150 * w + x]).collect();
+        let col: Vec<f32> = (150..h).map(|y| m[y * w + 200]).collect();
+        for line in [row, col] {
+            assert!(line.windows(2).all(|p| p[1] <= p[0]), "the glow rises again");
+            let last = line.iter().rposition(|v| *v > 0.0).unwrap_or(0);
+            assert!(line[last] < 1e-5 * peak, "the glow is cut off at {} of a peak of {peak}", line[last]);
+        }
     }
 }

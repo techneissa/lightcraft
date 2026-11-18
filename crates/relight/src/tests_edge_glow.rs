@@ -229,10 +229,31 @@ fn the_glow_goes_on_past_a_roofs_slopes_and_only_the_roof_itself_hides_it() {
     let m = f.edge_glow(&light_at(s.x, s.y, s.depth), &glowing(1.0, 0.8)).unwrap().m;
     let (ax, ay) = (s.x as f32 * W as f32, s.y as f32 * H as f32);
     let at = |dx: f32, dy: f32| m[((ay + dy) as usize) * W + (ax + dx) as usize];
-    // (81 pixels from the apex: straight up; and out to the side and a little below it, beyond the roof's slope)
-    let (above, beside_l, beside_r) = (at(0.0, -81.0), at(-80.0, 16.0), at(80.0, 16.0));
+    // (41 pixels from the apex: straight up; and out to the side and a little below it, beyond the roof's slope)
+    let (above, beside_l, beside_r) = (at(0.0, -41.0), at(-40.0, 8.0), at(40.0, 8.0));
     assert!(above > 0.0 && beside_l > 0.5 * above && beside_r > 0.5 * above, "above {above}, beside left {beside_l}, right {beside_r}");
     // and the roof's own pixels, just under the apex, take no core
     let inside = at(0.0, 12.0);
     assert!(inside < 0.5 * above.max(at(0.0, -12.0)), "on the roof {inside}");
+}
+
+#[test]
+fn the_glow_fades_smoothly_to_nothing_and_stays_small_next_to_the_frame() {
+    // (issue #346) a light in open air at the app's defaults (Softness 50, Edge Glow 70, Sunburst 60), on a field the size of the
+    // app's: along a line out from it the glow only falls, and is all but gone well before it stops, so no circle shows where it
+    // stops; and a quarter of the frame away it is a small share of what it is by the light (the old cut-off was a hard disc)
+    let (w, h) = (1600, 1066);
+    let f = Field::from_parts(w, h, vec![0.4; w * h], vec![-2.0; w * h]).unwrap();
+    let l = Light { softness: 0.5, ..light_at(0.3, 0.5, 0.5) };
+    let m = f.edge_glow(&l, &glowing(0.7, 0.6)).unwrap().m;
+    let (cx, cy) = (480usize, 533usize);
+    let row: Vec<f32> = (cx + 8..w).map(|x| m[cy * w + x]).collect();
+    assert!(row.windows(2).all(|p| p[1] <= p[0]), "the glow rises again along the line");
+    let at = |share: f32| m[cy * w + cx + (share * w as f32) as usize];
+    let by = at(0.02);
+    assert!(at(0.25) < 0.01 * by, "a quarter of the frame away {} of {by} by the light", at(0.25));
+    // (the last bit before it stops is no step: under a thousandth of the glow by the light, and 0 past it)
+    let last = row.iter().rposition(|v| *v > 0.0).unwrap_or(0);
+    let step = row.get(last.saturating_sub(4)).copied().unwrap_or(0.0);
+    assert!(step < 1e-3 * by, "the glow ends with a step of {step} against {by} by the light");
 }

@@ -653,3 +653,36 @@ fn a_drag_after_a_release_takes_the_full_beam_with_the_glow_not_the_coarse_sum_k
     assert!(first_drag != release, "a coarse beam and a full one are alike here: the test shows nothing");
     assert!(next_drag == release, "the drag after the release got the coarse sum");
 }
+
+#[test]
+fn a_strong_light_on_a_bright_wall_rolls_off_below_white_and_clips_no_area() {
+    // (issue #346) a bright beige wall with a fine texture (p7's stairs: about 0.5 linear), a strong point light and a softbox close
+    // to it: the light rolls off towards white and never clips an area flat (Relight's own ceiling, 0.89 linear, is below white)
+    // (stairs: bright treads and darker risers, a step nearer every 16 pixels down the frame, so every step is a depth edge)
+    let (w, h) = (480, 320);
+    let tread = |y: f32| (y / 16.0).fract() < 0.6;
+    let src = Rgb32f::from_fn(w, h, |x, y| {
+        let base = if tread(y as f32) { 0.55 } else { 0.33 };
+        let t = base * (1.0 + 0.08 * ((x as f32 * 0.9).sin() * (y as f32 * 0.7).cos()));
+        [t * 1.08, t, t * 0.88]
+    });
+    let (fw, fh) = (240, 160);
+    let lz = (0..fw * fh).map(|i| 0.6 - 0.12 * ((i / fw) as f32 / 8.0).floor()).collect();
+    let lum = (0..fw * fh).map(|i| (if tread(2.0 * (i / fw) as f32) { 0.55f32 } else { 0.33 } / 0.18).log2()).collect();
+    let field = Field::from_parts(fw, fh, lz, lum).unwrap();
+    let info = SourceInfo { relight: Some(relight::Input { field: Arc::new(field), key: 346_003 }), ..SourceInfo::default() };
+    for (kind, amount) in [(0.0, 100.0), (3.0, 80.0), (2.0, 80.0)] {
+        let mut s = DevelopSettings::default();
+        for (id, v) in [("relight.amount", amount), ("relight.kind", kind), ("relight.x", 0.4), ("relight.y", 0.4), ("relight.depth", 5.0)] {
+            assert!(lightcraft_develop::relight::set(&mut s, id, v), "{id}");
+        }
+        let img = render(&src, &info, &s, &RenderRequest::fit(w, h)).image;
+        let n = (img.width * img.height) as f32;
+        let clipped =
+            (0..img.height).flat_map(|y| (0..img.width).map(move |x| (x, y))).filter(|&(x, y)| img.get(x, y)[..3].iter().all(|c| *c >= 254)).count()
+                as f32;
+        let top = (0..img.height).flat_map(|y| (0..img.width).map(move |x| (x, y))).map(|(x, y)| luma(img.get(x, y))).fold(0f32, f32::max);
+        eprintln!("kind {kind}: clipped {} top {top}", clipped / n);
+        assert!(clipped / n < 0.002, "kind {kind}: {:.2} % of the frame clipped flat", 100.0 * clipped / n);
+    }
+}

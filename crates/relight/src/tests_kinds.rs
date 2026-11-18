@@ -120,3 +120,47 @@ fn hostile_numbers_give_finite_planes_for_every_type() {
         assert!(p.stops.iter().chain(&p.share).all(|v| v.is_finite()), "{kind:?}");
     }
 }
+
+#[test]
+fn darken_surroundings_falls_off_softly_round_a_lit_subject() {
+    // (issue #346) a light that reaches only a subject a little in front of a wall, with Darken Surroundings 80: the wall right
+    // beside the subject keeps some of its light, less and less away from it (light spills; the darkening follows depth), and is
+    // no evenly darkened ground with the subject cut out of it; a wall far behind the subject in depth gets less of the spill
+    let (w, h) = (240, 160);
+    let subject = |x: usize, y: usize| (90..150).contains(&x) && (30..130).contains(&y);
+    let field = |behind: f32| {
+        let lz: Vec<f32> = (0..w * h).map(|i| if subject(i % w, i / w) { -0.25 } else { behind }).collect();
+        #[allow(clippy::unwrap_used)]
+        Field::from_parts(w, h, lz, vec![-1.5; w * h]).unwrap()
+    };
+    let lobe = crate::Lobe { m: (0..w * h).map(|i| if subject(i % w, i / w) { 1.0 } else { 0.0 }).collect() };
+    let row = |f: &Field| {
+        let sh = f.shading_of(&[crate::Part { lobe: &lobe, gain: 3.0, tilt: 0.0, tint: 0.0 }], crate::light::ambient(0.8), 0.0);
+        (0..w).map(|x| sh.px[80 * w + x][0]).collect::<Vec<f32>>()
+    };
+    let near = row(&field(0.0));
+    let (beside, mid, far) = (near[86], near[70], near[10]);
+    assert!(beside > far + 0.4, "the wall beside the subject {beside} stops, far from it {far}");
+    assert!(beside > mid && mid > far, "no smooth fall-off: {beside}, {mid}, {far}");
+    // (no step: from the outline outwards each pixel darkens a little at most)
+    assert!((10..86).all(|x| near[x + 1] - near[x] < 0.06), "{near:?}");
+    // a wall far behind the subject in depth takes less of its spill
+    let deep = row(&field(1.2));
+    assert!(deep[86] < beside - 0.2, "deep wall {} against near wall {beside}", deep[86]);
+}
+
+#[test]
+fn a_fill_that_lights_the_whole_frame_takes_nothing_back_from_darken_surroundings() {
+    // (issue #346) a key on a subject and a fill over the whole frame, with Darken Surroundings 80: the wall far from the subject
+    // stays as dark as the darkening and the fill make it; the fill is no light round the subject, and spills nothing
+    let (w, h) = (240, 160);
+    let subject = |x: usize, y: usize| (90..150).contains(&x) && (30..130).contains(&y);
+    #[allow(clippy::unwrap_used)]
+    let f = Field::from_parts(w, h, (0..w * h).map(|i| if subject(i % w, i / w) { -0.25 } else { 0.0 }).collect(), vec![-1.5; w * h]).unwrap();
+    let key = crate::Lobe { m: (0..w * h).map(|i| if subject(i % w, i / w) { 1.0 } else { 0.0 }).collect() };
+    let fill = crate::Lobe { m: vec![0.3; w * h] };
+    let far_with = |parts: &[crate::Part<'_>]| f.shading_of(parts, crate::light::ambient(0.8), 0.0).px[80 * w + 10][0];
+    let fill_only = far_with(&[crate::Part { lobe: &fill, gain: 1.0, tilt: 0.0, tint: 0.0 }]);
+    let both = far_with(&[crate::Part { lobe: &key, gain: 3.0, tilt: 0.0, tint: 0.0 }, crate::Part { lobe: &fill, gain: 1.0, tilt: 0.0, tint: 0.0 }]);
+    assert!((both - fill_only).abs() < 0.05, "far wall with the key {both} stops, with the fill alone {fill_only}");
+}

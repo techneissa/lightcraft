@@ -328,7 +328,7 @@ pub struct Shading {
     pub width: usize,
     pub height: usize,
     /// Each pixel's gain (stops) and the share of its light that is the new lights' with a warm tilt and with a cool one.
-    px: Vec<[f32; 3]>,
+    pub(crate) px: Vec<[f32; 3]>,
     /// The same for a gel's green–magenta tint: the share with a magenta tint and with a green one. Empty (no memory
     /// held) while no light has a tint.
     tn: Vec<[f32; 2]>,
@@ -407,6 +407,11 @@ impl Field {
             parts.iter().map(|p| std::array::from_fn(|k| if tops[k] > 0.0 { (comp(p, k) / tops[k]).clamp(0.0, 1.0) } else { 0.0 })).collect();
         let want_tint = tint_up > 0.0 || tint_down > 0.0;
         let ev = if ev.is_finite() { ev.clamp(-10.0, 10.0) } else { 0.0 };
+        // (the roll-off takes the brightest luminance round each pixel: the render spreads a pixel's stops over its neighbours, and
+        // a bright tread beside a darker riser took the riser's, past the ceiling, so treads clipped flat white with ragged borders,
+        // issue #346)
+        let bright = self.brightest_round();
+        let ambients = self.spilled_ambient(&parts, ambient);
         let mut stops = vec![0f32; n];
         let mut col = vec![[0f32; 4]; n];
         stops.par_chunks_mut(w.max(1)).zip(col.par_chunks_mut(w.max(1))).enumerate().for_each(|(y, (st, co))| {
@@ -421,8 +426,10 @@ impl Field {
                     }
                 }
                 let (_, _, lum) = self.at_px(i);
+                let ambient = ambients.get(i).copied().unwrap_or(ambient);
                 let s = grade(ambient, ev, total, lum);
-                *a = s.stops;
+                let top = bright.get(i).copied().unwrap_or(lum);
+                *a = if top > lum && s.stops > 0.0 { s.stops.min(grade(ambient, ev, total, top).stops) } else { s.stops };
                 if total > 0.0 {
                     *c = sums.map(|v| s.share * (v / total));
                 }
@@ -463,7 +470,128 @@ impl Field {
     }
 }
 
+/// How much of what Darken Surroundings takes comes back right beside a fully lit area at the same depth (issue #346).
+const SPILL: f32 = 0.85;
+/// The spill's reach, a share of the field's long side (a box blur run three times: about a Gaussian of half this).
+const SPILL_REACH: f32 = 0.08;
+/// How far in log depth the spill carries: at this much nearer or farther it keeps 1/e of itself.
+const SPILL_DEPTH: f32 = 1.0;
+
+/// `p` (`w × h`) box-blurred `r` pixels each way, three times over (about a Gaussian), rows then columns.
+fn soft_blur(p: &mut [f32], w: usize, h: usize, r: usize) {
+    if r == 0 || w == 0 || h == 0 || p.len() != w * h {
+        return;
+    }
+    let pass = |line: &mut [f32], scratch: &mut Vec<f32>| {
+        let n = line.len();
+        scratch.clear();
+        scratch.push(0.0);
+        let mut acc = 0f64;
+        for v in line.iter() {
+            acc += f64::from(*v);
+            scratch.push(acc as f32);
+        }
+        for (i, out) in line.iter_mut().enumerate() {
+            let (a, b) = (i.saturating_sub(r), (i + r + 1).min(n));
+            let sum = scratch.get(b).copied().unwrap_or(0.0) - scratch.get(a).copied().unwrap_or(0.0);
+            *out = sum / (b - a).max(1) as f32;
+        }
+    };
+    for _ in 0..3 {
+        p.par_chunks_mut(w).for_each_init(Vec::new, |s, row| pass(row, s));
+        let mut t = vec![0f32; w * h];
+        for (y, row) in p.chunks(w).enumerate() {
+            for (x, v) in row.iter().enumerate() {
+                if let Some(c) = t.get_mut(x * h + y) {
+                    *c = *v;
+                }
+            }
+        }
+        t.par_chunks_mut(h).for_each_init(Vec::new, |s, col| pass(col, s));
+        for (x, col) in t.chunks(h).enumerate() {
+            for (y, v) in col.iter().enumerate() {
+                if let Some(c) = p.get_mut(y * w + x) {
+                    *c = *v;
+                }
+            }
+        }
+    }
+}
+
 impl Field {
+    /// Each field pixel's share of its own light that Darken Surroundings leaves (`ambient` for all, issue #346: a light's lobe
+    /// ends at the depth edge of the subject it lights, so the subject stood as a lit cut-out on an evenly darkened ground). Light
+    /// spills from what the lights reach onto what is near it on the photo and in depth: right beside a fully lit area at its depth
+    /// [`SPILL`] of what Darken takes comes back, fading smoothly with the distance and with the depth between.
+    fn spilled_ambient(&self, parts: &[Part<'_>], ambient: f32) -> Vec<f32> {
+        let (w, h) = (self.width, self.height);
+        let n = w * h;
+        if ambient.is_nan() || ambient >= 1.0 || parts.is_empty() {
+            return Vec::new();
+        }
+        // (how lit each pixel is, 0..1, and its depth weighted by it)
+        let mut lit: Vec<f32> = (0..n)
+            .into_par_iter()
+            .map(|i| {
+                let total: f32 = parts.iter().map(|p| p.gain * p.lobe.m.get(i).copied().unwrap_or(0.0)).sum();
+                if total.is_finite() { (total / (0.25 + total)).clamp(0.0, 1.0) } else { 0.0 }
+            })
+            .collect();
+        let mut deep: Vec<f32> =
+            lit.iter().enumerate().map(|(i, l)| l * self.ln_z.get(i).copied().filter(|v| v.is_finite()).unwrap_or(0.0)).collect();
+        let r = ((SPILL_REACH * w.max(h) as f32) as usize).max(1);
+        soft_blur(&mut lit, w, h, r);
+        soft_blur(&mut deep, w, h, r);
+        // (the spill is the blurred lit share over the frame's own low level, against its most: a small lit subject's blur is thin,
+        // and its spill was too faint to see; a fill that lights the whole frame is that low level, and spills nothing)
+        let most = lit.iter().copied().filter(|v| v.is_finite()).fold(0f32, f32::max);
+        let mut sample: Vec<f32> = lit.iter().step_by((n / 4096).max(1)).copied().filter(|v| v.is_finite()).collect();
+        let low = if sample.is_empty() {
+            0.0
+        } else {
+            let k = sample.len() / 5;
+            *sample.select_nth_unstable_by(k, f32::total_cmp).1
+        };
+        if most - low <= 1e-4 {
+            return Vec::new();
+        }
+        (0..n)
+            .into_par_iter()
+            .map(|i| {
+                let blurred = lit.get(i).copied().unwrap_or(0.0);
+                if blurred <= 1e-4 {
+                    return ambient;
+                }
+                let spill = ((blurred - low) / (most - low)).clamp(0.0, 1.0);
+                let lit_depth = deep.get(i).copied().unwrap_or(0.0) / blurred;
+                let gap = (self.ln_z.get(i).copied().unwrap_or(lit_depth) - lit_depth).abs();
+                let near = (-gap / SPILL_DEPTH).exp();
+                let a = ambient + (1.0 - ambient) * SPILL * spill * near;
+                if a.is_finite() { a.clamp(ambient, 1.0) } else { ambient }
+            })
+            .collect()
+    }
+
+    /// Each pixel's brightest guide luminance among itself and its eight neighbours (log2, relative to 18 % grey).
+    fn brightest_round(&self) -> Vec<f32> {
+        let (w, h) = (self.width, self.height);
+        let mut out = vec![0f32; w * h];
+        out.par_chunks_mut(w.max(1)).enumerate().for_each(|(y, row)| {
+            for (x, o) in row.iter_mut().enumerate() {
+                let mut top = f32::MIN;
+                for yy in y.saturating_sub(1)..=(y + 1).min(h.saturating_sub(1)) {
+                    for xx in x.saturating_sub(1)..=(x + 1).min(w.saturating_sub(1)) {
+                        if let Some(v) = self.lum.get(yy * w + xx).filter(|v| v.is_finite()) {
+                            top = top.max(*v);
+                        }
+                    }
+                }
+                *o = if top > f32::MIN { top } else { 0.0 };
+            }
+        });
+        out
+    }
+
     /// Plane `p` (the field's size) refined along the edge band: at each band pixel, a local linear fit of `p` against the
     /// guide over the pixel's window, kept within the range the window holds. The changed pixels and their values.
     pub(crate) fn refined(&self, p: &[f32]) -> Vec<(usize, f32)> {

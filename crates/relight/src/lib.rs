@@ -60,7 +60,7 @@ pub use beam::{Beam, Shafts};
 pub use edge::EdgeSnap;
 pub use effects::{Effects, Pattern, PatternPlanes};
 pub use field::{DepthMap, Field, Kind};
-pub use kinds::{Fill, LightKind, MIN_ANGLE, Rim, Softbox, Spot, Sun};
+pub use kinds::{Fill, LightKind, MIN_ANGLE, Rim, Softbox, Spot, SpotCone, Sun};
 pub use light::{Light, Lobe, MAX_LIGHTS, Part, Planes, Rig, Shade, Shading, Split, ambient, warmth_tilt};
 pub use mist::{Ground, Medium};
 pub use shadow::Visibility;
