@@ -682,6 +682,18 @@ impl Session {
         }
     }
 
+    /// Presets that couldn't be written are this library's only copy of them (opening another clears the lists): try once
+    /// more, and stay on this library when they still can't be written, so they are never lost silently.
+    fn presets_before_switch(&mut self) -> Result<()> {
+        if self.library.as_ref().is_some_and(|l| l.presets_error.is_some()) {
+            let _ = self.persist();
+            if let Some(why) = self.library.as_ref().and_then(|l| l.presets_error.clone()) {
+                return Err(EngineError::NotSaved(format!("the open library's presets aren't saved yet, so it stays open: {why}")));
+            }
+        }
+        Ok(())
+    }
+
     /// Open `stores`; the new library takes `lock` once nothing can fail any more. `folder` is the
     /// folder they write to, when they write to one: the thumbnail cache asks it too.
     fn open_stores(&mut self, stores: LibraryStores, seed_demo: bool, lock: &mut Option<LibraryLock>, folder: Option<OpenedFolder>) -> Result<()> {
@@ -705,6 +717,7 @@ impl Session {
                 log::error!("library: {e} (every change is in its snapshot)");
             }
         }
+        self.presets_before_switch()?;
         // what Auto AI Denoise recorded belongs to the library being left
         self.denoise_auto_flush(true);
         self.media.smart_dir = on_disk.then(|| crate::smart::dir(&dir));

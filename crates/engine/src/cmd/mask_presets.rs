@@ -63,7 +63,12 @@ fn apply(s: &mut Session, p: &Value) -> Result<Value> {
     let preset = named(s, p, c)?;
     let d = s.develop_of(id).ok_or_else(|| bad(c, "no photo"))?;
     let next = d.next_mask_id();
-    let name = crate::mask_presets::free_name(&d.masks, str_param(p, "name").and_then(clean_name).as_deref().unwrap_or(&preset.name));
+    let asked = str_param(p, "name").and_then(clean_name);
+    if asked.as_ref().is_some_and(|n| n.chars().count() > MAX_NAME) {
+        return Err(bad(c, format!("a name is at most {MAX_NAME} characters")));
+    }
+    // (numbered when taken: "Name 2" may pass the cap by its number, which is fine)
+    let name = crate::mask_presets::free_name(&d.masks, asked.as_deref().unwrap_or(&preset.name));
     let mut mask =
         preset.instance(next, &name).filter(|_| next != 0).ok_or_else(|| bad(c, "this preset has no part, or the photo has no free mask number"))?;
     // (a file may hold any number: the sliders' own ranges, as for every other mask)
@@ -90,7 +95,7 @@ fn apply(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(m) = s.develop_of(id).and_then(|d| d.masks.iter().find(|m| m.id == next).cloned()) {
         for (k, part) in m.components.iter().enumerate() {
             if part.shape.is_detected() && !part.shape.is_waiting() && part.shape.seg().is_some_and(selects_nothing) {
-                nothing.push(kinds.get(k).cloned().unwrap_or_default());
+                nothing.push(kinds.get(k).copied().unwrap_or_default().to_string());
             }
         }
     }
@@ -178,7 +183,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Apply Mask Preset",
             [],
             None,
-            "{preset: a preset's id or name, name?: the new mask's name (default: the preset's, numbered when taken)} → {applied, mask: id, name, preset: {id, name}, ai, finding, missing: [why a model can't find a part on this computer], foundNothing: [kinds a model found nothing for]} — add the preset's mask to the active photo and select it; one undo step. Its AI parts (Subject, Sky, Background, Object, Describe, Select People) are found again on this photo (in the app in the background, `finding: true`; in the CLI and tests before this returns); a part whose model is missing, or that finds nothing, selects nothing and is named in `missing` / `foundNothing` (Update AI Masks finds it again later). Brush strokes and gradients land at the same place relative to the photo, whatever its size or orientation",
+            "{preset: a preset's id or name, name?: the new mask's name (default: the preset's, numbered when taken)} → {applied, mask: id, name, preset: {id, name}, ai, finding, missing: [why a model can't find a part on this computer], foundNothing: [kinds a model found nothing for; only when found before this returns, so not in the app]} — add the preset's mask to the active photo and select it; one undo step. Its AI parts (Subject, Sky, Background, Object, Describe, Select People) are found again on this photo (in the app in the background, `finding: true`; in the CLI and tests before this returns); a part whose model is missing, or that finds nothing, selects nothing: `missing` names the first at once, `foundNothing` the second in the CLI and tests (in the app the \"Finding AI masks\" row of the top-bar ring lists the photo with why); Update AI Masks finds it again later. Brush strokes and gradients land at the same place relative to the photo, whatever its size or orientation",
             has_active,
             apply
         ),

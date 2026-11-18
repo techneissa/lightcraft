@@ -4,6 +4,7 @@
 //! button here and the item in a mask's menu) names the selected mask (`mask.savePreset`).
 
 use egui::{Rect, Sense, pos2, vec2};
+use lightcraft_catalog::PhotoId;
 use lightcraft_develop::mask_presets::MaskPreset;
 use serde_json::json;
 
@@ -16,11 +17,39 @@ use crate::widgets::register;
 const ROW_H: f32 = 40.0;
 const SUB_H: f32 = 14.0;
 
-/// What the list remembers between frames: a name being typed for a new preset (and the mask it is for), and a rename.
+/// A name being typed for a new preset: the mask it is for, and the photo and library that mask is in (the mask's number
+/// means nothing on another photo, so naming ends when either changes).
+#[derive(Clone)]
+struct Naming {
+    mask: u32,
+    photo: Option<PhotoId>,
+    library: u64,
+    text: String,
+}
+
+impl Naming {
+    fn new(app: &LightcraftApp, mask: u32) -> Naming {
+        Naming { mask, photo: app.session.active(), library: app.session.library_generation(), text: String::new() }
+    }
+
+    /// Still the photo and library it was started on.
+    fn is_current(&self, app: &LightcraftApp) -> bool {
+        self.photo == app.session.active() && self.library == app.session.library_generation()
+    }
+}
+
+/// What the list remembers between frames: a name being typed for a new preset, and a rename.
 #[derive(Clone, Default)]
 struct Edit {
-    naming: Option<(u32, String)>,
+    naming: Option<Naming>,
     renaming: Option<(String, String)>,
+}
+
+/// What a row shows of a preset (the list holds these, not the presets' masks: a mask may hold thousands of strokes).
+struct Entry {
+    id: String,
+    name: String,
+    label: String,
 }
 
 fn state_id() -> egui::Id {
@@ -33,7 +62,7 @@ pub fn start_naming(app: &mut LightcraftApp, ctx: &egui::Context, mask: u32) {
         app.ui.toggle_flyout("maskPresets");
     }
     let mut edit: Edit = ctx.data(|x| x.get_temp(state_id())).unwrap_or_default();
-    edit.naming = Some((mask, String::new()));
+    edit.naming = Some(Naming::new(app, mask));
     ctx.data_mut(|x| {
         x.insert_temp(state_id(), edit);
         x.remove::<bool>(state_id().with("named"));
@@ -60,7 +89,7 @@ fn what(p: &MaskPreset) -> String {
         })
         .to_string()
     };
-    p.kinds().iter().map(|k| label(k)).collect::<Vec<_>>().join(" + ")
+    p.kinds().into_iter().map(label).collect::<Vec<_>>().join(" + ")
 }
 
 /// The list's header row and, open, its rows and the Save button.
@@ -71,8 +100,13 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     }
     let ctx = ui.ctx().clone();
     let mut edit: Edit = ctx.data(|x| x.get_temp(state_id())).unwrap_or_default();
+    // (another photo or library: the mask a name was being typed for is not this one)
+    if edit.naming.as_ref().is_some_and(|n| !n.is_current(app)) {
+        edit.naming = None;
+        ctx.data_mut(|x| x.remove::<bool>(state_id().with("named")));
+    }
     if open {
-        let list = app.session.mask_presets.clone();
+        let list: Vec<Entry> = app.session.mask_presets.iter().map(|p| Entry { id: p.id.clone(), name: p.name.clone(), label: what(p) }).collect();
         egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 4, bottom: 8 }).show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 4.0;
             if list.is_empty() && edit.naming.is_none() {
@@ -96,10 +130,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 fn apply(app: &mut LightcraftApp, ctx: &egui::Context, preset: &str) {
     match app.run("mask.applyPreset", json!({"preset": preset})) {
         Ok(r) => {
+            // (a search that finds nothing is listed by the "Finding AI masks" row of the top-bar ring)
             if let Some(why) = r["missing"].as_array().and_then(|a| a.first()).and_then(|w| w.as_str()) {
                 app.toast(ctx, crate::i18n::tr_format!("Mask added, but a part could not be found: {why}", why = why));
-            } else if r["foundNothing"].as_array().is_some_and(|a| !a.is_empty()) {
-                app.toast(ctx, crate::i18n::tr("Mask added, but nothing was found in this photo for one of its parts"));
             }
         }
         Err(e) => app.toast(ctx, e),
@@ -110,11 +143,11 @@ fn apply(app: &mut LightcraftApp, ctx: &egui::Context, preset: &str) {
 /// picture. Returns the item's rect and its response, and the rect where a rename field goes while `renaming`. Only
 /// the drawing is here (the click, the menu and the rename are in [`row`]), so the item can become a card of the shared
 /// preset grid (issue #344: picture on top, name and label under it) by replacing this function.
-fn item(ui: &mut egui::Ui, p: &MaskPreset, renaming: bool) -> (Rect, egui::Response, Rect) {
+fn item(ui: &mut egui::Ui, p: &Entry, renaming: bool) -> (Rect, egui::Response, Rect) {
     let t = Tokens::get(ui.ctx());
     let wrap_w = (ui.available_width() - 12.0).max(40.0);
     let galley = ui.painter().layout(p.name.clone(), t.font(13.0), t.text_label, wrap_w);
-    let sub = ui.painter().layout(what(p), t.font(11.0), t.text_dim, wrap_w);
+    let sub = ui.painter().layout(p.label.clone(), t.font(11.0), t.text_dim, wrap_w);
     let row_h = ROW_H.max(galley.size().y + sub.size().y.max(SUB_H) + 16.0);
     let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), row_h), Sense::click());
     crate::widgets::announce(&resp, p.name.clone());
@@ -132,7 +165,7 @@ fn item(ui: &mut egui::Ui, p: &MaskPreset, renaming: bool) -> (Rect, egui::Respo
 }
 
 /// One preset's row: [`item`], a click that applies it, its menu (Rename…, Delete Preset) and the rename field.
-fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, p: &MaskPreset, edit: &mut Edit) {
+fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, p: &Entry, edit: &mut Edit) {
     let renaming = edit.renaming.as_ref().is_some_and(|(id, _)| *id == p.id);
     let (_, resp, field) = item(ui, p, renaming);
     if renaming {
@@ -157,10 +190,9 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, p: &MaskPreset, edit: &mut Ed
 }
 
 /// The name of a preset being typed in its row.
-fn rename_field(app: &mut LightcraftApp, ui: &mut egui::Ui, p: &MaskPreset, rect: Rect, edit: &mut Edit) {
+fn rename_field(app: &mut LightcraftApp, ui: &mut egui::Ui, p: &Entry, rect: Rect, edit: &mut Edit) {
     let Some((id, mut text)) = edit.renaming.take() else { return };
-    let list = app.session.mask_presets.clone();
-    let verdict = crate::inline_rename::verdict(&text, list.iter().filter(|q| q.id != id).map(|q| q.name.as_str()));
+    let verdict = crate::inline_rename::verdict(&text, app.session.mask_presets.iter().filter(|q| q.id != id).map(|q| q.name.as_str()));
     let unchanged = text.trim() == p.name;
     let done = crate::inline_rename::edit(ui, &format!("field:maskPresetRename:{id}"), &mut text, rect, &verdict, unchanged);
     let ctx = ui.ctx().clone();
@@ -172,22 +204,23 @@ fn rename_field(app: &mut LightcraftApp, ui: &mut egui::Ui, p: &MaskPreset, rect
 /// Save Mask as Preset…: a button (on while a mask is selected), then a name field with Save.
 fn save_box(app: &mut LightcraftApp, ui: &mut egui::Ui, edit: &mut Edit) {
     let t = Tokens::get(ui.ctx());
-    let Some((mask, mut text)) = edit.naming.take() else {
+    let Some(mut naming) = edit.naming.take() else {
         let selected = app.session.active_mask;
         ui.add_enabled_ui(selected.is_some(), |ui| {
             if crate::widgets::text_button(ui, "maskSavePreset", crate::i18n::tr("Save Mask as Preset…"), false).clicked()
                 && let Some(m) = selected
             {
-                edit.naming = Some((m, String::new()));
+                edit.naming = Some(Naming::new(app, m));
             }
         });
         return;
     };
     let first = !ui.ctx().data(|x| x.get_temp::<bool>(state_id().with("named"))).unwrap_or(false);
     ui.ctx().data_mut(|x| x.insert_temp(state_id().with("named"), true));
-    let verdict = crate::inline_rename::verdict(&text, app.session.mask_presets.iter().map(|q| q.name.as_str()));
+    let text = &mut naming.text;
+    let verdict = crate::inline_rename::verdict(text, app.session.mask_presets.iter().map(|q| q.name.as_str()));
     let w = ui.available_width();
-    let field = crate::text_field::TextField::singleline("field:maskPresetName", &mut text)
+    let field = crate::text_field::TextField::singleline("field:maskPresetName", text)
         .hint(crate::i18n::tr("Preset Name"))
         .label(crate::i18n::tr("Preset Name"))
         .width(w)
@@ -206,7 +239,7 @@ fn save_box(app: &mut LightcraftApp, ui: &mut egui::Ui, edit: &mut Edit) {
         ui.label(egui::RichText::new(why.as_str()).size(11.0).color(t.text_dim));
     }
     if save {
-        match app.run("mask.savePreset", json!({"id": mask, "name": text})) {
+        match app.run("mask.savePreset", json!({"id": naming.mask, "name": naming.text})) {
             Ok(_) => cancel = true,
             Err(e) => app.toast(ui.ctx(), e),
         }
@@ -214,6 +247,6 @@ fn save_box(app: &mut LightcraftApp, ui: &mut egui::Ui, edit: &mut Edit) {
     if cancel {
         ui.ctx().data_mut(|x| x.remove::<bool>(state_id().with("named")));
     } else {
-        edit.naming = Some((mask, text));
+        edit.naming = Some(naming);
     }
 }

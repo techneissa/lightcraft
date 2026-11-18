@@ -27,6 +27,25 @@ pub struct MaskPreset {
     pub mask: Mask,
 }
 
+/// A shape's `kind` tag as saved (`"radial"`, `"luminanceRange"`…).
+fn kind_name(shape: &MaskShape) -> &'static str {
+    match shape {
+        MaskShape::Brush { .. } => "brush",
+        MaskShape::Linear { .. } => "linear",
+        MaskShape::Radial { .. } => "radial",
+        MaskShape::ColorRange { .. } => "colorRange",
+        MaskShape::LuminanceRange { .. } => "luminanceRange",
+        MaskShape::DepthRange { .. } => "depthRange",
+        MaskShape::Subject { .. } => "subject",
+        MaskShape::Sky { .. } => "sky",
+        MaskShape::Background { .. } => "background",
+        MaskShape::Object { .. } => "object",
+        MaskShape::Prompt { .. } => "prompt",
+        MaskShape::People { .. } => "people",
+        MaskShape::Landscape { .. } => "landscape",
+    }
+}
+
 impl MaskPreset {
     /// A preset of mask `m` (already on the photo: `m.on_photo`) named `name`, without what a model found on its photo.
     pub fn capture(id: &str, name: &str, m: &Mask) -> MaskPreset {
@@ -37,23 +56,20 @@ impl MaskPreset {
         mask.before_invert.clear();
         crate::adaptive::strip_found(std::slice::from_mut(&mut mask));
         for c in &mut mask.components {
-            if let MaskShape::People { face, .. } = &mut c.shape
-                && face.as_ref().is_some_and(|k| k.person.is_none())
-            {
-                *face = None;
+            if let MaskShape::People { person, face, .. } = &mut c.shape {
+                // (the source photo's own index of the person: found again by `face`, or everyone's)
+                *person = 0;
+                if face.as_ref().is_some_and(|k| k.person.is_none()) {
+                    *face = None;
+                }
             }
         }
         MaskPreset { id: id.into(), name: name.into(), mask }
     }
 
     /// The kinds of the preset's parts (`MaskShape`'s `kind` names), in order.
-    pub fn kinds(&self) -> Vec<String> {
-        self.mask
-            .components
-            .iter()
-            .filter_map(|c| serde_json::to_value(&c.shape).ok())
-            .filter_map(|v| v.get("kind").and_then(|k| k.as_str().map(str::to_string)))
-            .collect()
+    pub fn kinds(&self) -> Vec<&'static str> {
+        self.mask.components.iter().map(|c| kind_name(&c.shape)).collect()
     }
 
     /// How many of the preset's parts a model finds on each photo.
@@ -116,6 +132,7 @@ mod tests {
         assert_eq!((p.mask.id, p.mask.name.as_str()), (0, "Warm Sky"));
         assert!(p.mask.components[0].shape.seg().is_none(), "no pixels in the preset");
         assert_eq!(p.kinds(), ["sky", "radial"]);
+        assert_eq!(serde_json::to_value(&p.mask.components[1].shape).unwrap()["kind"], "radial", "the names are the saved tags");
         let on = p.instance(1, "Warm Sky").unwrap();
         assert!(on.components[0].shape.is_waiting(), "the sky waits to be found on the photo");
         assert_eq!(on.components[1], m.components[1], "the gradient comes as it was");

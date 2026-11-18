@@ -791,6 +791,9 @@ pub fn specs() -> Vec<CommandSpec> {
         }),
         cmd!("mask.rename", "Rename Mask", [], None, "{id?, name}", has_active, |s, p| {
             let raw = str_param(p, "name").ok_or_else(|| bad("mask.rename", "missing name"))?;
+            if raw.trim().chars().count() > lightcraft_develop::mask_presets::MAX_NAME {
+                return Err(bad("mask.rename", format!("a name is at most {} characters", lightcraft_develop::mask_presets::MAX_NAME)));
+            }
             let mid = mask_id(p, s.active_mask, "mask.rename")?;
             masks_edit(s, "mask.rename", "Rename Mask", |masks, _| {
                 let i = find(masks, mid, "mask.rename")?;
