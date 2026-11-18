@@ -36,6 +36,9 @@ use crate::light::Rig;
 pub(crate) const FRONT: f32 = -0.25;
 /// The gobo's distance from the projector, a share of the scene's median distance from it.
 pub(crate) const GOBO: f32 = 0.3;
+/// The least share of the light's size a pattern's edge is blurred by (the penumbra of a surface 1.5 times the gobo's distance
+/// from the projector), so nothing near the gobo, a face most of all, takes a razor edge.
+pub(crate) const PAST_MIN: f32 = 0.33;
 /// Cells across the frame's long side at the scene's median depth at Scale 0 (Scale 1: a tenth of it).
 pub(crate) const CELLS: f32 = 34.0;
 /// A window's half-width and half-height at the scene's median depth, shares of the frame's long side there.
@@ -216,7 +219,9 @@ impl Projector {
         let d = sub(p, self.origin);
         let s = dot(d, self.axis);
         let dist = s.max(self.d_min);
-        let past = (1.0 - self.gobo / dist).max(0.0);
+        // (a surface nearer than the gobo, the subject's face in front of a far pool, took no penumbra at all and its patches were
+        // cut hard: it takes at least the blur of a surface a little past the gobo, issue #346)
+        let past = (1.0 - self.gobo / dist).max(PAST_MIN);
         // (in tangent units: the penumbra over the distance, and a pixel's footprint)
         let blur = self.alpha * past + 0.5 * self.px * p[2] / dist;
         let (tx, ty, dir) = (dot(d, self.e1) / dist, dot(d, self.e2) / dist, norm(d, self.axis));

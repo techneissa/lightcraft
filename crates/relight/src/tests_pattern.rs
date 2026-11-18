@@ -171,3 +171,18 @@ fn stripes_run_straight_across_the_wall_beside_a_subject() {
         assert!(beside.len() >= 4 && near(&beside, &away), "{name}: beside the box {beside:?}, away from it {away:?}");
     }
 }
+
+#[test]
+fn a_surface_nearer_than_the_gobo_still_takes_a_soft_edge() {
+    // (issue #346) a subject in front of a far wall, nearer than the gobo: its patches had no penumbra at all, cut hard on a
+    // face. Its edges are at least a third as soft as the far wall's
+    let f = flat(|x, _| if x < W / 2 { -1.6 } else { 0.6 });
+    let e = Effects { pattern: Pattern::Blinds, scale: 0.8, softness: 0.6, ..Effects::default() };
+    let plane = light_plane(&f, &light(), &e);
+    let soft = |x0: usize, x1: usize| {
+        let v: Vec<f32> = (H / 2 - 30..H / 2 + 30).flat_map(|y| (x0..x1).map(move |x| (x, y))).map(|(x, y)| plane[y * W + x]).collect();
+        v.iter().filter(|v| **v > 0.1 && **v < 0.9).count() as f32 / v.len().max(1) as f32
+    };
+    let (near, far) = (soft(W / 2 - 40, W / 2 - 4), soft(W / 2 + 4, W / 2 + 40));
+    assert!(near > 0.0 && near > 0.2 * far, "the near surface's edges are hard: {near} of its pixels in a penumbra, the far wall {far}");
+}

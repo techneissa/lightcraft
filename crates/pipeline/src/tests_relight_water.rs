@@ -105,8 +105,9 @@ fn far_things_lose_red_first_and_turn_blue_green() {
     let d = mean_rgb(&dry, far_wall);
     assert!((d[0] - d[2]).abs() < 2.0, "{d:?}");
     let (n, f) = (mean_rgb(&wet, near_box), mean_rgb(&wet, far_wall));
-    // the nearest thing keeps its colours, the far wall has lost red against blue, and green against blue less than red
-    assert!((ratio(n).0 - 1.0).abs() < 0.08, "the nearest thing is not touched: {n:?}");
+    // the nearest thing is under water too (issue #346) but keeps most of its colour, the far wall has lost red against blue, and
+    // green against blue less than red
+    assert!(ratio(n).0 > 0.6 && ratio(n).0 < 1.0, "the nearest thing lost too much red, or none: {n:?}");
     assert!(ratio(f).0 < 0.5 * ratio(n).0, "red did not fall off faster than blue: near {n:?}, far {f:?}");
     assert!(ratio(f).0 < ratio(f).1 && ratio(f).1 < 1.0, "red goes first, then green: {f:?}");
     // far things lose contrast: the texture's spread on the far wall is smaller than without water

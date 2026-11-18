@@ -233,6 +233,70 @@ pub fn sun_vector(azimuth: f64, elevation: f64) -> [f32; 3] {
     [(el.cos() * az.sin()) as f32, -(el.sin()) as f32, -(el.cos() * az.cos()) as f32]
 }
 
+/// A spot's cone as the photo shows it (issue #346): the light's place, the two sides of the cone's outline from it and a ring of
+/// its edge a little past the aim, all in normalized photo coordinates. A cone coming towards the camera looks much wider than
+/// its angle, and its pool lands along the line past the aim: drawing the angle flat on the photo pointed away from the light.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SpotCone {
+    pub apex: (f64, f64),
+    pub sides: [(f64, f64); 2],
+    pub ring: Vec<(f64, f64)>,
+}
+
+impl Field {
+    /// The cone of `light` as the photo shows it (see [`SpotCone`]); `None` for a light that is no spot, or a cone the camera
+    /// can't see.
+    pub fn spot_cone(&self, light: &crate::Light) -> Option<SpotCone> {
+        let LightKind::Spot(s) = &light.kind else { return None };
+        let rig = self.rig(light, 0.0, 0.0);
+        let pos = rig.position();
+        let (ax, ay) = (finite(s.aim_x, -0.5, 1.5, 0.5) as f32, finite(s.aim_y, -0.5, 1.5, 0.6) as f32);
+        let (alz, _, _) = self.at(ax.clamp(0.0, 1.0), ay.clamp(0.0, 1.0));
+        let aim = self.point(ax, ay, alz);
+        let to = [aim[0] - pos[0], aim[1] - pos[1], aim[2] - pos[2]];
+        let reach = 1.35 * (to[0] * to[0] + to[1] * to[1] + to[2] * to[2]).sqrt();
+        let dir = norm(to, [0.0, 0.0, 1.0]);
+        let (kx, ky) = self.lens();
+        let project = |q: [f32; 3]| -> Option<(f64, f64)> {
+            let (u, v) = (q[0] / (kx * q[2]) + 0.5, q[1] / (ky * q[2]) + 0.5);
+            (q[2] > 1e-4 && u.is_finite() && v.is_finite()).then_some((f64::from(u), f64::from(v)))
+        };
+        let apex = project(pos)?;
+        // (two directions across the axis)
+        let side = if dir[1].abs() < 0.9 { [0.0, 1.0, 0.0] } else { [1.0, 0.0, 0.0] };
+        let e1 = norm(cross(dir, side), [1.0, 0.0, 0.0]);
+        let e2 = cross(dir, e1);
+        let a = finite(s.angle, MIN_ANGLE, 85.0, 30.0).to_radians() as f32;
+        let ring: Vec<(f64, f64)> = (0..48)
+            .filter_map(|k| {
+                let phi = k as f32 / 48.0 * std::f32::consts::TAU;
+                let (c, sn) = (phi.cos(), phi.sin());
+                let ray = [0, 1, 2].map(|i| a.cos() * dir[i] + a.sin() * (c * e1[i] + sn * e2[i]));
+                // (a ray towards the camera stops short of it)
+                let t = if ray[2] < 0.0 { reach.min(0.8 * (pos[2] - 0.05 * pos[2].abs()) / -ray[2]) } else { reach };
+                project([0, 1, 2].map(|i| pos[i] + t.max(0.0) * ray[i]))
+            })
+            .collect();
+        if ring.len() < 3 {
+            return None;
+        }
+        // (the outline's sides: the ring's points farthest round the light either way from the axis's own direction on the photo)
+        let mid = project([0, 1, 2].map(|i| pos[i] + 0.5 * reach * dir[i])).unwrap_or(apex);
+        let base = (mid.1 - apex.1).atan2(mid.0 - apex.0);
+        let turn = |p: &(f64, f64)| {
+            let d = (p.1 - apex.1).atan2(p.0 - apex.0) - base;
+            d.sin().atan2(d.cos())
+        };
+        let lo = ring.iter().copied().min_by(|p, q| turn(p).total_cmp(&turn(q)))?;
+        let hi = ring.iter().copied().max_by(|p, q| turn(p).total_cmp(&turn(q)))?;
+        Some(SpotCone { apex, sides: [lo, hi], ring })
+    }
+}
+
+fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+}
+
 impl Shape {
     /// `kind` set up on `field` for a light at camera-space point `pos` (log depth `lz`).
     pub(crate) fn new(kind: &LightKind, field: &Field, pos: [f32; 3], lz: f32, softness: f32) -> Shape {

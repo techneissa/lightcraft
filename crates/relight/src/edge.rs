@@ -125,13 +125,14 @@ const GLOW_PEAK: f32 = 5.5;
 /// The sunburst's brightest, in the same units, at full Sunburst.
 const BURST_PEAK: f32 = 2.2;
 /// The core's radius at Softness 0 and what Softness adds, as shares of the field's longer side (a small, very bright core).
-const CORE_MIN: f32 = 0.005;
-const CORE_SOFT: f32 = 0.03;
-/// The halo's size at Softness 0 and what Softness adds (a soft round glow in the air round the core).
-const HALO_MIN: f32 = 0.06;
-const HALO_SOFT: f32 = 0.08;
+const CORE_MIN: f32 = 0.004;
+const CORE_SOFT: f32 = 0.014;
+/// The halo's size at Softness 0 and what Softness adds (a soft round glow in the air round the core: small next to the frame,
+/// issue #346).
+const HALO_MIN: f32 = 0.025;
+const HALO_SOFT: f32 = 0.045;
 /// How much of the core and halo the halo keeps (the rest is the core).
-const HALO: f32 = 0.22;
+const HALO: f32 = 0.14;
 /// How much of the glow the near side of the edge (what hides the light) keeps away from the outline: it is backlit.
 const NEAR_SIDE: f32 = 0.2;
 /// How bright the thin rim along the outline is, against the core: it follows the outline near the light and fades along it.
@@ -143,8 +144,10 @@ const RIM_REACH: f32 = 3.0;
 const COVER: f32 = 0.35;
 /// How far a ray reaches, as a share of the field's longer side.
 const RAY_REACH: f32 = 0.2;
-/// How far from the light anything of the glow reaches (a share of the longer side): the halo is gone by then.
-const REACH: f32 = 0.45;
+/// How far from the light anything of the glow reaches (a share of the longer side). Everything of the glow fades smoothly to
+/// nothing from [`FADE_FROM`] of it, so no circle shows where it stops (issue #346: the cut-off showed as a hard disc on a dark photo).
+const REACH: f32 = 0.3;
+const FADE_FROM: f32 = 0.35;
 
 fn smooth(e0: f32, e1: f32, x: f32) -> f32 {
     let t = ((x - e0) / (e1 - e0).max(1e-6)).clamp(0.0, 1.0);
@@ -269,8 +272,10 @@ impl Field {
                 };
                 // (the halo, soft and round, a share of itself where something covers it: backlit)
                 let halo_here = HALO * (-d / halo).exp() * (NEAR_SIDE + (1.0 - NEAR_SIDE) * seen);
-                // (the core and the rays only where nothing nearer than the edge covers them: they peek past it)
-                let core = 1.0 / (1.0 + (d / r0) * (d / r0));
+                // (the core and the rays only where nothing nearer than the edge covers them: they peek past it; the core's tail falls
+                // as the cube of the distance, so it stays a small bright point and not a wide wash)
+                let q = 1.0 + (d / r0) * (d / r0);
+                let core = 1.0 / (q * q.sqrt());
                 let mut v = glow * GLOW_PEAK * (core * seen + halo_here);
                 // (the thin rim: the near side of a step as big as the one the light sits behind, a few pixels deep, only where the outline
                 // faces the light, and strongest by it, fading within a short way along the outline; the smaller steps of a surface get none)
@@ -295,6 +300,7 @@ impl Field {
                     let fade = r0 / (d + r0) * (-d / RAY_REACH).exp();
                     v += burst * BURST_PEAK * rays(dy.atan2(dx)) * fade * seen;
                 }
+                v *= 1.0 - smooth(FADE_FROM * REACH, REACH, d);
                 *out = if v.is_finite() { v.max(0.0) } else { 0.0 };
             }
         });

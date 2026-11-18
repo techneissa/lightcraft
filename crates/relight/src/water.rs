@@ -2,8 +2,11 @@
 //! blue-green and lose contrast. All of it is drawn from numbers; nothing is read.
 //!
 //! A pixel `x` of the photo's depth range past its nearest thing is seen through water with a transmittance `T_c =
-//! exp(−K · k_c · x)` per colour (red's `k` the largest) and a veil of the water's own light, `V_c · (1 − T_c)`:
-//! `out = in · T + veil`. The finish stage has no per-colour gain, but its local exposure, temperature and tint together
+//! exp(−K · (k_c + s) · (b + x))` per colour (red's `k` the largest, `s` the water's scattering, the same for every colour,
+//! `b` the water the light came down through and the camera looks through to the nearest thing, so the whole scene is under
+//! water) and a veil of the water's own light, `V_c · (1 − T_c)`: `out = in · T + veil`. `T` keeps only [`SATURATION`] of its
+//! colour (scattered light mixes the colours back): real water darkens and goes a muted blue-teal, never a bright cyan, and a
+//! gain that tilts colour much past the luminance the finish stage keeps would clip a bright surface flat (issue #346). The finish stage has no per-colour gain, but its local exposure, temperature and tint together
 //! are one: the gain on luminance is the exposure, red against blue the temperature, green against the two the tint
 //! (the same split [`Effects::light_colour`](crate::Effects::light_colour) makes), so the planes of this module are those
 //! and the light added on top (the veil), and the CPU and the GPU cannot differ.
@@ -40,12 +43,20 @@ const REACH: (f32, f32) = (7.0, 0.9);
 const BLUE: [f32; 3] = [1.0, 0.32, 0.05];
 const TEAL: [f32; 3] = [1.0, 0.2, 0.1];
 const GREEN: [f32; 3] = [0.85, 0.12, 0.32];
-/// The colour of the water's own light, for the same three.
-const LIGHT_BLUE: [f32; 3] = [0.06, 0.38, 1.0];
-const LIGHT_TEAL: [f32; 3] = [0.08, 0.72, 0.72];
-const LIGHT_GREEN: [f32; 3] = [0.28, 0.9, 0.3];
-/// The water's light, as a share of the photo's median luminance (what far things turn into).
-const VEIL: f32 = 0.6;
+/// What the water scatters away, the same for every colour, relative to red's absorption: the scene darkens with distance,
+/// blue as well.
+const SCATTER: f32 = 0.35;
+/// The water between the nearest thing and the surface and camera, in the same units as the distance (the farthest thing is 1).
+const BASE: f32 = 0.3;
+/// How much of the transmittance's colour is kept (the rest is its luminance).
+const SATURATION: f32 = 0.6;
+/// The colour of the water's own light, for the same three: a muted blue, blue-teal and green (mixed with grey in
+/// [`Water::light`]).
+const LIGHT_BLUE: [f32; 3] = [0.1, 0.35, 0.75];
+const LIGHT_TEAL: [f32; 3] = [0.1, 0.5, 0.58];
+const LIGHT_GREEN: [f32; 3] = [0.25, 0.55, 0.32];
+/// The water's light, as a share of the photo's median luminance (what far things turn into: darker than the scene).
+const VEIL: f32 = 0.3;
 /// 18 % grey, scene-linear.
 const GREY: f32 = 0.18;
 /// The rec. 2020 luminance weights.
@@ -72,21 +83,33 @@ impl Water {
 
     /// The optical depth per unit of distance past the nearest thing (the farthest is 1), per colour.
     pub fn optical(&self) -> [f32; 3] {
-        let (clarity, amount) = (unit(self.clarity, 0.5), unit(self.amount, 0.0));
-        let reach = amount * (REACH.0 + (REACH.1 - REACH.0) * clarity);
+        let reach = self.reach();
         blend(tint_of(self.tint), BLUE, TEAL, GREEN).map(|k| k * reach)
     }
 
-    /// What of each colour is left at distance `x` (0 the nearest thing, 1 the farthest).
+    /// Red's optical depth of the photo's farthest thing in blue-green water.
+    fn reach(&self) -> f32 {
+        let (clarity, amount) = (unit(self.clarity, 0.5), unit(self.amount, 0.0));
+        amount * (REACH.0 + (REACH.1 - REACH.0) * clarity)
+    }
+
+    /// What of each colour is left at distance `x` (0 the nearest thing, 1 the farthest), with the water in front of the nearest
+    /// thing ([`BASE`]) and the colour muted ([`SATURATION`]).
     pub fn transmittance(&self, x: f32) -> [f32; 3] {
+        if !self.is_on() {
+            return [1.0; 3];
+        }
         let x = if x.is_finite() { x.max(0.0) } else { 0.0 };
-        self.optical().map(|k| (-k * x).exp())
+        let scatter = SCATTER * self.reach();
+        let t = self.optical().map(|k| (-(k + scatter) * (BASE + x)).exp());
+        let y = t[0] * LUMA[0] + t[1] * LUMA[1] + t[2] * LUMA[2];
+        t.map(|v| (y + SATURATION * (v - y)).max(0.0))
     }
 
     /// The water's own light as colours of unit luminance.
     fn light(&self) -> [f32; 3] {
         // (a little white in it: water's light is never one pure colour)
-        let c = blend(tint_of(self.tint), LIGHT_BLUE, LIGHT_TEAL, LIGHT_GREEN).map(|v| 0.6 * v + 0.4);
+        let c = blend(tint_of(self.tint), LIGHT_BLUE, LIGHT_TEAL, LIGHT_GREEN).map(|v| 0.65 * v + 0.35);
         let y = (c[0] * LUMA[0] + c[1] * LUMA[1] + c[2] * LUMA[2]).max(1e-6);
         c.map(|v| v / y)
     }
@@ -194,11 +217,42 @@ mod tests {
             assert!(t[0] < t[1] && t[1] < t[2], "{t:?}");
             last = t;
         }
-        // no water, no loss; a clearer water carries every colour farther; amount 0 is off
-        assert_eq!(w.transmittance(0.0), [1.0; 3]);
+        // the nearest thing is under water too, but keeps most of its light; a clearer water carries every colour farther;
+        // amount 0 is off
+        assert!(w.transmittance(0.0).iter().all(|t| (0.2..1.0).contains(t)), "{:?}", w.transmittance(0.0));
         assert!(Water { clarity: 1.0, ..w }.transmittance(0.5)[0] > w.transmittance(0.5)[0]);
         assert!(!Water::default().is_on());
         assert!(Water::default().transmittance(1.0).iter().all(|t| *t == 1.0));
+    }
+
+    #[test]
+    fn a_few_metres_down_is_darker_and_a_muted_blue_teal_never_a_bright_cyan() {
+        // (issue #346) a grey surface of any brightness, near or far, at Water Depth 60 and any clarity and tint: the water only takes
+        // light away, its colour stays muted (no channel far past the luminance, which the finish stage keeps, so a bright stair would
+        // clip flat), and far things are darker than near ones
+        let lum = |c: [f32; 3]| c[0] * LUMA[0] + c[1] * LUMA[1] + c[2] * LUMA[2];
+        for clarity in [0.0, 0.5, 1.0] {
+            for tint in [-1.0, 0.0, 1.0] {
+                let w = Water { amount: 0.6, clarity, tint };
+                for l in [0.2f32, 0.5, 0.9] {
+                    let mut last = f32::MAX;
+                    for x in [0.0, 0.25, 0.5, 1.0] {
+                        let t = w.transmittance(x);
+                        let (.., veil) = w.planes_at(x, VEIL * l);
+                        let out = [0, 1, 2].map(|c| l * t[c] + veil[c]);
+                        let y = lum(out);
+                        assert!(y < l && y <= last + 1e-6, "clarity {clarity} tint {tint} x {x}: {out:?} from {l}");
+                        let (hi, lo) = (out.iter().copied().fold(0f32, f32::max), out.iter().copied().fold(f32::MAX, f32::min));
+                        assert!(hi / y < 1.6 && lo > 0.4 * hi, "too strong a colour, clarity {clarity} tint {tint} x {x}: {out:?}");
+                        last = y;
+                    }
+                }
+            }
+        }
+        // blue-teal: in blue-green water red is the lowest and blue the highest far away
+        let w = Water { amount: 0.6, clarity: 0.5, tint: 0.0 };
+        let t = w.transmittance(1.0);
+        assert!(t[0] < t[1] && t[1] < t[2], "{t:?}");
     }
 
     #[test]

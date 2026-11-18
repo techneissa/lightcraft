@@ -153,3 +153,36 @@ fn hostile_numbers_give_a_finite_source() {
         }
     }
 }
+
+#[test]
+fn the_drawn_cone_holds_the_pool_the_spot_lights() {
+    // (issue #346) a spot behind the scene, high and to the left, aimed at a point in the middle of a floor that comes towards the
+    // camera: the pool it lights lies between the two sides of the cone as the photo shows it. The overlay drew the cone's angle
+    // flat on the photo round the line to the aim, and the pool landed outside it, lower right
+    let (w, h) = (240, 160);
+    // (a floor: near at the bottom, far at the top)
+    let lz: Vec<f32> = (0..w * h).map(|i| 0.8 - 1.4 * ((i / w) as f32 / h as f32)).collect();
+    #[allow(clippy::unwrap_used)]
+    let f = crate::Field::from_parts(w, h, lz, vec![-1.0; w * h]).unwrap();
+    let spot = crate::Spot { aim_x: 0.5, aim_y: 0.6, angle: 12.0, edge: 0.2, sharp: false };
+    let l = crate::Light { x: 0.2, y: 0.2, depth: 0.6, amount: 1.0, softness: 0.5, warmth: 0.0, wrap: 0.4, kind: crate::LightKind::Spot(spot) };
+    #[allow(clippy::unwrap_used)]
+    let cone = f.spot_cone(&l).unwrap();
+    let m = f.lobe(&f.rig(&l, 0.0, 0.0)).m;
+    let top = m.iter().copied().fold(0f32, f32::max);
+    let (mut sx, mut sy, mut n) = (0f64, 0f64, 0f64);
+    for (i, v) in m.iter().enumerate() {
+        if *v > 0.5 * top {
+            sx += ((i % w) as f64 + 0.5) / w as f64;
+            sy += ((i / w) as f64 + 0.5) / h as f64;
+            n += 1.0;
+        }
+    }
+    assert!(n > 0.0, "the spot lights nothing");
+    let pool = (sx / n, sy / n);
+    // (on the photo, as the overlay draws it: the pool's direction from the light lies between the sides')
+    let angle = |p: (f64, f64)| (p.1 - cone.apex.1).atan2((p.0 - cone.apex.0) * w as f64 / h as f64);
+    let (a, b, c) = (angle(cone.sides[0]), angle(cone.sides[1]), angle(pool));
+    let (lo, hi) = (a.min(b), a.max(b));
+    assert!(lo < c && c < hi, "the pool {pool:?} at {c} lies outside the drawn cone's sides {lo}..{hi}");
+}

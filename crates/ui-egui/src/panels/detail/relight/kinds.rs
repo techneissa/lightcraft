@@ -217,19 +217,41 @@ fn grip(p: &egui::Painter, at: Pos2, tint: Color32, hot: bool, hollow: bool) {
     }
 }
 
-fn paint(p: &egui::Painter, map: &CanvasMap, l: &LightSettings, c: Pos2, hot: Option<Handle>, auto: Option<(f32, f32)>) {
+fn paint(
+    p: &egui::Painter,
+    map: &CanvasMap,
+    l: &LightSettings,
+    c: Pos2,
+    hot: Option<Handle>,
+    auto: Option<(f32, f32)>,
+    cone: Option<&lightcraft_relight::SpotCone>,
+) {
     let tint = light_tint(l.warmth);
     let on = |h: Handle| hot == Some(h);
     match l.kind.index() {
         1 => {
             let (dir, len) = spot_axis(map, l, c);
             let a = l.kind.spot_angle as f32;
-            let reach = len * 1.35;
-            for sign in [-1.0, 1.0] {
-                halo(p, vec![c, c + turned(dir, sign * a) * reach], tint.gamma_multiply(0.85), false);
+            if let Some(cone) = cone {
+                // (issue #346: the cone as the photo shows it, from the photo's depth: a cone coming towards the camera looks much
+                // wider than its angle, and its pool lands along the line past the aim)
+                let at = |q: (f64, f64)| map.screen(Point::new(q.0, q.1));
+                for side in cone.sides {
+                    halo(p, vec![c, at(side)], tint.gamma_multiply(0.85), false);
+                }
+                let mut ring: Vec<Pos2> = cone.ring.iter().map(|q| at(*q)).collect();
+                if let Some(first) = ring.first().copied() {
+                    ring.push(first);
+                }
+                halo(p, ring, tint.gamma_multiply(0.6), false);
+            } else {
+                let reach = len * 1.35;
+                for sign in [-1.0, 1.0] {
+                    halo(p, vec![c, c + turned(dir, sign * a) * reach], tint.gamma_multiply(0.85), false);
+                }
+                let arc: Vec<Pos2> = (0..=16).map(|i| c + turned(dir, a * (i as f32 / 8.0 - 1.0)) * len).collect();
+                halo(p, arc, tint.gamma_multiply(0.6), false);
             }
-            let arc: Vec<Pos2> = (0..=16).map(|i| c + turned(dir, a * (i as f32 / 8.0 - 1.0)) * len).collect();
-            halo(p, arc, tint.gamma_multiply(0.6), false);
             let aim = map.screen(Point::new(l.kind.spot_aim_x, l.kind.spot_aim_y));
             p.line_segment([c, aim], Stroke::new(1.0, tint.gamma_multiply(0.5)));
             grip(p, aim, tint, on(Handle::Aim), false);
@@ -390,7 +412,11 @@ pub(super) fn overlay(
             .min_by(|a, b| a.1.distance(q).total_cmp(&b.1.distance(q)))
             .map(|(h, _)| *h)
     };
-    paint(&ui.painter_at(clip), map, l, c, grab.or_else(|| hover.and_then(near)), auto);
+    let cone = (l.kind.index() == 1)
+        .then(|| app.session.active().and_then(|photo| app.session.relight_made(photo)))
+        .flatten()
+        .and_then(|made| lightcraft_pipeline::relight::spot_cone(&made.input.field, l));
+    paint(&ui.painter_at(clip), map, l, c, grab.or_else(|| hover.and_then(near)), auto, cone.as_ref());
     for (h, at) in &found {
         register(ui, format!("relight:kind:{}", control_of(*h).trim_start_matches("relight.")), Rect::from_center_size(*at, vec2(16.0, 16.0)));
     }

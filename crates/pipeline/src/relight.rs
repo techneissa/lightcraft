@@ -368,6 +368,21 @@ pub fn snap_to_edge(field: &Field, light: &lightcraft_develop::relight::LightSet
     Some(Snapped { x: s.x, y: s.y, depth: (100.0 * s.depth).round(), wrap: light.wrap.min(SNAP_WRAP), sun })
 }
 
+/// `light`'s cone as the photo shows it, for the overlay (issue #346; `None`: no spot, or a cone the camera can't see).
+pub fn spot_cone(field: &Field, light: &lightcraft_develop::relight::LightSettings) -> Option<lightcraft_relight::SpotCone> {
+    let l = Light {
+        x: light.x,
+        y: light.y,
+        depth: light.depth / 100.0,
+        amount: light.amount / 100.0,
+        softness: light.softness / 100.0,
+        warmth: light.warmth / 100.0,
+        wrap: light.wrap / 100.0,
+        kind: kind_of(&light.kind),
+    };
+    field.spot_cone(&l)
+}
+
 /// The light of a render of `info` with settings `s` (`None`: off, or the photo has no field yet).
 ///
 /// `draft`: a drag's render ([`Tier::Draft`]): lit on the field at half its size, its shadows, rays and patterns coarser.
