@@ -879,7 +879,9 @@ pub fn plan_kept<'a>(
         (w, h) == (full.1, full.2),
     ));
     let lens_subject = lens_blur::subject_estimate(src, s, info.mattes.as_deref()).map(Arc::new);
-    let relight = relight::lit(info, s, req.quality == Quality::Draft);
+    // (a drag's render takes the light on a field of half the size, a small picture too, and keeps nothing; an export never)
+    let tier = relight::Tier::of(req.quality == Quality::Draft, req.max_w.max(req.max_h), req.exact_size);
+    let relight = relight::lit_for(info, s, tier);
     let mut plan = Plan {
         settings,
         frame,
