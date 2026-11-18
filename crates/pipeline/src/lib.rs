@@ -56,6 +56,7 @@ pub mod recolor;
 pub mod redeye;
 /// Fork (issue #288, `fork/relight.md`): Relight's light in the render.
 pub mod relight;
+pub mod relight_sky;
 pub mod reshape_step;
 pub mod residual_look;
 pub mod retouch_effect;
@@ -1540,6 +1541,8 @@ mod tests_recolor_render;
 mod tests_relight;
 #[cfg(test)]
 mod tests_relight_presets;
+#[cfg(test)]
+mod tests_relight_sky;
 #[cfg(test)]
 mod tests_relight_water;
 #[cfg(test)]

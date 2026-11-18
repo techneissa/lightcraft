@@ -77,6 +77,14 @@ pub struct Field {
     pub(crate) reduced: std::sync::OnceLock<crate::shadow::Reduced>,
     /// The same, coarser, for a drag's shadows.
     pub(crate) reduced_draft: std::sync::OnceLock<crate::shadow::Reduced>,
+    /// Issue #330: the guide's linear colour over the reduced field's cells, for the sky's clouds.
+    pub(crate) tint: Vec<[f32; 3]>,
+    /// Each of those cells' brightest channel of its brightest pixel (issue #330: what a sun's rays may add there).
+    pub(crate) tint_top: Vec<f32>,
+    /// The photo's sky (issue #330), made the first time the rays ask.
+    pub(crate) sky: std::sync::OnceLock<crate::sky::Sky>,
+    /// The depth model's sky scores (issue #330) on the reduced field's cells, when it gave them (empty: none).
+    pub(crate) sky_scores: Vec<f32>,
 }
 
 /// The radius of the window the light is refined over along an edge (field pixels).
@@ -270,6 +278,7 @@ impl Field {
         let normal = normals(&ln_z, w, h);
         let band = edge_band(&ln_z, &gi, w, h);
         let (air, bright) = air_of(&ln_z, &y, |i| guide.data.get(i).copied().unwrap_or([0.18; 3]));
+        let (tint, tint_top) = crate::sky::tints_of(&guide.data, w, h);
         Ok(Field {
             width: w,
             height: h,
@@ -285,6 +294,10 @@ impl Field {
             ground: std::sync::OnceLock::new(),
             reduced: std::sync::OnceLock::new(),
             reduced_draft: std::sync::OnceLock::new(),
+            tint,
+            tint_top,
+            sky: std::sync::OnceLock::new(),
+            sky_scores: Vec::new(),
         })
     }
 
@@ -297,6 +310,10 @@ impl Field {
             + self.band.len() * 12
             + self.reduced.get().map_or(0, crate::shadow::Reduced::bytes)
             + self.reduced_draft.get().map_or(0, crate::shadow::Reduced::bytes)
+            + self.tint.len() * 12
+            + self.tint_top.len() * 4
+            + self.sky_scores.len() * 4
+            + self.sky.get().map_or(0, crate::sky::Sky::bytes)
     }
 
     /// Log depth, normal and guide luminance at normalized photo coordinates `(u, v)` (bilinear).
@@ -389,6 +406,12 @@ impl Field {
             ground: std::sync::OnceLock::new(),
             reduced: std::sync::OnceLock::new(),
             reduced_draft: std::sync::OnceLock::new(),
+            // (issue #330: the reduced field keeps its cells at half size, each covering the same part of the photo, so the
+            // sky's colour and scores carry over; a grid that came out another size has no sky, so no rays)
+            tint: self.tint.clone(),
+            tint_top: self.tint_top.clone(),
+            sky: std::sync::OnceLock::new(),
+            sky_scores: self.sky_scores.clone(),
         })
     }
 
@@ -410,6 +433,8 @@ impl Field {
         let band = edge_band(&ln_z, &gi, width, height);
         let y: Vec<f32> = lum.iter().map(|l| 0.18 * l.exp2()).collect();
         let (air, bright) = air_of(&ln_z, &y, |i| [y.get(i).copied().unwrap_or(0.18); 3]);
+        let grey: Vec<[f32; 3]> = lum.iter().map(|l| [0.18 * l.exp2(); 3]).collect();
+        let (tint, tint_top) = crate::sky::tints_of(&grey, width, height);
         Ok(Field {
             width,
             height,
@@ -425,7 +450,33 @@ impl Field {
             ground: std::sync::OnceLock::new(),
             reduced: std::sync::OnceLock::new(),
             reduced_draft: std::sync::OnceLock::new(),
+            tint,
+            tint_top,
+            sky: std::sync::OnceLock::new(),
+            sky_scores: Vec::new(),
         })
+    }
+
+    /// The field with a depth model's sky scores (issue #330; `w × h` over the whole photo, how sure the model is that a pixel is
+    /// sky), which its rays between clouds take for the sky. Scores of a bad size or with a number that is not one are left out.
+    pub fn with_sky_scores(mut self, w: usize, h: usize, scores: &[f32]) -> Field {
+        if w == 0 || h == 0 || scores.len() != w.saturating_mul(h) || !scores.iter().all(|v| v.is_finite()) {
+            return self;
+        }
+        self.sky_scores = crate::sky::scores_of(scores, (w, h), (self.width, self.height));
+        self.sky = std::sync::OnceLock::new();
+        self
+    }
+
+    /// The field with the guide's colour `rgb` (linear Rec.2020, the field's size) for its sky (tests; [`Field::prepare`]
+    /// keeps the guide's own). `Err` for a picture of another size.
+    pub fn with_colour(mut self, rgb: &[[f32; 3]]) -> Result<Field> {
+        if rgb.len() != self.width * self.height {
+            return Err(Error::BadGuide(format!("{} colours for {} × {}", rgb.len(), self.width, self.height)));
+        }
+        (self.tint, self.tint_top) = crate::sky::tints_of(rgb, self.width, self.height);
+        self.sky = std::sync::OnceLock::new();
+        Ok(self)
     }
 }
 

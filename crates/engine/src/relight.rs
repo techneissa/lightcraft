@@ -524,19 +524,28 @@ impl Maker {
                 Err(e) => log::warn!("relight: the file's depth map is not used ({e}); the depth model is"),
             }
         }
-        let depth = model_depth(store, &img, cancel)?;
+        let (depth, sky) = model_depth(store, &img, cancel)?;
         let field = Field::prepare_model(DepthMap { width: depth.width, height: depth.height, values: &depth.data, kind: Kind::Depth }, &guide)
             .map_err(|e| e.to_string())?;
+        // (issue #330: the model's own sky, for a sun's rays between clouds)
+        let field = match sky {
+            Some(sky) => field.with_sky_scores(sky.width, sky.height, &sky.data),
+            None => field,
+        };
         Ok(made(&key, field, Source::Model))
     }
 }
 
-/// The depth of `img` from the model in `store`'s folder (loaded once and kept).
+/// The depth of `img` from the model in `store`'s folder (loaded once and kept), and the model's sky scores (issue #330).
 #[cfg(feature = "sam")]
-fn model_depth(store: &RelightStore, img: &Rgba8, cancel: Option<Arc<AtomicBool>>) -> Result<lightcraft_raster::Plane, String> {
+fn model_depth(
+    store: &RelightStore,
+    img: &Rgba8,
+    cancel: Option<Arc<AtomicBool>>,
+) -> Result<(lightcraft_raster::Plane, Option<lightcraft_raster::Plane>), String> {
     #[cfg(test)]
     if store.fake_model {
-        return Ok(tests::fake_depth(img));
+        return Ok((tests::fake_depth(img), None));
     }
     let dir = store.model_dir().filter(|d| lightcraft_depth::is_model_dir(d)).ok_or(MISSING)?;
     // (the model is not let go while it runs, and its idle time counts from the end)
@@ -550,14 +559,19 @@ fn model_depth(store: &RelightStore, img: &Rgba8, cancel: Option<Arc<AtomicBool>
     let rgb: Vec<u8> = img.data.iter().flat_map(|p| [p[0], p[1], p[2]]).collect();
     let e = model.estimate(&rgb, img.width, img.height, MODEL_LONG).map_err(|e| e.to_string())?;
     model.set_cancel(None);
-    Ok(lightcraft_raster::Plane { width: e.width, height: e.height, data: e.depth })
+    let sky = lightcraft_raster::Plane { width: e.width, height: e.height, data: e.sky };
+    Ok((lightcraft_raster::Plane { width: e.width, height: e.height, data: e.depth }, Some(sky)))
 }
 
 #[cfg(not(feature = "sam"))]
-fn model_depth(_store: &RelightStore, _img: &Rgba8, _cancel: Option<Arc<AtomicBool>>) -> Result<lightcraft_raster::Plane, String> {
+fn model_depth(
+    _store: &RelightStore,
+    _img: &Rgba8,
+    _cancel: Option<Arc<AtomicBool>>,
+) -> Result<(lightcraft_raster::Plane, Option<lightcraft_raster::Plane>), String> {
     #[cfg(test)]
     if _store.fake_model {
-        return Ok(tests::fake_depth(_img));
+        return Ok((tests::fake_depth(_img), None));
     }
     Err("this build has no depth model; only photos with their own depth map can be relit".into())
 }

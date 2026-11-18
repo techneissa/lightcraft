@@ -43,6 +43,14 @@ fn status(s: &mut Session, p: &Value) -> Result<Value> {
     if let (Some(o), Value::Object(st)) = (v.as_object_mut(), s.relight_status(id)) {
         o.extend(st);
     }
+    // (issue #330: whether the photo has a sky for a sun's rays between clouds, once a render has looked; else null)
+    if let Some(o) = v.as_object_mut() {
+        let sky = s.relight_made(id).and_then(|m| m.input.field.sky_known());
+        o.insert("sky".into(), json!(sky));
+        if sky == Some(false) {
+            o.insert("skyNote".into(), json!("no sky found in this photo, so Sky Rays and Opposite Rays change nothing"));
+        }
+    }
     Ok(v)
 }
 
@@ -259,7 +267,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Relight Status",
             [],
             None,
-            "{id?} → {id, on, lights: [{amount, softness, warmth, x, y, depth, wrap, gelHue, gelStrength, pattern, patternScale, patternRotation, patternSoftness, patternOpen, haze, scatter, dust, shadows, mist, mistHeight, fade, source}], darken, selected: index of the selected light, ready, finding, cancelled, source?: file|model, error?, model: {installed, bytes, downloading, done, total, error?, available}} — whether the photo's depth is found (from its own depth map, an iPhone Portrait photo's, or the depth model's), being found, or why it can't be. The lights are develop controls (relight.<n>.amount, .softness, .warmth, .x, .y, .depth, .wrap, .gelHue, .gelStrength, .pattern (0 none, 1 blinds, 2 window panes, 3 leaves, 4 dapple), .patternScale, .patternRotation, .patternSoftness, .patternOpen (how open the pattern is: the slats' tilt, the mullions, the leaves, the canopy's gaps), .haze, .scatter, .dust, .mist (low mist over the ground the depth shows), .mistHeight, .fade (how much far things fade into the haze and mist) and .shadows (how much the photo's own things block the light, 0..100) for light n from 0, and the photo's own relight.darken and its underwater look: relight.water (how much water: 0 is off), relight.waterClarity, relight.waterTint (blue to green), relight.waterShafts (sun from the surface) and relight.waterCaustics (moving-water light on what faces up);; relight.amount … act on the selected light): set them with develop.set or develop.merge",
+            "{id?} → {id, on, lights: [{amount, softness, warmth, x, y, depth, wrap, gelHue, gelStrength, pattern, patternScale, patternRotation, patternSoftness, patternOpen, haze, scatter, dust, shadows, mist, mistHeight, fade, source, edgeGlow, sunburst, skyRays, rayCount, rayLength, rayWidth, rayVariation, rayDirection, raySpread, raySoftness, rayBlocking, oppositeRays, raysPlaced, raysX, raysY}], darken, selected: index of the selected light, sky: whether the photo has a sky for a sun's rays (null until a render looked), skyNote?, ready, finding, cancelled, source?: file|model, error?, model: {installed, bytes, downloading, done, total, error?, available}} — whether the photo's depth is found (from its own depth map, an iPhone Portrait photo's, or the depth model's), being found, or why it can't be. The lights are develop controls (relight.<n>.amount, .softness, .warmth, .x, .y, .depth, .wrap, .gelHue, .gelStrength, .pattern (0 none, 1 blinds, 2 window panes, 3 leaves, 4 dapple), .patternScale, .patternRotation, .patternSoftness, .patternOpen (how open the pattern is: the slats' tilt, the mullions, the leaves, the canopy's gaps), .haze, .scatter, .dust, .mist (low mist over the ground the depth shows), .mistHeight, .fade (how much far things fade into the haze and mist) and .shadows (how much the photo's own things block the light, 0..100), and for a sun .skyRays (rays in the sky, 0..100), their shape .rayCount (3..60), .rayLength, .rayWidth, .rayVariation (widths vary from ray to ray), .rayDirection (where the fan points, degrees: 0 down, 90 right), .raySpread (the fan's width, 10..360 degrees), .raySoftness and .rayBlocking (how much clouds and near things cut them), .oppositeRays (soft rays converging opposite the sun) and .raysPlaced (0: the sun found from the sky, 1: on .raysX, .raysY) for light n from 0, and the photo's own relight.darken and its underwater look: relight.water (how much water: 0 is off), relight.waterClarity, relight.waterTint (blue to green), relight.waterShafts (sun from the surface) and relight.waterCaustics (moving-water light on what faces up);; relight.amount … act on the selected light): set them with develop.set or develop.merge",
             always,
             status
         ),

@@ -180,6 +180,8 @@ impl LightSettings {
             }
         }
         self.kind.which = self.kind.which.round();
+        self.effects.rays_placed = self.effects.rays_placed.round();
+        self.effects.ray_count = self.effects.ray_count.round();
     }
 
     /// The light's type was `before` (an index of [`relight_kinds::NAMES`](crate::relight_kinds::NAMES)) and has just been
@@ -327,6 +329,20 @@ pub static SPECS: &[ControlSpec] = &[
     spec("relight.sunburst", "Sunburst", (0.0, 100.0, 0.0), (1.0, 0), Track::Plain),
     // (issue #315: how much the photo's own things block the light)
     spec("relight.shadows", "Cast Shadows", (0.0, 100.0, 0.0), (1.0, 0), Track::Plain),
+    // (issue #330: a sun's rays between clouds, its dark rays opposite, and where the sun is in the photo for them)
+    spec("relight.skyRays", "Sky Rays", (0.0, 100.0, 0.0), (1.0, 0), Track::Plain),
+    spec("relight.rayCount", "Rays", (3.0, 60.0, 7.0), (1.0, 0), Track::Plain),
+    spec("relight.rayLength", "Ray Length", (0.0, 100.0, 60.0), (1.0, 0), Track::Plain),
+    spec("relight.rayWidth", "Ray Width", (0.0, 100.0, 80.0), (1.0, 0), Track::Plain),
+    spec("relight.rayVariation", "Width Variation", (0.0, 100.0, 80.0), (1.0, 0), Track::Plain),
+    spec("relight.rayDirection", "Spread Direction", (-180.0, 180.0, 0.0), (1.0, 0), Track::Centered),
+    spec("relight.raySpread", "Spread", (10.0, 360.0, 360.0), (1.0, 0), Track::Plain),
+    spec("relight.raySoftness", "Ray Softness", (0.0, 100.0, 85.0), (1.0, 0), Track::Plain),
+    spec("relight.rayBlocking", "Blocking", (0.0, 100.0, 60.0), (1.0, 0), Track::Plain),
+    spec("relight.oppositeRays", "Opposite Rays", (0.0, 100.0, 0.0), (1.0, 0), Track::Plain),
+    spec("relight.raysPlaced", "Rays Centre Placed", (0.0, 1.0, 0.0), (1.0, 0), Track::Plain),
+    spec("relight.raysX", "Rays Centre Left to Right", (-0.5, 1.5, 0.5), (0.001, 3), Track::Plain),
+    spec("relight.raysY", "Rays Centre Top to Bottom", (-1.0, 1.5, 0.1), (0.001, 3), Track::Plain),
 ];
 
 /// Relight's control specs: the per-light ones (`relight.amount` …, templates of `relight.<n>.amount` …) and
@@ -397,8 +413,8 @@ pub fn set(s: &mut crate::DevelopSettings, id: &str, v: f64) -> bool {
     let before = light.and_then(|n| s.relight.lights.get(n)).map(|l| l.kind.index());
     match s.relight.field(id) {
         Some(f) => {
-            // (the light's type is a whole number)
-            *f = if spec.id == "relight.kind" { spec.clamp(v).round() } else { spec.clamp(v) };
+            // (the light's type, whether the rays' centre is placed and the rays' count are whole numbers)
+            *f = if matches!(spec.id, "relight.kind" | "relight.raysPlaced" | "relight.rayCount") { spec.clamp(v).round() } else { spec.clamp(v) };
             if spec.id == "relight.kind"
                 && let (Some(n), Some(before)) = (light, before)
                 && let Some(l) = s.relight.lights.get_mut(n)
@@ -490,7 +506,7 @@ mod tests {
         assert_eq!((get(&s, "relight.0.warmth"), get(&s, "relight.1.warmth")), (Some(-50.0), Some(0.0)));
         assert_eq!(for_light("relight.amount", 2).as_deref(), Some("relight.2.amount"));
         assert_eq!((for_light("relight.darken", 2), for_light("relight.1.amount", 2)), (None, None));
-        assert_eq!(light_instances(&s).len(), 82);
+        assert_eq!(light_instances(&s).len(), 108);
         assert_eq!(crate::controls::find("relight.1.wrap").map(|c| c.id), Some("relight.wrap"));
         assert!(crate::controls::find("relight.x.wrap").is_none() && crate::controls::find("relight.0.darken").is_none());
         // a section reset puts all the lights back
