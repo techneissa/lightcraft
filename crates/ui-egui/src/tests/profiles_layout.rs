@@ -1,4 +1,4 @@
-//! The profile browser in a narrow right panel: names stay inside their cells (#1634).
+//! The profile browser in a narrow right panel: names wrap inside their cards, none cut short (#1634, #344).
 
 use egui::{Rect, pos2, vec2};
 use serde_json::json;
@@ -32,7 +32,7 @@ fn panel(width: f32) -> (Vec<egui::epaint::TextShape>, Vec<(String, Rect)>) {
     let mut texts = Vec::new();
     let mut widgets = Vec::new();
     for frame in 0..3 {
-        let raw = HeadlessView::raw_input(vec2(width, 4000.0), 1.0, frame as f64 / 60.0, vec![]);
+        let raw = HeadlessView::raw_input(vec2(width, 12000.0), 1.0, frame as f64 / 60.0, vec![]);
         let mut out = ctx.run_ui(raw, |ui| {
             egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
                 crate::panels::profiles::show(&mut app, ui, photo);
@@ -49,13 +49,20 @@ fn panel(width: f32) -> (Vec<egui::epaint::TextShape>, Vec<(String, Rect)>) {
 }
 
 #[test]
-fn profile_names_stay_inside_their_cells_in_a_narrow_panel() {
-    let width = 250.0;
+fn profile_names_wrap_inside_their_cells_in_a_narrow_panel() {
+    // (one card across at the narrowest panel, two at the usual width)
+    for width in [250.0, 300.0] {
+        names_wrap(width);
+    }
+}
+
+fn names_wrap(width: f32) {
     let (texts, widgets) = panel(width);
     let cell = widgets.iter().find(|(id, _)| id == &format!("profileCell:{LONG_ID}")).unwrap().1;
     // the cell's name sits below its thumbnail; the header's copy is above every cell
     let name = texts.iter().find(|t| t.galley.job.text == LONG_NAME && t.pos.y >= cell.top()).unwrap();
-    assert!(name.galley.elided, "a name wider than its cell is cut short");
+    assert!(!name.galley.elided, "a name wider than its card wraps, it is not cut short");
+    assert!(name.galley.rows.len() > 1, "{LONG_NAME:?} fits one line of a narrow card");
     let bounds = name.visual_bounding_rect();
     assert!(bounds.left() >= cell.left() && bounds.right() <= cell.right(), "{bounds:?} spills out of {cell:?}");
     let applied = texts.iter().find(|t| t.galley.job.text == LONG_NAME && t.pos.y < cell.top()).unwrap();
@@ -65,6 +72,11 @@ fn profile_names_stay_inside_their_cells_in_a_narrow_panel() {
         let cell = widgets.iter().find(|(id, _)| id == &format!("profileCell:{}", p.id)).unwrap().1;
         let name = texts.iter().find(|t| t.galley.job.text == p.name && cell.contains(pos2(cell.center().x, t.pos.y))).unwrap();
         let bounds = name.visual_bounding_rect();
-        assert!(bounds.left() >= cell.left() && bounds.right() <= cell.right(), "{}: {bounds:?} spills out of {cell:?}", p.name);
+        assert!(!name.galley.elided, "{} is cut short", p.name);
+        assert!(
+            bounds.left() >= cell.left() && bounds.right() <= cell.right() && bounds.bottom() <= cell.bottom(),
+            "{}: {bounds:?} spills out of {cell:?}",
+            p.name
+        );
     }
 }

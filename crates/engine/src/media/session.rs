@@ -225,6 +225,11 @@ impl crate::Session {
         job.key ^= lens.rotate_left(31) ^ profile_salt.rotate_left(43) ^ decoder.rotate_left(47);
         // (a hover over a local profile follows its file, as every other render of it does)
         job.key ^= LoadOptions::of(settings).profile_key.map_or(0, |k| (k as u64) ^ ((k >> 64) as u64)).rotate_left(29);
+        // (fork, issue #344: Relight's field for these settings, not the photo's own: `render_job` took the photo's, which
+        // holds none while its light is off, so a hovered Light Preset rendered the photo unlit)
+        let (relight, relight_in) = self.relight_for(&p, settings);
+        job.info.relight = relight_in;
+        job.key ^= relight.rotate_left(59);
         Some(job)
     }
 

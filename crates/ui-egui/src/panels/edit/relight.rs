@@ -140,6 +140,10 @@ pub(super) fn relight(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSet
         if *field == "spotEdge" && sharp {
             continue;
         }
+        if *field == "spotSharp" {
+            sharp_switch(app, ui, sel, sharp);
+            continue;
+        }
         control(app, ui, d, &format!("relight.{sel}.{field}"), true);
     }
     // (issue #315: a light with a place the light comes from casts shadows: a point, a spot, a sun and a softbox; a rim and a fill don't)
@@ -161,6 +165,18 @@ pub(super) fn relight(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSet
     effects::effects(app, ui, d, sel);
     // (issue #333: the photo's own underwater look)
     water::water(app, ui, d);
+}
+
+/// Sharp Cone as a switch (issue #344; the control `relight.<n>.spotSharp` is still 0 or 1 for commands and agents).
+fn sharp_switch(app: &mut LightcraftApp, ui: &mut egui::Ui, sel: usize, sharp: bool) {
+    let mut on = sharp;
+    egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 2, bottom: 2 }).show(ui, |ui| {
+        let r = ui.checkbox(&mut on, crate::i18n::tr("Sharp Cone"));
+        register(ui, format!("check:relight.{sel}.spotSharp"), r.rect);
+        if r.changed() {
+            let _ = app.run("develop.set", json!({"control": format!("relight.{sel}.spotSharp"), "value": if on { 1.0 } else { 0.0 }}));
+        }
+    });
 }
 
 /// The photo's lights, one row each (a click selects it), and Add Light, Duplicate and Delete under them.
