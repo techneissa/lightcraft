@@ -81,6 +81,8 @@ pub struct Field {
 
 /// The radius of the window the light is refined over along an edge (field pixels).
 pub const BAND_RADIUS: usize = 3;
+/// The shortest side [`Field::halved`] makes: a smaller field is cheap enough as it is.
+const MIN_HALVED: usize = 64;
 /// A change of log depth across three pixels that makes a step (about 6 %).
 const STEP: f32 = 0.06;
 
@@ -346,6 +348,48 @@ impl Field {
             })
             .collect();
         (tw, th, px)
+    }
+
+    /// The field at half its size each way, for a drag's renders: every per-pixel stage (the lobes, the shading, the beams'
+    /// and the shadows' upsample, the glow) costs a quarter. Every number of the field is in normalized photo coordinates or
+    /// relative to its long side, so the light looks the same, only softer at the photo's edges. Each 2 × 2 block takes the
+    /// depth of its own pixel nearest the block's mean (a real depth, never a blend across a step) and the mean of its
+    /// luminance; the normals and the edge band are made again at the new size. `None` for a field too small to halve.
+    pub fn halved(&self) -> Option<Field> {
+        let (w, h) = (self.width / 2, self.height / 2);
+        if w < MIN_HALVED || h < MIN_HALVED {
+            return None;
+        }
+        let block =
+            |x: usize, y: usize| [(2 * x, 2 * y), (2 * x + 1, 2 * y), (2 * x, 2 * y + 1), (2 * x + 1, 2 * y + 1)].map(|(a, b)| b * self.width + a);
+        let mean = |v: &[f32], i: [usize; 4]| i.iter().map(|&i| v.get(i).copied().unwrap_or(0.0)).sum::<f32>() / 4.0;
+        let (ln_z, (lum, gi)): (Vec<f32>, (Vec<f32>, Vec<f32>)) = (0..w * h)
+            .into_par_iter()
+            .map(|j| {
+                let i = block(j % w, j / w);
+                let m = mean(&self.ln_z, i);
+                let z = i.iter().filter_map(|&i| self.ln_z.get(i).copied()).min_by(|a, b| (a - m).abs().total_cmp(&(b - m).abs())).unwrap_or(m);
+                (z, (mean(&self.lum, i), mean(&self.gi, i)))
+            })
+            .unzip();
+        let normal = normals(&ln_z, w, h);
+        let band = edge_band(&ln_z, &gi, w, h);
+        Some(Field {
+            width: w,
+            height: h,
+            ln_z,
+            normal,
+            lum,
+            near: self.near,
+            far: self.far,
+            gi,
+            band,
+            air: self.air,
+            bright: self.bright,
+            ground: std::sync::OnceLock::new(),
+            reduced: std::sync::OnceLock::new(),
+            reduced_draft: std::sync::OnceLock::new(),
+        })
     }
 
     /// The field's log depth as a plane (tests, pictures).

@@ -41,6 +41,8 @@ mod tests_edge;
 #[cfg(test)]
 mod tests_edge_glow;
 #[cfg(test)]
+mod tests_halved;
+#[cfg(test)]
 mod tests_kinds;
 #[cfg(test)]
 mod tests_mist;

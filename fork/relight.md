@@ -16,6 +16,7 @@ History is in the PRs: #288 (the feature), #294 (⌥ overlay), #299 (several lig
   The subject blocks it (a patterned light always casts full shadows). Leaves are baked once before the parallel loop. The shade passes a second, tinted lobe (`Effects::through_colour`). Openness sets the gap.
 - **Shadows (#315):** a Cast Shadows slider per light. Rays march through the depth map on a reduced field (`Reduced`) and are blocked by "things": stuff with farther depth on both sides, as deep as it is wide (`occluder.rs`, `shadow.rs`).
   A `Visibility` is kept per light (`SHADOWS`) and upsampled into the lobe. A drag marches coarser; the release and export march in full. A Rim and a Fill take no shadow.
+- **Speed (#347):** a drag's render takes the field at half its size (`Field::halved`, kept per photo in `HALVED`), so lobes, shading, beams and glows cost a quarter. A render of at most 320 px (preset pictures, thumbnails) does the same when the half field still has twice its pixels, and keeps nothing it makes (`Tier::Small`), so the preset flyout never pushes out the photo's own planes. The release and exports use the whole field.
 - **Beams (#317):** Haze shows the light's beams (`beam.rs`). Each line of sight sums single-scattered light, cut by the same blockers as shadows plus a slab for walls, with open sky letting light through.
   Forward Scatter (`scatter`) and Dust (`dust`) shape it. The beam is added on top in the light's colour as extra mask planes (`LocalAdjustments::fork_added`, never saved), not a gain. Shafts are kept until the light moves. A Rim and a Fill make no beam.
 - **Mist and fog (#331):** Low Mist and Mist Height thicken the haze near a ground plane fitted from up-facing normals (`mist.rs`), not by image row.
@@ -92,7 +93,7 @@ History is in the PRs: #288 (the feature), #294 (⌥ overlay), #299 (several lig
 - A spot's hard edge (Cone Edge 0) leaks a little onto steep, evenly toned walls (the edge refit).
 - A Rim follows the depth model's edges, so on a staircase it also lights step edges.
 - Window panes pass only their open share, so a pane-cut beam is fainter (about 0.55 of a plain softbox's, a sun through panes 0.26 of a plain sun's); the air itself isn't dimmed.
-- A drag of a sun in haze is a little softer than the release.
+- A drag (and a small preset picture) is a little softer than the release: it is lit on the half field.
 - A surface that is no blocker counts as a quarter of its depth deep to the air's rays, and open sky is far and bright, so a dark sky or a thick wall can let light through.
 - The air has no shadow from beyond the picture's edges.
 

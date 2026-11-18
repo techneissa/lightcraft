@@ -146,6 +146,14 @@ impl<T> Memo<T> {
     fn clear(&self) {
         self.kept.lock().unwrap_or_else(PoisonError::into_inner).clear();
     }
+
+    /// [`Memo::put`] when `keep`: a small render's planes ([`Tier::Small`]) are made and dropped, so a flyout of preset
+    /// pictures never pushes out the photo's own.
+    fn put_if(&self, keep: bool, key: u64, value: Arc<T>) {
+        if keep {
+            self.put(key, value);
+        }
+    }
 }
 
 static MEMO: Memo<Shading> = Memo::new(KEEP);
@@ -168,6 +176,9 @@ static WATER: Memo<WaterPlanes> = Memo::new(2);
 /// has both. Cheap to make (a closed form over the field), so few are kept.
 static GLOW_LOBES: Memo<Lobe> = Memo::new(KEEP_LOBES);
 static ADDED_LOBES: Memo<Lobe> = Memo::new(KEEP_LOBES);
+/// The fields at half their size ([`Field::halved`]) the drags and the small renders take, one per photo (two kept: the
+/// photo shown and the one before).
+static HALVED: Memo<Field> = Memo::new(2);
 
 /// Let go of every kept lobe and shading (the engine drops a photo's field: what was made from it goes too; they are
 /// made again by the next render). They are keyed by the field, so one photo's go with another's.
@@ -182,6 +193,7 @@ pub fn forget() {
     WATER.clear();
     GLOW_LOBES.clear();
     ADDED_LOBES.clear();
+    HALVED.clear();
 }
 
 // (the settings and the light's numbers keep to the same cap)
@@ -351,17 +363,79 @@ pub fn snap_to_edge(field: &Field, light: &lightcraft_develop::relight::LightSet
 
 /// The light of a render of `info` with settings `s` (`None`: off, or the photo has no field yet).
 ///
-/// `draft`: a drag's render. Its shadows are marched coarser (see [`shading_for`]); everything else is the same.
+/// `draft`: a drag's render ([`Tier::Draft`]): lit on the field at half its size, its shadows, rays and patterns coarser.
 pub fn lit(info: &SourceInfo, s: &DevelopSettings, draft: bool) -> Option<Lit> {
-    let input = info.relight.as_ref()?;
+    lit_for(info, s, if draft { Tier::Draft } else { Tier::Full })
+}
+
+/// How a render takes its light.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Tier {
+    /// The release, the export and every render at rest: the whole field, full shadows and rays.
+    Full,
+    /// A drag's render: the field at half its size ([`Field::halved`]: every per-pixel stage a quarter of the cost) with
+    /// coarse shadows, rays and patterns; what it makes is kept for the drag's next steps.
+    Draft,
+    /// A small picture (a preset's, a thumbnail) whose longest side is this: coarse as a drag's, on the half field when that
+    /// still has twice the picture's pixels each way, and nothing it makes is kept, so the photo's own planes stay.
+    Small(usize),
+}
+
+/// The longest side of a render that takes [`Tier::Small`] (preset pictures, thumbnails; never an export).
+pub const SMALL_EDGE: usize = 320;
+
+impl Tier {
+    /// The tier of a render: `draft` a drag's, `long` its output's longest side, `export` an export's (always [`Tier::Full`]).
+    pub fn of(draft: bool, long: usize, export: bool) -> Tier {
+        if export {
+            Tier::Full
+        } else if long <= SMALL_EDGE {
+            Tier::Small(long)
+        } else if draft {
+            Tier::Draft
+        } else {
+            Tier::Full
+        }
+    }
+}
+
+/// [`lit`] at tier `tier`.
+pub fn lit_for(info: &SourceInfo, s: &DevelopSettings, tier: Tier) -> Option<Lit> {
+    let full = info.relight.as_ref()?;
     let scene = scene_of(s)?;
-    let (_, shading) = shading_for(input, &scene, s.light.exposure, draft);
-    let water = water_for(input, &scene.water, s.light.exposure);
-    Some(Lit { shading, beams: beams_of(input, &scene, draft), fades: fades_of(input, &scene, s.light.exposure), field: input.field.clone(), water })
+    let halve = match tier {
+        Tier::Full => false,
+        Tier::Draft => true,
+        Tier::Small(long) => full.field.width.max(full.field.height) / 2 >= 2 * long,
+    };
+    let half = if halve { halved(full) } else { None };
+    let input = half.as_ref().unwrap_or(full);
+    let (draft, keep) = (tier != Tier::Full, !matches!(tier, Tier::Small(_)));
+    let ev = s.light.exposure;
+    let (_, shading) = shading_in(input, &scene, ev, draft, keep);
+    let water = water_for(input, &scene.water, ev, keep);
+    let beams = beams_in(input, &scene, draft, keep);
+    Some(Lit { shading, beams, fades: fades_in(input, &scene, ev, keep), field: input.field.clone(), water })
+}
+
+/// `input`'s field at half its size, under a key of its own (so nothing made on it is taken for the whole field's), made
+/// once per photo and kept; `None` for a field too small to halve.
+fn halved(input: &Input) -> Option<Input> {
+    let key = hashed(|h| std::hash::Hash::hash(&(10u8, input.key), h));
+    if let Some(field) = HALVED.get(key) {
+        return Some(Input { field, key });
+    }
+    let t = crate::profiling().then(std::time::Instant::now);
+    let field = Arc::new(input.field.halved()?);
+    if let Some(t) = t {
+        eprintln!("    relight halved ({} × {}): {:.1} ms", field.width, field.height, t.elapsed().as_secs_f64() * 1e3);
+    }
+    HALVED.put(key, field.clone());
+    Some(Input { field, key })
 }
 
 /// The water's colour planes on `input`'s field for a photo at exposure `ev`; made once and kept (`None`: no water).
-fn water_for(input: &Input, water: &Water, ev: f64) -> Option<Arc<WaterPlanes>> {
+fn water_for(input: &Input, water: &Water, ev: f64, keep: bool) -> Option<Arc<WaterPlanes>> {
     if !water.is_on() {
         return None;
     }
@@ -375,7 +449,7 @@ fn water_for(input: &Input, water: &Water, ev: f64) -> Option<Arc<WaterPlanes>> 
     if let Some(t) = t {
         eprintln!("    relight water ({} × {}): {:.1} ms", input.field.width, input.field.height, t.elapsed().as_secs_f64() * 1e3);
     }
-    WATER.put(key, planes.clone());
+    WATER.put_if(keep, key, planes.clone());
     Some(planes)
 }
 
@@ -504,7 +578,7 @@ fn shadow_key(input: &Input, light: &Light, coarse: bool, far: bool) -> u64 {
 /// `light`'s shadow visibility on `input`'s field; made once and kept. A drag (`draft`) takes the full one when it is
 /// kept (the other lights of the scene, a light that is not moving) and else makes a coarse one, so the full ones are
 /// not made again at the release.
-fn shadows_for(input: &Input, light: &Light, rig: &Rig, draft: bool, far: bool) -> Option<Arc<Visibility>> {
+fn shadows_for(input: &Input, light: &Light, rig: &Rig, draft: bool, far: bool, keep: bool) -> Option<Arc<Visibility>> {
     let full = shadow_key(input, light, false, far);
     if let Some(v) = SHADOWS.get(full) {
         return Some(v);
@@ -518,7 +592,7 @@ fn shadows_for(input: &Input, light: &Light, rig: &Rig, draft: bool, far: bool) 
     if let Some(t) = t {
         eprintln!("    relight shadows ({} × {}, draft {draft}): {:.1} ms", input.field.width, input.field.height, t.elapsed().as_secs_f64() * 1e3);
     }
-    SHADOWS.put(key, vis.clone());
+    SHADOWS.put_if(keep, key, vis.clone());
     Some(vis)
 }
 
@@ -563,7 +637,7 @@ fn beam_key(input: &Input, light: &Light, effects: &Effects, coarse: bool) -> u6
 /// `light`'s beam through its haze on `input`'s field ([`Field::beam_plane`]; `None`: no beam). The rays are made once per
 /// place of the light and kept, the beam once per set of the haze's numbers. A drag (`draft`) takes the full ones when they are
 /// kept, else makes coarse ones.
-fn beam_for(input: &Input, light: &Light, effects: &Effects, rig: &Rig, draft: bool) -> Option<(Arc<Lobe>, bool)> {
+fn beam_for(input: &Input, light: &Light, effects: &Effects, rig: &Rig, draft: bool, keep: bool) -> Option<(Arc<Lobe>, bool)> {
     if !has_beam(light, effects) {
         return None;
     }
@@ -589,13 +663,13 @@ fn beam_for(input: &Input, light: &Light, effects: &Effects, rig: &Rig, draft: b
                         // (a patterned lamp shines from far along its direction, as its lobe and shadows do)
                         let far = input.field.pattern_rig(rig, effects);
                         let s = Arc::new(input.field.shafts(far.as_ref().unwrap_or(rig), light, coarse)?);
-                        SHAFTS.put(shafts_key(input, light, effects, coarse), s.clone());
+                        SHAFTS.put_if(keep, shafts_key(input, light, effects, coarse), s.clone());
                         s
                     }
                 },
             };
             let b = Arc::new(input.field.beam(&shafts, rig, effects));
-            BEAMS.put(beam_key(input, light, effects, coarse), b.clone());
+            BEAMS.put_if(keep, beam_key(input, light, effects, coarse), b.clone());
             b
         }
     };
@@ -603,7 +677,7 @@ fn beam_for(input: &Input, light: &Light, effects: &Effects, rig: &Rig, draft: b
     if let Some(t) = t {
         eprintln!("    relight beam ({} × {}, draft {coarse}): {:.1} ms", input.field.width, input.field.height, t.elapsed().as_secs_f64() * 1e3);
     }
-    BEAM_LOBES.put(plane_key(coarse), plane.clone());
+    BEAM_LOBES.put_if(keep, plane_key(coarse), plane.clone());
     Some((plane, coarse))
 }
 
@@ -637,7 +711,7 @@ fn glow_key(input: &Input, light: &Light, effects: &Effects) -> u64 {
 }
 
 /// `light`'s source seen as a bright point (issue #334; `None`: it shows none), made once per place and strength and kept.
-fn source_for(input: &Input, light: &Light, effects: &Effects, rig: &Rig) -> Option<Arc<Lobe>> {
+fn source_for(input: &Input, light: &Light, effects: &Effects, rig: &Rig, keep: bool) -> Option<Arc<Lobe>> {
     if !light.kind.shows_source() || !(effects.source.is_finite() && effects.source > 0.0) {
         return None;
     }
@@ -646,12 +720,12 @@ fn source_for(input: &Input, light: &Light, effects: &Effects, rig: &Rig) -> Opt
         return Some(l);
     }
     let plane = Arc::new(input.field.source(light, rig, effects.source)?);
-    BEAM_LOBES.put(key, plane.clone());
+    BEAM_LOBES.put_if(keep, key, plane.clone());
     Some(plane)
 }
 
 /// `light`'s glow past an edge on `input`'s field ([`Field::edge_glow`]; `None`: none), made once per set of its numbers and kept.
-fn glow_for(input: &Input, light: &Light, effects: &Effects) -> Option<Arc<Lobe>> {
+fn glow_for(input: &Input, light: &Light, effects: &Effects, keep: bool) -> Option<Arc<Lobe>> {
     if !has_glow(light, effects) {
         return None;
     }
@@ -664,7 +738,7 @@ fn glow_for(input: &Input, light: &Light, effects: &Effects) -> Option<Arc<Lobe>
     if let Some(t) = t {
         eprintln!("    relight glow ({} × {}): {:.1} ms", input.field.width, input.field.height, t.elapsed().as_secs_f64() * 1e3);
     }
-    GLOW_LOBES.put(key, glow.clone());
+    GLOW_LOBES.put_if(keep, key, glow.clone());
     Some(glow)
 }
 
@@ -672,6 +746,11 @@ fn glow_for(input: &Input, light: &Light, effects: &Effects) -> Option<Arc<Lobe>
 /// (Warmth and gel, as the finish stage's temperature and tint colour a grey of the same luminance) and strength; and (issue
 /// #334) each light whose source shows as a point, as a plane of its own.
 pub fn beams_of(input: &Input, scene: &Scene, draft: bool) -> Vec<Beamed> {
+    beams_in(input, scene, draft, true)
+}
+
+/// [`beams_of`], keeping what it makes when `keep`.
+fn beams_in(input: &Input, scene: &Scene, draft: bool, keep: bool) -> Vec<Beamed> {
     let none = Effects::default();
     let mut out = Vec::new();
     for (i, l) in scene.lights.iter().take(MAX_LIGHTS).enumerate() {
@@ -688,8 +767,8 @@ pub fn beams_of(input: &Input, scene: &Scene, draft: bool) -> Vec<Beamed> {
         let k = rig.gain() * crate::tone::GREY / lum;
         let colour = c.map(|v| if (v * k).is_finite() { (v * k).max(0.0) } else { 0.0 });
         // (issue #332: the glow past an edge is added into the beam's plane, the same light in the same colour)
-        let beam = beam_for(input, l, e, &rig, draft);
-        let glow = glow_for(input, l, e);
+        let beam = beam_for(input, l, e, &rig, draft, keep);
+        let glow = glow_for(input, l, e, keep);
         let plane = match (beam, glow) {
             (Some((b, coarse)), Some(g)) => {
                 // (both: the sum, kept while neither changes; the beam's key takes the flag the beam was made with, which is a drag's
@@ -697,7 +776,7 @@ pub fn beams_of(input: &Input, scene: &Scene, draft: bool) -> Vec<Beamed> {
                 let key = hashed(|h| std::hash::Hash::hash(&(9u8, beam_key(input, l, e, coarse), glow_key(input, l, e)), h));
                 Some(ADDED_LOBES.get(key).unwrap_or_else(|| {
                     let sum = Arc::new(b.added(&g));
-                    ADDED_LOBES.put(key, sum.clone());
+                    ADDED_LOBES.put_if(keep, key, sum.clone());
                     sum
                 }))
             }
@@ -707,7 +786,7 @@ pub fn beams_of(input: &Input, scene: &Scene, draft: bool) -> Vec<Beamed> {
         if let Some(plane) = plane {
             out.push(Beamed { plane, colour, slot: i as u32, shafts: false });
         }
-        if let Some(plane) = source_for(input, l, e, &rig) {
+        if let Some(plane) = source_for(input, l, e, &rig, keep) {
             out.push(Beamed { plane, colour, slot: (MAX_LIGHTS + i) as u32, shafts: false });
         }
     }
@@ -722,7 +801,7 @@ pub fn beams_of(input: &Input, scene: &Scene, draft: bool) -> Vec<Beamed> {
         let lum = (0.2627 * c[0] + 0.678 * c[1] + 0.0593 * c[2]).max(1e-6);
         let k = rig.gain() * crate::tone::GREY / lum;
         let colour = c.map(|v| if (v * k).is_finite() { (v * k).max(0.0) } else { 0.0 });
-        if let Some((plane, _)) = beam_for(input, l, e, &rig, draft) {
+        if let Some((plane, _)) = beam_for(input, l, e, &rig, draft, keep) {
             out.push(Beamed { plane, colour, slot: 0, shafts: true });
         }
     }
@@ -740,6 +819,11 @@ fn fade_key(input: &Input, e: &Effects) -> u64 {
 /// at exposure `ev` is the photo's far colour with some of the summed colour (Warmth and gel) of every light with Distance Fade
 /// on, a rim or a fill as much as any other. One light gives what it gave alone.
 pub fn fades_of(input: &Input, scene: &Scene, ev: f64) -> Vec<Faded> {
+    fades_in(input, scene, ev, true)
+}
+
+/// [`fades_of`], keeping what it makes when `keep`.
+fn fades_in(input: &Input, scene: &Scene, ev: f64, keep: bool) -> Vec<Faded> {
     let none = Effects::default();
     let on = |e: &Effects| e.fade.is_finite() && e.fade > 0.0;
     let faded: Vec<(&Light, &Effects)> =
@@ -752,7 +836,7 @@ pub fn fades_of(input: &Input, scene: &Scene, ev: f64) -> Vec<Faded> {
         None => {
             let Some(p) = input.field.fade(e) else { return Vec::new() };
             let p = Arc::new(p);
-            FADES.put(key, p.clone());
+            FADES.put_if(keep, key, p.clone());
             p
         }
     };
@@ -772,7 +856,7 @@ pub fn fades_of(input: &Input, scene: &Scene, ev: f64) -> Vec<Faded> {
 /// `light`'s lobes on `input`'s field (`rig`: the light set up on it), seen through its pattern and with the shadows it
 /// casts; made once and kept. A drag (`draft`) takes the full lobes when they are kept and else makes them with coarse
 /// shadows and a coarse pattern (a light with neither has one set for both).
-fn lobe_for(input: &Input, light: &Light, effects: &Effects, rig: &Rig, ev: f64, draft: bool) -> Arc<Lobes> {
+fn lobe_for(input: &Input, light: &Light, effects: &Effects, rig: &Rig, ev: f64, draft: bool, keep: bool) -> Arc<Lobes> {
     let coarse = draft && (shadow_amount(light, effects).is_some() || effects.pattern != Pattern::None);
     if let Some(l) = LOBES.get(lobe_key(input, light, effects, ev, false)) {
         return l;
@@ -789,7 +873,7 @@ fn lobe_for(input: &Input, light: &Light, effects: &Effects, rig: &Rig, ev: f64,
     let (mut lobe, mut through) = input.field.patterned(rig, input.field.lobe(shines), effects, coarse);
     // (the shadows multiply the lobes before the lights add up)
     if let Some(amount) = shadow_amount(light, effects)
-        && let Some(vis) = shadows_for(input, light, shines, coarse, far.is_some())
+        && let Some(vis) = shadows_for(input, light, shines, coarse, far.is_some(), keep)
     {
         lobe = input.field.shadowed(lobe, &vis, amount);
         through = through.map(|t| input.field.shadowed(t, &vis, amount));
@@ -798,7 +882,7 @@ fn lobe_for(input: &Input, light: &Light, effects: &Effects, rig: &Rig, ev: f64,
     if let Some(t) = t {
         eprintln!("    relight lobe ({} × {}): {:.1} ms", input.field.width, input.field.height, t.elapsed().as_secs_f64() * 1e3);
     }
-    LOBES.put(key, lobe.clone());
+    LOBES.put_if(keep, key, lobe.clone());
     lobe
 }
 
@@ -809,6 +893,11 @@ fn lobe_for(input: &Input, light: &Light, effects: &Effects, rig: &Rig, ev: f64,
 /// `draft`: a slider drag's render: the shadows are marched coarser (a quarter of the cost; a light whose full shadows are
 /// kept uses those), and the release makes the full ones. The export is never a draft.
 pub fn shading_for(input: &Input, scene: &Scene, ev: f64, draft: bool) -> (u64, Arc<Shading>) {
+    shading_in(input, scene, ev, draft, true)
+}
+
+/// [`shading_for`], keeping what it makes when `keep`.
+fn shading_in(input: &Input, scene: &Scene, ev: f64, draft: bool, keep: bool) -> (u64, Arc<Shading>) {
     let key = shading_key(input, scene, ev, draft);
     if let Some(sh) = MEMO.get(key) {
         return (key, sh);
@@ -817,7 +906,8 @@ pub fn shading_for(input: &Input, scene: &Scene, ev: f64, draft: bool) -> (u64, 
     let rigs: Vec<Rig> = scene.lights.iter().take(MAX_SCENE).map(|l| input.field.rig(l, scene.darken, ev)).collect();
     let none = Effects::default();
     let effects = |i: usize| scene.effects.get(i).unwrap_or(&none);
-    let lobes: Vec<Arc<Lobes>> = scene.lights.iter().zip(&rigs).enumerate().map(|(i, (l, r))| lobe_for(input, l, effects(i), r, ev, draft)).collect();
+    let lobes: Vec<Arc<Lobes>> =
+        scene.lights.iter().zip(&rigs).enumerate().map(|(i, (l, r))| lobe_for(input, l, effects(i), r, ev, draft, keep)).collect();
     let mut parts: Vec<Part<'_>> = Vec::with_capacity(2 * rigs.len());
     for (i, ((l, r), lobe)) in scene.lights.iter().zip(&rigs).zip(&lobes).enumerate() {
         let (tilt, tint) = effects(i).light_colour(l.warmth);
@@ -838,7 +928,7 @@ pub fn shading_for(input: &Input, scene: &Scene, ev: f64, draft: bool) -> (u64, 
             t.elapsed().as_secs_f64() * 1e3
         );
     }
-    MEMO.put(key, shading.clone());
+    MEMO.put_if(keep, key, shading.clone());
     (key, shading)
 }
 
@@ -1005,7 +1095,7 @@ mod tests {
         let lamp = |wrap: f64| Light { x: 0.2, y: 0.3, depth: 0.1, amount: 0.8, softness: 0.4, warmth: 0.0, wrap, kind: LightKind::Point };
         let marched = |l: &Light| {
             let far = field.pattern_rig(&field.rig(l, 0.0, 0.0), &effects).unwrap();
-            let kept = shadows_for(&input, l, &far, false, true).unwrap();
+            let kept = shadows_for(&input, l, &far, false, true, true).unwrap();
             let fresh = field.visibility(&far, l, false).unwrap();
             (field.visibility_plane(&kept), field.visibility_plane(&fresh))
         };
@@ -1040,7 +1130,7 @@ mod tests {
         }
         let marched = |l: &Light| {
             let far = field.pattern_rig(&field.rig(l, 0.0, 0.0), &effects).unwrap();
-            let kept = shadows_for(&input, l, &far, false, true).unwrap();
+            let kept = shadows_for(&input, l, &far, false, true, true).unwrap();
             let fresh = field.visibility(&far, l, false).unwrap();
             (field.visibility_plane(&kept), field.visibility_plane(&fresh))
         };
