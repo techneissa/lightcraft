@@ -419,7 +419,10 @@ blocks were nearly all one dark colour let the matrix take up the gain, and the 
 A fit that fails its gates (500 valid blocks, matrix entries within ±3, gain 0.2 to 5, own median ΔE00 ≤ 1.5, and the
 same on the brightest quarter of the blocks seen at an exposure for them) falls back on the camera's calibrated transfer
 (the A7 V's: about the 68-photo median), still Apple's colours; a camera without one makes both pictures Camera
-Matching, with the line above. No full-size Apple render is ever made on this path. With AI Denoise off, Apple's
+Matching, with the line above. Each view fits its own transfer on the picture it loads (512 px for thumbnails, 2560 px
+for Fit and slider drags, full size when zoomed in), so a fit that depends on the size shows as colours that change with
+the view; the joint solve lands on the same transfer at every size. The fit's version is part of every render key of a
+macOS Colour photo with Denoise on (`files::transfer_key`), so thumbnails and views saved from an older fit render anew. No full-size Apple render is ever made on this path. With AI Denoise off, Apple's
 base is used directly. Turning AI Denoise on or off changes the colour by the transfer's residual and the detail by the
 demosaic, nothing else.
 

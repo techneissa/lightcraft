@@ -17,6 +17,9 @@ use lightcraft_color::{Mat3, REC2020, SRGB};
 
 use super::Rgb32f;
 
+/// Changes when the fit gives other transfers for the same photos, so pictures saved from the old ones are made anew
+/// (`files::transfer_key`). 1: the gain and the matrix solved together, and the brightest quarter's gate (#359).
+pub(crate) const VERSION: u64 = 1;
 /// About how many blocks the pair is averaged to (48-pixel blocks at 2560 px).
 pub(crate) const BLOCKS: usize = 1900;
 /// A block holding a camera sample at or above this (sensor level, before white balance) is left out: clipped.

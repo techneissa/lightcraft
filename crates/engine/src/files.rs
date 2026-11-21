@@ -208,7 +208,18 @@ pub fn spot_order_key(settings: &lightcraft_develop::DevelopSettings, after_wb: 
 /// [`spot_order_key`]): every thumbnail, preview and loupe key takes it, so a photo never shows a render made under
 /// other app settings.
 pub fn render_key(settings: &lightcraft_develop::DevelopSettings) -> u64 {
-    hot_pixel_key(settings) ^ spot_order_key(settings, lightcraft_pipeline::spots_keep::spots_after_wb())
+    hot_pixel_key(settings) ^ spot_order_key(settings, lightcraft_pipeline::spots_keep::spots_after_wb()) ^ transfer_key(settings)
+}
+
+/// What the AI Denoise colour transfer of a macOS Colour photo adds to the render cache keys of `settings`
+/// ([`crate::camera_preview::colour_transfer::VERSION`]): nothing unless the photo is on macOS Colour with Denoise on,
+/// so pictures saved from an older fit (#359: navy night photos) are never shown again, and no other photo renders
+/// anew.
+pub fn transfer_key(settings: &lightcraft_develop::DevelopSettings) -> u64 {
+    if settings.profile.camera_colour != lightcraft_develop::CameraColour::Macos || settings.denoise_amount() <= 0.0 {
+        return 0;
+    }
+    crate::camera_preview::colour_transfer::VERSION.wrapping_mul(0xc2b2_ae3d_27d4_eb4f).rotate_left(17)
 }
 
 #[cfg(test)]
