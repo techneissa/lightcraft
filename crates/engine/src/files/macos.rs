@@ -371,6 +371,16 @@ pub(super) fn transfer_for(
     colour_transfer::fit_transfer(&blocks, &colour_transfer::apple_blocks(apple, cols, rows))
 }
 
+/// When a photo's own transfer is refused (`why`): the calibrated transfer of its camera (EXIF `model`), else the
+/// refusal (the photo then stays on Camera Matching).
+pub(super) fn calibrated_transfer(model: Option<&str>, why: Refused) -> Result<Transfer, Refused> {
+    let calibrated = model.and_then(colour_transfer::calibrated);
+    if lightcraft_pipeline::profiling() {
+        eprintln!("[profile] macOS Colour with AI Denoise: fit refused ({why:?}), calibrated transfer: {}", calibrated.is_some());
+    }
+    calibrated.ok_or(why)
+}
+
 /// The source of a macOS Colour photo with AI Denoise, from its `plain` and denoised (`twin`) pictures already through
 /// the transfer (upright): the tone fitted to the camera JPEG on the plain picture, the same for both (the fixed gain
 /// on both when the fit is refused), and the facts of a macOS base (Kelvin from macOS's white).

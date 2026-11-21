@@ -308,7 +308,11 @@ pub(super) fn load_bytes_now(
         // macOS Colour with AI Denoise: the transfer to macOS's colours, fitted on the plain picture, replaces the colour
         // model for both pictures; refused, both stay on Camera Matching and the photo says so
         let fit_started = web_time::Instant::now();
-        let transfer = target.as_ref().map(|target| macos::transfer_for(target, &img, clip_mask.as_deref(), colour.wb, raw.orientation));
+        // (a refused fit falls back on the camera's calibrated transfer, when it has one: still macOS's colours)
+        let transfer = target.as_ref().map(|target| {
+            macos::transfer_for(target, &img, clip_mask.as_deref(), colour.wb, raw.orientation)
+                .or_else(|why| macos::calibrated_transfer(info.metadata.model.as_deref(), why))
+        });
         if lightcraft_pipeline::profiling() && transfer.is_some() {
             eprintln!("[profile] macOS Colour with AI Denoise: transfer fit {:.1} ms", fit_started.elapsed().as_secs_f64() * 1e3);
         }
