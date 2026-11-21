@@ -651,6 +651,7 @@ pub fn load_for_editing(path: &Path) -> Result<crate::media::DecodedSource, Stri
         edit_proxy: true,
         reduced: false,
         options: Default::default(),
+        paired: false,
     })
 }
 
@@ -668,6 +669,7 @@ pub fn load(path: &Path) -> Result<crate::media::DecodedSource, String> {
         edit_proxy: false,
         reduced: false,
         options: Default::default(),
+        paired: false,
     })
 }
 
