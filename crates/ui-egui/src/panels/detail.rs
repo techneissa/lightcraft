@@ -1240,8 +1240,9 @@ pub(super) fn request_planes(
     app.renderer.request(ask_slot, alpha, 99);
 }
 
-/// Tell this session's background preparation the loupe is waiting for its render ([`lightcraft_engine::prep::Foreground::signal`]).
-fn signal_foreground(session: &lightcraft_engine::Session) {
+/// Tell this session's background preparation the loupe, or the grid, is waiting for a render it shows
+/// ([`lightcraft_engine::prep::Foreground::signal`]).
+pub(crate) fn signal_foreground(session: &lightcraft_engine::Session) {
     #[cfg(test)]
     FOREGROUND_SIGNALS.with(|n| n.set(n.get() + 1));
     session.prep.foreground.signal();
@@ -1249,7 +1250,7 @@ fn signal_foreground(session: &lightcraft_engine::Session) {
 
 #[cfg(test)]
 thread_local! {
-    /// Tests: how often this thread's loupe told background preparation to wait.
+    /// Tests: how often this thread's loupe or grid told background preparation to wait.
     pub(crate) static FOREGROUND_SIGNALS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 

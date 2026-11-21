@@ -831,6 +831,7 @@ fn paint_cell_thumbnail(app: &mut LightcraftApp, p: &egui::Painter, t: &Tokens, 
     let ThumbFlags { square, state, onscreen, ppp } = flags;
     let size = thumb_px(img_rect.width().max(img_rect.height()), ppp);
     request_thumb(app, id, size, if onscreen { 10 } else { 5 });
+    hold_background_for(app, p.ctx(), id, onscreen);
     if let Some(tex) = app.renderer.thumb(id) {
         let [tw, th] = tex.size;
         // Preserve the decoded preview's ratio when it differs from the catalog dimensions.
@@ -848,6 +849,16 @@ fn paint_cell_thumbnail(app: &mut LightcraftApp, p: &egui::Painter, t: &Tokens, 
             p.text(ph.center(), Align2::CENTER_CENTER, "!", t.semibold(18.0), t.text);
         }
         ph
+    }
+}
+
+/// While an on-screen cell's thumbnail is on its way, the background preview build waits, as it does for the loupe
+/// (#196's hold, [`lightcraft_engine::prep::Foreground`]): side by side, the build made the grid fill 4–5 times slower
+/// (issue #352). The hold lasts a little longer than a frame, so the frames keep coming until the thumbnails are in.
+fn hold_background_for(app: &LightcraftApp, ctx: &egui::Context, id: PhotoId, onscreen: bool) {
+    if onscreen && (app.renderer.is_pending(Slot::Thumb(id)) || app.renderer.is_pending(Slot::ThumbQuick(id))) {
+        super::detail::signal_foreground(&app.session);
+        ctx.request_repaint_after(std::time::Duration::from_millis(150));
     }
 }
 

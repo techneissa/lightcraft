@@ -5162,6 +5162,27 @@ fn a_shown_loupe_render_does_not_hold_background_preparation() {
     assert_eq!(signals(), shown, "no hold while the render is on screen");
 }
 
+/// Issue #352: while the grid's on-screen thumbnails are on their way, background preparation is held back, as for the
+/// loupe (#196); once they are in, the frames that follow don't renew the hold, and the build goes on.
+#[test]
+fn grid_thumbnails_on_their_way_hold_background_preparation() {
+    let mut h = demo([1000.0, 700.0]);
+    let signals = || crate::panels::detail::FOREGROUND_SIGNALS.with(std::cell::Cell::get);
+    // (the grid's own slots: `Thumb(…)` and `ThumbQuick(…)`)
+    let thumbs_pending = |h: &Headless| h.app.renderer.pending_slots().iter().any(|s| s.starts_with("Thumb"));
+    let before = signals();
+    // (the first frame lays the grid out; the thumbnails are asked for on a frame after it)
+    assert!(h.step_until(SETTLE, thumbs_pending), "the grid asks for its thumbnails");
+    assert!(signals() > before, "the build is held while they are on their way");
+    assert!(h.step_until(SETTLE, |h| !thumbs_pending(h)), "the thumbnails arrive");
+    h.step();
+    let shown = signals();
+    for _ in 0..10 {
+        h.step();
+    }
+    assert_eq!(signals(), shown, "no hold once the thumbnails are on screen");
+}
+
 /// The app-wide background preparation settings are kept with the app settings (`ui.json`):
 /// the saved ones reach the session at launch, and a change made through the command is saved.
 #[test]

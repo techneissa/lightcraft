@@ -52,7 +52,7 @@ pub enum SourceLevel {
 }
 
 impl SourceLevel {
-    pub fn max_edge(self) -> usize {
+    pub const fn max_edge(self) -> usize {
         match self {
             SourceLevel::Thumb => 512,
             SourceLevel::Preview => 2560,

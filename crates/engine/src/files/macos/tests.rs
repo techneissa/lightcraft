@@ -284,11 +284,40 @@ fn a_macos_load_weighs_the_decoders_footprint() {
     use crate::files::fs::load_weight;
     let floor = lightcraft_macraw::FLOOR_BYTES as usize;
     let a7v = arw("ILCE-7M5", 1);
-    assert_eq!(load_weight(250_000_000, &a7v, 1600, options(CameraColour::Macos), true), Some(floor));
-    assert_eq!(load_weight(2_000_000_000, &a7v, 1600, options(CameraColour::Macos), true), Some(2_000_000_000));
-    assert_eq!(load_weight(250_000_000, b"not a raw", usize::MAX, options(CameraColour::Macos), true), Some(floor), "the floor without a header");
-    assert_eq!(load_weight(250_000_000, &a7v, 1600, options(CameraColour::Macos), false), None);
-    assert_eq!(load_weight(250_000_000, &a7v, 1600, options(CameraColour::Auto), true), None);
+    assert_eq!(load_weight(250_000_000, &a7v, 1600, options(CameraColour::Macos), true, usize::MAX), Some(floor));
+    assert_eq!(load_weight(2_000_000_000, &a7v, 1600, options(CameraColour::Macos), true, usize::MAX), Some(2_000_000_000));
+    assert_eq!(
+        load_weight(250_000_000, b"not a raw", usize::MAX, options(CameraColour::Macos), true, usize::MAX),
+        Some(floor),
+        "the floor without a header"
+    );
+    assert_eq!(load_weight(250_000_000, &a7v, 1600, options(CameraColour::Macos), false, usize::MAX), None);
+    assert_eq!(load_weight(250_000_000, &a7v, 1600, options(CameraColour::Auto), true, usize::MAX), None);
+}
+
+/// Issue #352: at the memory gate, two macOS Colour thumbnails (or previews) run side by side, but never two
+/// full-size renders, nor a thumbnail beside a full-size one.
+#[test]
+fn the_gate_admits_two_macos_thumbnails_but_not_two_full_size_renders() {
+    use crate::files::fs::load_weight;
+    let a7v = arw("ILCE-7M5", 1);
+    // (the default gate: a quarter of the largest default budget, far below Core Image's 1 GB)
+    let limit = 384usize << 20;
+    let gate = crate::memory::WorkGate::new(limit);
+    let weigh = |edge| load_weight(250_000_000, &a7v, edge, options(CameraColour::Macos), true, limit).unwrap();
+    // (`acquire_unless` with a stop that is always set: admitted now, or `None` where it would wait)
+    let now = |w| gate.acquire_unless(w, || true);
+    let first = now(weigh(512)).expect("an empty gate admits a thumbnail");
+    let second = now(weigh(512)).expect("a second thumbnail runs beside the first");
+    assert!(now(weigh(2560)).is_none(), "a third waits");
+    drop((first, second));
+    let full = now(weigh(usize::MAX)).expect("an empty gate admits a full-size render");
+    assert!(now(weigh(usize::MAX)).is_none(), "a second full-size render waits");
+    assert!(now(weigh(512)).is_none(), "a thumbnail waits beside a full-size render");
+    drop(full);
+    let thumb = now(weigh(512)).expect("admitted once the full-size render is done");
+    assert!(now(weigh(usize::MAX)).is_none(), "a full-size render waits beside a thumbnail");
+    drop(thumb);
 }
 
 /// T6: an accepted tone fit keeps the decoder's values (its curve maps them); a refused one scales them by the fixed
