@@ -83,6 +83,24 @@ impl HairEdges {
         out
     }
 
+    /// Keep the model loaded while `on` (the Masking panel is open in the front window, fork issue #353): it is not let
+    /// go until this is turned off, and its idle time counts from then.
+    pub fn keep_loaded(&self, on: bool) {
+        let mut held = lock(&self.inner.held);
+        if on != held.is_some() {
+            *held = on.then(|| self.idle().using());
+        }
+    }
+
+    /// Whether the model is in memory (a run holding it counts as loaded).
+    pub fn model_loaded(&self) -> bool {
+        match self.inner.loaded.try_lock() {
+            Ok(slot) => slot.is_some(),
+            Err(std::sync::TryLockError::Poisoned(p)) => p.into_inner().is_some(),
+            Err(std::sync::TryLockError::WouldBlock) => true,
+        }
+    }
+
     /// The shared idle rule's handle (`crate::idle`): the model is let go after a while without use. A run holds the
     /// `loaded` lock, so a model found locked is in use.
     fn idle(&self) -> &crate::idle::Tracker {

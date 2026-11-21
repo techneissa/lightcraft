@@ -173,7 +173,10 @@ fn show_mask_panel(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         describe_field(app, ui, true);
         let status = {
             let seg = &app.session.segmenter;
-            if seg.analyzing() {
+            // (fork, issue #353: the first mask after a load waits mostly for the models, not the selection)
+            if seg.loading_models() {
+                Some("Loading the AI models…")
+            } else if seg.analyzing() {
                 Some("Analyzing the photo for AI masks…")
             } else if seg.busy() {
                 Some("Selecting…")

@@ -103,6 +103,10 @@ name = "sam3_runtime_timing"
 required-features = ["sam"]
 
 [[example]]
+name = "mask_timing"
+required-features = ["sam"]
+
+[[example]]
 name = "hair_edges"
 required-features = ["sam"]
 

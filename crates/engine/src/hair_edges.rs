@@ -184,6 +184,9 @@ struct Inner {
     /// Lets the model go after a while without use.
     #[cfg(feature = "sam")]
     idle: std::sync::OnceLock<crate::idle::Tracker>,
+    /// Keeps the model while the Masking panel is open (fork, issue #353).
+    #[cfg(feature = "sam")]
+    held: Mutex<Option<crate::idle::Use>>,
     #[cfg(feature = "sam")]
     download: crate::segment::download::Downloader,
     /// The GPU failed once: run on the CPU from now on ([`on_devices`]).
@@ -225,6 +228,8 @@ impl HairEdges {
                 loaded: Mutex::new(None),
                 #[cfg(feature = "sam")]
                 idle: std::sync::OnceLock::new(),
+                #[cfg(feature = "sam")]
+                held: Mutex::new(None),
                 #[cfg(feature = "sam")]
                 download: Default::default(),
                 gpu_refused: AtomicBool::new(false),
