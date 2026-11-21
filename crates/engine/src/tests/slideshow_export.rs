@@ -2,6 +2,7 @@
 //! row, cancel and photos that can't be rendered.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use lightcraft_catalog::{Op, Photo, Source};
@@ -201,7 +202,7 @@ fn video_is_av1_in_mp4_with_fades_as_frames() {
     assert_eq!(r["samples"].as_u64(), Some(1 + 12 + 1), "held slides are one sample each, fades a frame each");
     assert_eq!((r["codec"].as_str(), r["audio"].as_bool(), r["container"].as_str()), (Some("av1"), Some(false), Some("mp4")));
     let d = std::fs::read(&path).unwrap();
-    let top: Vec<_> = boxes(&d, 0..d.len()).into_iter().map(|(k, _)| k).collect();
+    let top: Vec<_> = boxes(&d, 0..d.len()).into_iter().map(|(k, _)| k).filter(|k| k != b"free").collect();
     assert_eq!(top, vec![*b"ftyp", *b"mdat", *b"moov"]);
     let stbl = child(&d, 0..d.len(), &[b"moov", b"trak", b"mdia", b"minf", b"stbl"]);
     let be = |at: usize| u32::from_be_bytes(d[at..at + 4].try_into().unwrap());
@@ -302,6 +303,38 @@ fn cancel_leaves_no_file_behind() {
         let left: Vec<_> = dir.files("").into_iter().chain(dir.files("seq")).filter(|f| f.ends_with(".part") || f.ends_with(".jpg")).collect();
         assert!(left.is_empty(), "{format}: {left:?}");
         assert!(s.activity.list().is_empty());
+    }
+}
+
+#[test]
+fn late_video_cancellation_preserves_the_destination() {
+    let (mut s, ids) = session(1);
+    let original = b"previous slideshow";
+    for container in ["mp4", "webm"] {
+        let dir = Scratch::new(&format!("cancel-finalization-{container}"));
+        let name = format!("show.{container}");
+        let path = dir.path(&name);
+        let staged = dir.path(&format!("{name}.part"));
+        std::fs::write(&path, original).unwrap();
+        let request = json!({"format": "video", "container": container, "path": path, "size": 64, "fps": 24, "ids": ids});
+        let prepared = crate::slideshow_export::prepare(&mut s, &request).unwrap();
+        let cancel = AtomicBool::new(false);
+
+        let result = prepared.run(
+            &|_, _, phase| {
+                // This notification precedes encoder and container finalization.
+                if phase == "AV1" {
+                    assert!(Path::new(&staged).is_file(), "{container}: expected a staged export");
+                    cancel.store(true, Ordering::Relaxed);
+                }
+            },
+            &cancel,
+        );
+
+        assert!(cancel.load(Ordering::Relaxed), "{container}: never reached finalization");
+        assert_eq!(std::fs::read(&path).unwrap(), original, "{container}: existing destination changed");
+        assert!(result.is_err_and(|error| error.contains("cancelled")), "{container}: expected cancellation");
+        assert_eq!(dir.files(""), vec![name], "{container}: staged export was left behind");
     }
 }
 

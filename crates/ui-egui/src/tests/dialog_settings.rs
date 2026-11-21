@@ -395,3 +395,27 @@ fn each_tab_remembers_how_far_it_was_scrolled() {
     show(&mut h, "import");
     assert!((rect(&h, "check:settings.perCamera").top() - scrolled).abs() < 0.5, "Import is where it was left after a reopen");
 }
+
+/// Settings ▸ General ▸ Language is where the interface language is chosen (Edit has no Language
+/// menu): each choice switches the app at once. (fork: the languages are one dropdown, fork/dropdown-search.md)
+#[test]
+fn each_language_choice_in_general_switches_the_interface() {
+    let mut h = demo([1600.0, 1000.0]);
+    show(&mut h, "general");
+    let picker = crate::i18n::Locale::for_picker();
+    for (i, language) in picker.iter().enumerate() {
+        let r = h.request("ui.clickWidget", json!({"id": "combo:settingsLanguage"}), T);
+        assert_eq!(r["ok"], true, "{language:?}: {r}");
+        h.settle(T);
+        // the list scrolls: typing the name brings the choice into view
+        let r = h.request("ui.text", json!({"text": language.name()}), T);
+        assert_eq!(r["ok"], true, "{language:?}: {r}");
+        h.settle(T);
+        let r = h.request("ui.clickWidget", json!({"id": format!("item:settingsLanguage-{}", language.code())}), T);
+        assert_eq!(r["ok"], true, "{language:?}: {r}");
+        h.settle(T);
+        assert_eq!(h.app.ui.language, *language, "choice {i}");
+        assert_eq!(crate::i18n::language(), *language, "choice {i} is applied at once");
+    }
+    crate::i18n::set_language(crate::i18n::Locale::En);
+}

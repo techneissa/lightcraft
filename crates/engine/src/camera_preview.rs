@@ -96,12 +96,14 @@ use tone::{HighlightCheck, ToneFit, fit_tone, fit_tone_conditional, highlights};
 /// 13: the sensor proxy of every per-file fit gets the embedded vignetting correction the render applies (Fujifilm
 /// RAF; other makes with a lens database), so the render no longer applies it twice, at the position a lens warp samples;
 /// the warped candidate's alignment leaves out the pixels outside the sensor instead of reading them as black.
-/// 14: a partial look takes the camera profile's colour (matrix and table), else a spectral prior, instead of the
-/// identity, and profiles are fitted with a white-keeping matrix.
-/// 15: a smart preview names the colour base baked into its pixels (`base`: `auto` Camera Matching, or `local`
+/// 14: bundled camera profiles also match the Nikon model spellings that differ in case, spacing or the Z8 alias,
+/// so previews made without the profile are rebuilt.
+/// 15 (fork): a partial look takes the camera profile's colour (matrix and table), else a spectral prior, instead of
+/// the identity, and profiles are fitted with a white-keeping matrix.
+/// 16 (fork): a smart preview names the colour base baked into its pixels (`base`: `auto` Camera Matching, or `local`
 /// a local camera profile); a Camera Matching photo no longer takes a local profile's colour silently, so older
 /// proxies of those photos are rebuilt.
-pub const LOOK_VERSION: u32 = 15;
+pub const LOOK_VERSION: u32 = 16;
 
 #[derive(Clone, Debug)]
 pub(crate) struct CameraLook {

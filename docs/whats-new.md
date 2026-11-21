@@ -96,6 +96,15 @@
   process 5: new photos (and Reset) get it, photos you already edited keep their look until you choose Photo ▸ Update
   to Current Process. See [process versions](process-versions.md).
 
+## 2026-11-21
+
+### Progress in one place
+- Every progress indicator, such as reading a folder, importing or exporting, now shows in the ring in the top bar. The cards in the top-left corner are gone. Hover the ring to see each task and its count, click it to stop one.
+
+### Mask Presets
+- Right-click a mask and choose Save Mask as Preset… to keep it: its parts, effect sliders and edge settings. The Mask Presets list in the Masking panel adds it to any photo with a click, with rename and delete in a row's menu.
+- Subject, Sky, People and the other AI parts are found again on the new photo, never copied from the old one. Brush strokes and gradients land at the same place relative to the photo, whatever its size or orientation.
+
 ## 2026-11-17
 
 ### Relight
@@ -783,6 +792,8 @@ The Keyboard Shortcuts window is one resizable window that remembers its size. C
 
 ## 2026-10-27
 
+### The Edit menu loses its Language submenu
+- Choose the interface language in Settings ▸ General ▸ Language, which already lists every language. Edit no longer carries 18 more rows for it, on any platform.
 ### Export the selected photos as an animated GIF
 - File ▸ Export Animated GIF… (also in a photo's right-click menu, and GIF in the Export window's formats) turns the
   selected photos into one GIF, a frame per photo with your edits, in the order you selected them: with two or more

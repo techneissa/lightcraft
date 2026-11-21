@@ -126,6 +126,24 @@ fn camera_matching_reads_only_the_built_in_profiles() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Camera Matching finds the bundled Nikon profiles under the EXIF spellings that differ in case, spacing or
+/// separator (upstream #3861).
+#[test]
+fn bundled_profile_matches_nikon_model_spelling_variants() {
+    for (variant, canonical) in [
+        ("Nikon D5300", "NIKON D5300"),
+        (" Nikon  D5300 ", "NIKON D5300"),
+        ("Nikon  Z  6_2", "NIKON Z 6_2"),
+        ("Nikon Z 6-2", "NIKON Z 6_2"),
+        ("Nikon Z 6 2", "NIKON Z 6_2"),
+        ("Nikon Z8", "NIKON Z 8"),
+        ("NIKON Z8", "NIKON Z 8"),
+    ] {
+        let want = bundled(canonical).expect("the bundled profile loads");
+        assert_eq!(get(variant).as_deref(), Some(&want), "{variant:?} finds the bundled {canonical:?} profile");
+    }
+}
+
 /// LT4 (profiles half): the render key every photo carries is the built-in profiles' alone, the same value as
 /// before local profiles were choices, whatever the user's folder holds.
 #[test]

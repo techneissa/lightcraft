@@ -161,9 +161,35 @@ fn parse(json: &[u8], origin: &str) -> Result<CameraProfile, String> {
     Ok(profile)
 }
 
+/// Model spelling with case and spacing folded away, for matching EXIF variants.
+fn normalized_model(model: &str) -> String {
+    model.split_whitespace().collect::<Vec<_>>().join(" ").to_ascii_lowercase()
+}
+
+/// EXIF spellings that differ by more than case and spacing, as `(spelling, bundled model)`.
+const ALIASES: &[(&str, &str)] = &[
+    ("NIKON Z8", "NIKON Z 8"),
+    ("NIKON Z 6-2", "NIKON Z 6_2"),
+    ("NIKON Z 6 2", "NIKON Z 6_2"),
+    ("Nikon Z8", "NIKON Z 8"),
+    ("Nikon Z 6-2", "NIKON Z 6_2"),
+    ("Nikon Z 6 2", "NIKON Z 6_2"),
+];
+
+/// Resolve an EXIF model spelling to the canonical model spelling using
+/// [`ALIASES`], so spellings that differ by more than case and spacing
+/// (for example "NIKON Z8" versus "NIKON Z 8") match the same profile.
+fn canonical_model(model: &str) -> &str {
+    let needle = normalized_model(model);
+    ALIASES.iter().find(|(spelling, _)| normalized_model(spelling) == needle).map_or(model, |(_, canonical)| *canonical)
+}
+
 /// The built-in profile for `model`, if any.
 fn bundled(model: &str) -> Option<CameraProfile> {
-    let (_, json) = BUNDLED.iter().find(|(m, _)| *m == model)?;
+    let needle = normalized_model(model);
+    let needle =
+        ALIASES.iter().find(|(spelling, _)| normalized_model(spelling) == needle).map_or(needle, |(_, canonical)| normalized_model(canonical));
+    let (_, json) = BUNDLED.iter().find(|(m, _)| normalized_model(m) == needle)?;
     parse(json.as_bytes(), &format!("built-in profile {model}")).inspect_err(|e| eprintln!("lightcraft: ignoring camera profile {e}")).ok()
 }
 
@@ -193,18 +219,23 @@ fn write_profile(profile: &CameraProfile, dir: &Path, file: &str) -> Result<Path
     Ok(path)
 }
 
-fn cache() -> &'static Mutex<HashMap<String, Option<Arc<CameraProfile>>>> {
-    static CACHE: OnceLock<Mutex<HashMap<String, Option<Arc<CameraProfile>>>>> = OnceLock::new();
+/// Built-in profiles already read, per model.
+type Cache = HashMap<String, Option<Arc<CameraProfile>>>;
+
+fn cache() -> &'static Mutex<Cache> {
+    static CACHE: OnceLock<Mutex<Cache>> = OnceLock::new();
     CACHE.get_or_init(Default::default)
 }
 
 /// The built-in profile for camera `model`, if any; read once per process. Camera Matching uses this and nothing
-/// else: the user's own files are [`local_profiles`].
+/// else: the user's own files are [`local_profiles`]. EXIF spellings that differ by more than case and spacing
+/// ("NIKON Z8") resolve to the bundled model ("NIKON Z 8") through [`ALIASES`].
 pub fn get(model: &str) -> Option<Arc<CameraProfile>> {
     let model = model.trim();
     if model.is_empty() {
         return None;
     }
+    let model = canonical_model(model);
     let mut cache = cache().lock().unwrap_or_else(PoisonError::into_inner);
     if let Some(hit) = cache.get(model) {
         return hit.clone();
