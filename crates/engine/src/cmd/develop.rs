@@ -193,6 +193,13 @@ fn pasted(s: &mut Session, ids: &[PhotoId], partial: &Value, label: &str) -> Vec
     ops
 }
 
+/// Photos were given settings `partial` (a paste, a sync, a preset): when it carries AI Denoise, queue their denoised pictures.
+fn queue_denoise_given(s: &mut Session, ids: &[PhotoId], partial: &Value) {
+    if partial.get("enhance").is_some() {
+        s.denoise_queue_given(ids);
+    }
+}
+
 fn numbers(v: Option<&Value>) -> Option<Vec<f64>> {
     v?.as_array()?.iter().map(Value::as_f64).collect()
 }
@@ -1258,6 +1265,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 let ops = pasted(s, &ids, &partial, "Paste from Previous");
                 let n = ops.len();
                 s.commit("Paste from Previous", Op::Batch { ops })?;
+                queue_denoise_given(s, &ids, &partial);
                 Ok(json!({"changed": n, "from": prev.0}))
             }
         ),
@@ -1281,6 +1289,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 let ops = pasted(s, &ids, &clip, "Paste Settings");
                 let n = ops.len();
                 s.commit("Paste Settings", Op::Batch { ops })?;
+                queue_denoise_given(s, &ids, &clip);
                 Ok(json!({"changed": n}))
             }
         ),
@@ -1301,6 +1310,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 let ops = pasted(s, &ids, &partial, "Sync Settings");
                 let n = ops.len();
                 s.commit("Sync Settings", Op::Batch { ops })?;
+                queue_denoise_given(s, &ids, &partial);
                 Ok(json!({"changed": n}))
             }
         ),
@@ -1445,6 +1455,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     })
                     .collect::<Vec<_>>();
                 s.commit(&format!("Preset: {}", preset.name), Op::Batch { ops })?;
+                queue_denoise_given(s, &ids, &preset.settings);
                 // photos the preset put on macOS Colour that this computer makes with Camera Matching colours
                 let mut out = json!({"macosFallback": super::macos_colour::fallbacks(s, &ids)});
                 if let (Some(f), Some(o)) = (&faces, out.as_object_mut()) {

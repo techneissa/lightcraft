@@ -1219,3 +1219,58 @@ fn without_a_models_folder_the_cache_still_obeys_the_default_limit() {
     }
     let _ = std::fs::remove_dir_all(&x.dir);
 }
+
+/// #354: settings pasted, synced or applied from a preset with AI Denoise on queue the picture of each photo they reach,
+/// as the switch does, instead of leaving it to the photo being looked at (a photo not selected, or Auto off, waited for ever).
+#[test]
+fn settings_that_switch_ai_denoise_on_queue_the_picture_of_each_photo_they_reach() {
+    let mut x = setup("pasted", true);
+    let ids = three_photos(&mut x);
+    // the first photo has AI Denoise on; pictures are not made on their own, so only a queued one can be made
+    x.s.execute("denoise.settings", &json!({"auto": false})).unwrap();
+    x.s.execute("denoise.toggle", &json!({"ids": [ids[0].0], "enabled": true})).unwrap();
+    x.s.execute("denoise.cancel", &json!({"all": true})).unwrap();
+    x.s.execute("denoise.clear", &json!({})).unwrap();
+    x.s.execute("library.select", &json!({"ids": [ids[0].0], "active": ids[0].0})).unwrap();
+    x.s.execute("develop.copy", &json!({})).unwrap();
+    let queued =
+        |s: &Session, id: lightcraft_catalog::PhotoId| matches!(s.denoise_photo_state(id), PhotoState::Queued { .. } | PhotoState::Running { .. });
+    let reset = |s: &mut Session| {
+        s.execute("denoise.cancel", &json!({"all": true})).unwrap();
+        for id in &ids[1..] {
+            s.execute("denoise.toggle", &json!({"ids": [id.0], "enabled": false})).unwrap();
+        }
+    };
+    // Paste to photos that are not selected
+    x.s.execute("develop.paste", &json!({"ids": [ids[1].0, ids[2].0]})).unwrap();
+    assert!(x.s.develop_of(ids[1]).unwrap().enhance.denoise_enabled());
+    assert!(queued(&x.s, ids[1]) && queued(&x.s, ids[2]), "paste: {:?} {:?}", x.s.denoise_photo_state(ids[1]), x.s.denoise_photo_state(ids[2]));
+    x.s.execute("denoise.pump", &json!({"pace": "pause"})).unwrap();
+    assert_eq!(x.s.activity.list().iter().filter(|t| t.kind == "denoise" && t.batch).count(), 1, "one batch row");
+    // Sync from the active photo to the selected ones
+    reset(&mut x.s);
+    x.s.execute("library.select", &json!({"ids": [ids[0].0, ids[1].0], "active": ids[0].0})).unwrap();
+    x.s.execute("develop.sync", &json!({})).unwrap();
+    assert!(queued(&x.s, ids[1]), "sync: {:?}", x.s.denoise_photo_state(ids[1]));
+    // Paste from Previous
+    reset(&mut x.s);
+    x.s.execute("library.select", &json!({"ids": [ids[2].0], "active": ids[2].0})).unwrap();
+    x.s.execute("library.select", &json!({"ids": [ids[0].0], "active": ids[0].0})).unwrap();
+    x.s.execute("library.select", &json!({"ids": [ids[2].0], "active": ids[2].0})).unwrap();
+    x.s.execute("develop.pastePrevious", &json!({"ids": [ids[2].0]})).unwrap();
+    assert!(queued(&x.s, ids[2]), "paste from previous: {:?}", x.s.denoise_photo_state(ids[2]));
+    // A preset made from the first photo
+    reset(&mut x.s);
+    x.s.execute("library.select", &json!({"ids": [ids[0].0], "active": ids[0].0})).unwrap();
+    let preset = x.s.execute("preset.create", &json!({"name": "Quiet"})).unwrap()["id"].as_str().unwrap().to_string();
+    x.s.execute("preset.apply", &json!({"id": preset, "ids": [ids[1].0, ids[2].0]})).unwrap();
+    assert!(queued(&x.s, ids[1]) && queued(&x.s, ids[2]), "preset: {:?}", x.s.denoise_photo_state(ids[1]));
+    // a photo that was cancelled by hand is asked for again by a paste
+    x.s.execute("denoise.cancel", &json!({"id": ids[1].0})).unwrap();
+    assert!(!queued(&x.s, ids[1]));
+    x.s.execute("develop.paste", &json!({"ids": [ids[1].0]})).unwrap();
+    pump_until_ready(&mut x.s, 2);
+    assert_eq!(x.s.denoise_photo_state(ids[1]), PhotoState::Ready);
+    drop(x.s);
+    let _ = std::fs::remove_dir_all(x.dir);
+}
