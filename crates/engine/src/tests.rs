@@ -80,6 +80,7 @@ mod opened_folder;
 mod organize;
 mod parse_ahead;
 mod parse_ahead_peek;
+mod pasted_masks;
 mod persist;
 mod portrait_presets;
 mod prefs;
