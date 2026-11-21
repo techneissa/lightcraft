@@ -1,0 +1,3 @@
+# Grid thumbnails before background work (issue #352)
+cargo test -p lightcraft-ui-egui --lib -- grid_thumbnails_on_their_way_hold_background_preparation
+cargo test -p lightcraft-engine --lib -- the_gate_admits_two_macos_thumbnails_but_not_two_full_size_renders a_macos_load_weighs_the_decoders_footprint
