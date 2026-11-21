@@ -209,6 +209,23 @@ impl Session {
         added
     }
 
+    /// Settings that carry AI Denoise (Paste, Paste from Previous, Sync, a preset) were given to `ids`: queue the picture of each
+    /// that now has a Denoise amount, as the switch does (the photo being looked at first), also when pictures are not made on
+    /// their own or the photo was cancelled by hand. A photo with its picture, one not raw, and one without an amount are
+    /// skipped; without a model or a library folder nothing is queued, and the photo's row says why.
+    pub(crate) fn denoise_queue_given(&mut self, ids: &[PhotoId]) {
+        let wanted: Vec<PhotoId> =
+            ids.iter().copied().filter(|id| self.catalog.photo(*id).is_some_and(|p| eligible(p) && p.develop.denoise_amount() > 0.0)).collect();
+        if wanted.is_empty() {
+            return;
+        }
+        self.denoise_release(&wanted);
+        let active = self.selection.active;
+        let (front, rest): (Vec<PhotoId>, Vec<PhotoId>) = wanted.into_iter().partition(|id| Some(*id) == active);
+        self.denoise_enqueue(&rest, false, false);
+        self.denoise_enqueue(&front, true, false);
+    }
+
     /// Queue photos that should all be made (an import's): what doesn't fit in the queue waits in
     /// the backlog and is queued as the queue drains.
     pub(crate) fn denoise_enqueue_all(&mut self, ids: &[PhotoId]) {
