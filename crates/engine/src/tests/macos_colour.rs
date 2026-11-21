@@ -66,3 +66,32 @@ fn a_jpeg_export_renders_from_macos_and_a_dng_says_camera_matching() {
     let packet = crate::sidecar::sidecar_packet(&crate::export::for_dng(&photo), &s.catalog);
     assert!(!packet.contains("macos"), "the DNG's XMP names no colour source, so it reads as Camera Matching");
 }
+
+/// A macOS Colour photo that has a cached AI Denoise picture shows macOS's own picture while its Denoise is off: it is
+/// not decoded through the colour transfer made for Denoise on, nor drawn from a source that was (a photo pasted onto
+/// with Denoise on, then Reset, stayed navy with a red top edge). Its renders get keys of their own, so thumbnails
+/// saved from such a source are made again.
+#[test]
+fn denoise_off_never_shows_the_denoise_colour_transfer_on_macos_colour() {
+    use crate::media::{DecodedSource, DenoiseSpec, SourceLevel, SourceRef};
+    let mut s = Session::new();
+    let mut p = a7v(CameraColour::Macos);
+    let level = SourceLevel::Preview;
+    let paired = |r: &SourceRef| matches!(r, SourceRef::File { denoise: Some(_), .. });
+    s.media.denoise.loader = Some(Arc::new(|_, _, _, _, _| Err("not read here".into())));
+    let off_without = s.media.denoise_salt(p.id, &p.develop);
+    s.media.denoise.set(p.id, DenoiseSpec { product: "/scratch/a.lcdn".into(), key: "k".into(), make: None });
+    assert!(!paired(&s.media.source_ref(&p, level)), "Denoise off: macOS's own picture");
+    assert_ne!(s.media.denoise_salt(p.id, &p.develop), off_without, "renders saved from the transfer are made again");
+
+    let mut on = (*p.develop).clone();
+    on.enhance.denoise = 60.0;
+    on.enhance.denoise_on = Some(true);
+    let off = std::mem::replace(&mut p.develop, Arc::new(on));
+    assert!(paired(&s.media.source_ref(&p, level)), "Denoise on: with the denoised picture");
+    let img = Arc::new(lightcraft_raster::Rgb32f::new(8, 8));
+    s.media.insert_source(p.id, level, DecodedSource { paired: true, ..DecodedSource::new(img, None) });
+    assert!(matches!(s.media.source_ref(&p, level), SourceRef::Loaded(_)), "Denoise on reuses it");
+    p.develop = off;
+    assert!(!paired(&s.media.source_ref(&p, level)), "Denoise off again: decoded without it, not drawn from it");
+}

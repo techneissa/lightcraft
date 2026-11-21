@@ -204,6 +204,10 @@ pub struct DecodedSource {
     pub reduced: bool,
     /// The settings the file was decoded with.
     pub options: LoadOptions,
+    /// Decoded together with the photo's AI-denoised picture ([`PairLoader`]). On macOS Colour its plain picture is then
+    /// LightCraft's develop carried over to macOS's colours, not macOS's own: it serves only while Denoise is on
+    /// ([`super::MediaCache::pairs_denoise`]).
+    pub paired: bool,
 }
 
 impl DecodedSource {
@@ -219,6 +223,7 @@ impl DecodedSource {
             edit_proxy: false,
             reduced: false,
             options: LoadOptions::default(),
+            paired: false,
         }
     }
 
@@ -442,6 +447,7 @@ impl SourceRef {
                                     edit_proxy: false,
                                     reduced: false,
                                     options: *options,
+                                    paired: true,
                                 })
                             })
                         } else {

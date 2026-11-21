@@ -1,6 +1,7 @@
 use super::settings_hash::SettingsHashes;
 use super::source::{DecodedSource, DenoiseSpec, LoadOptions, PairLoader, RENDERED_MEM_BYTES, SourceLevel, SourceRef, THUMB_SOURCE_BYTES};
 use super::{Arc, DcpProfile, DevelopSettings, HashMap, Hasher128, Lru, MediaCache, Photo, PhotoId, PreviewCache, Rgb32f, Source, SourceInfo};
+use lightcraft_develop::CameraColour;
 use lightcraft_preview::WriteGate;
 
 /// The photos that have a cached denoised picture for the denoise model in use. Only memory: nothing here touches the
@@ -320,8 +321,18 @@ impl MediaCache {
     pub fn denoise_salt(&self, id: PhotoId, s: &DevelopSettings) -> u64 {
         match self.denoise.spec(id) {
             Some(spec) if s.denoise_amount() > 0.0 => Hasher128::new().str(&spec.key).finish().0 as u64 | 1,
+            // (macOS Colour with Denoise off beside a denoised picture: once rendered from the colour transfer, which
+            // stays for Denoise on alone; a key of its own makes thumbnails and views saved from that render anew)
+            Some(_) if s.profile.camera_colour == CameraColour::Macos => Hasher128::new().str("macos without denoise").finish().0 as u64 | 1,
             _ => 0,
         }
+    }
+
+    /// Whether a decode of photo `p` for `options` takes its AI-denoised picture along: whenever it has one, except on
+    /// macOS Colour with Denoise off. There the pair would develop the plain picture in LightCraft and carry it over to
+    /// macOS's colours (`files::macos::transfer_for`), a fit made for Denoise alone, instead of macOS's own picture.
+    pub fn pairs_denoise(&self, p: &Photo, options: LoadOptions) -> bool {
+        self.denoise.spec(p.id).is_some() && (options.colour != CameraColour::Macos || p.develop.denoise_amount() > 0.0)
     }
 
     /// How to load photo `p` at `level`: from the cache when its source is there, else from its file (with its denoised
@@ -373,7 +384,7 @@ impl MediaCache {
         if let SourceRef::File { options, .. } = &mut r {
             *options = wanted;
         }
-        if let (SourceRef::File { denoise, .. }, Some((spec, loader))) = (&mut r, self.denoise.get(p.id)) {
+        if let (SourceRef::File { denoise, .. }, Some((spec, loader)), true) = (&mut r, self.denoise.get(p.id), self.pairs_denoise(p, wanted)) {
             *denoise = Some((spec.clone(), loader.clone()));
         }
         if profiled { r } else { self.choose_smart(p, level, cached, wanted, r) }
@@ -397,8 +408,11 @@ impl MediaCache {
         // profile, and decoding it again gives the same picture, so it stands in while the original is offline)
         let tag = dcp.as_ref().map(|(id, _)| id.clone());
         let outliers = p.develop.removes_hot_pixels();
+        // (on macOS Colour, one decoded with the denoised picture has transferred colours: it serves Denoise on alone)
+        let pairs = self.pairs_denoise(p, wanted);
+        let pair_fits = |a: &DecodedSource| wanted.colour != CameraColour::Macos || a.from_proxy || a.paired == pairs;
         if cached
-            && let Some(a) = self.get_source(p.id, level).filter(|a| a.serves(wanted) && a.fits_outliers(outliers))
+            && let Some(a) = self.get_source(p.id, level).filter(|a| a.serves(wanted) && a.fits_outliers(outliers) && pair_fits(a))
             && (a.camera_profile == tag || (a.from_proxy && self.original_offline(p)))
         {
             return SourceRef::Loaded(Box::new(a));
