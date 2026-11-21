@@ -111,10 +111,11 @@ fn the_transfer_asks_macos_for_a_small_picture() {
 }
 
 /// T22 (loader side): a refused transfer (one colour: nothing tells the matrix apart), or macOS failing, leaves both
-/// pictures on Camera Matching, and the photo says why.
+/// pictures on Camera Matching, and the photo says why; an A7 V's refused transfer falls back on its calibrated one
+/// (#359), still macOS Colour.
 #[test]
 fn a_refused_transfer_keeps_both_pictures_on_camera_matching() {
-    let flat = arw("ILCE-7M5", 1);
+    let flat = arw("ILCE-T22F", 1);
     let (spec, dir) = product_of(&flat, "macos-transfer-refused");
     let fake = Fake::new(Answer::Grey(D50));
     let (plain, twin, info, _) = load_pair(&flat, &spec, CameraColour::Macos, &fake);
@@ -122,6 +123,15 @@ fn a_refused_transfer_keeps_both_pictures_on_camera_matching() {
     assert_eq!(info.macos_note, Some(MacosUnavailable::Transfer));
     assert_eq!((plain, twin), (cm_plain, cm_twin), "Camera Matching for both");
     assert_eq!((info.as_shot_temp, info.relative_wb), (cm_info.as_shot_temp, cm_info.relative_wb));
+
+    let a7v = arw("ILCE-7M5", 1);
+    let (spec3, dir3) = product_of(&a7v, "macos-transfer-calibrated");
+    let (plain, twin, info, _) = load_pair(&a7v, &spec3, CameraColour::Macos, &fake);
+    let (cm_plain, ..) = load_pair(&a7v, &spec3, CameraColour::Auto, &fake);
+    assert!(info.macos_note.is_none() && !info.relative_wb, "macOS Colour: {info:?}");
+    assert_ne!(plain, cm_plain, "the calibrated transfer, not Camera Matching");
+    assert!(worst(&plain, &twin.expect("the denoised picture")) < 0.002, "one transfer for both");
+    let _ = std::fs::remove_dir_all(dir3);
 
     let tiles = arw_tiles("ILCE-T22F");
     let (spec2, dir2) = product_of(&tiles, "macos-transfer-failed");

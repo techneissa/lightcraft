@@ -387,7 +387,7 @@ Matching with the setting kept, and the Edit panel says why under the Profile pi
 | not a Mac, or the camera or format is not offered | "Edited with macOS Colour. This picture uses Camera Matching, so colours differ." |
 | another size | "macOS reads this raw at a different size, so this picture uses Camera Matching." |
 | the decoder failed on the file (remembered for the session) | "macOS could not read this raw, so this picture uses Camera Matching." |
-| AI Denoise is on and the colour transfer was refused | "AI Denoise uses Camera Matching colours on this photo." |
+| AI Denoise is on and the colour transfer was refused (a camera with no calibrated transfer) | "AI Denoise uses Camera Matching colours on this photo." |
 
 A camera macOS 27 can read only after downloading support for it (`macraw::Error::NeedsDownload`) gets the "could not
 read" line too, and is not remembered as failed. LightCraft does not start that download: the command for it was dropped
@@ -413,9 +413,16 @@ Apple's own re-render (ΔE00 3 to 4.5). Lightroom's XMP Kelvin white balance is 
 the denoised picture are developed by LightCraft and carried to Apple's colours by one per-photo transfer, a white-keeping
 3×3 matrix and a gain fitted to a 1024 px Apple render over about 1 900 block averages (`camera_preview/colour_transfer.rs`).
 The same transfer finishes both pictures, so the Amount slider blends pictures of the same colour. Measured against Apple's
-own colours on 68 A7 V photos from ISO 100 to 12 800: median ΔE00 0.23 (worst 0.59), skin 0.20 (worst 0.84). A fit that
-fails its gates (500 valid blocks, matrix entries within ±3, gain 0.2 to 5, own median ΔE00 ≤ 1.5) makes both pictures
-Camera Matching, with the line above. No full-size Apple render is ever made on this path. With AI Denoise off, Apple's
+own colours on 68 A7 V photos from ISO 100 to 12 800: median ΔE00 0.23 (worst 0.59), skin 0.20 (worst 0.84). The gain
+and the matrix are solved together in one least-squares step: solved in turns from a gain of 1, a night photo whose
+blocks were nearly all one dark colour let the matrix take up the gain, and the photo turned navy with Denoise on (#359).
+A fit that fails its gates (500 valid blocks, matrix entries within ±3, gain 0.2 to 5, own median ΔE00 ≤ 1.5, and the
+same on the brightest quarter of the blocks seen at an exposure for them) falls back on the camera's calibrated transfer
+(the A7 V's: about the 68-photo median), still Apple's colours; a camera without one makes both pictures Camera
+Matching, with the line above. Each view fits its own transfer on the picture it loads (512 px for thumbnails, 2560 px
+for Fit and slider drags, full size when zoomed in), so a fit that depends on the size shows as colours that change with
+the view; the joint solve lands on the same transfer at every size. The fit's version is part of every render key of a
+macOS Colour photo with Denoise on (`files::transfer_key`), so thumbnails and views saved from an older fit render anew. No full-size Apple render is ever made on this path. With AI Denoise off, Apple's
 base is used directly. Turning AI Denoise on or off changes the colour by the transfer's residual and the detail by the
 demosaic, nothing else.
 

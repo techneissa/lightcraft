@@ -6,12 +6,20 @@
 //! (relative weights, Huber re-weighting, clipped and dark blocks left out). Plan `macos-base-plan.md` §6.6: on 68
 //! A7 V photos the median colour error against the Mac's base was 0.23 ΔE00, skin 0.20.
 //!
-//! Pure: nothing here calls the Mac. A fit the gates refuse ([`Refused`]) leaves the photo on Camera Matching for both
-//! pictures, so the AI Denoise Amount slider always blends two pictures of the same colour.
+//! The gain and the matrix are solved together, in one least-squares step (#359): solved in turns from a gain of 1, a
+//! night photo whose blocks are nearly all one dark colour let the matrix take up the gain, and the fit came out far
+//! from a colour matrix while still matching its dark blocks.
+//!
+//! Pure: nothing here calls the Mac. A fit the gates refuse ([`Refused`]) leaves the photo on the camera's calibrated
+//! transfer ([`calibrated`]) when there is one, else on Camera Matching, for both pictures, so the AI Denoise Amount
+//! slider always blends two pictures of the same colour.
 use lightcraft_color::{Mat3, REC2020, SRGB};
 
 use super::Rgb32f;
 
+/// Changes when the fit gives other transfers for the same photos, so pictures saved from the old ones are made anew
+/// (`files::transfer_key`). 1: the gain and the matrix solved together, and the brightest quarter's gate (#359).
+pub(crate) const VERSION: u64 = 1;
 /// About how many blocks the pair is averaged to (48-pixel blocks at 2560 px).
 pub(crate) const BLOCKS: usize = 1900;
 /// A block holding a camera sample at or above this (sensor level, before white balance) is left out: clipped.
@@ -28,7 +36,7 @@ pub(crate) const MIN_BLOCKS: usize = 500;
 const MAX_ENTRY: f64 = 3.0;
 /// The gain's range (the sample's was about 1.27).
 const GAIN: std::ops::RangeInclusive<f64> = 0.2..=5.0;
-/// Largest median ΔE00 of the fit on its own blocks.
+/// Largest median ΔE00 of the fit on its own blocks, and on the brightest quarter of them.
 pub(crate) const MAX_ERROR: f64 = 1.5;
 
 /// White-balanced camera RGB → the Mac's linear Rec.2020: `gain · matrix · rgb`.
@@ -54,6 +62,21 @@ pub(crate) enum Refused {
     Gain,
     /// The median ΔE00 on the fit's own blocks above [`MAX_ERROR`].
     Error(f64),
+    /// The median ΔE00 on the brightest quarter of the blocks, seen at an exposure for them, above [`MAX_ERROR`]: the
+    /// fit matches a dark majority but not the photo's lit colours.
+    Bright(f64),
+}
+
+/// The transfer of a camera whose fit was measured on many photos, for a photo whose own fit is refused: the A7 V's
+/// (EXIF model `ILCE-7M5`) is about the median of the 68-photo sample (plan §6.6), where the fits of well-lit and
+/// night photos alike land (#359). `None` for any other camera.
+pub(crate) fn calibrated(model: &str) -> Option<Transfer> {
+    (model.trim() == "ILCE-7M5").then_some(Transfer {
+        matrix: Mat3([[1.12, 0.01, -0.13], [-0.07, 1.51, -0.44], [0.0, -0.30, 1.30]]),
+        gain: 1.27,
+        blocks: 0,
+        error: f64::NAN,
+    })
 }
 
 /// The block grid (columns, rows) for a `width` × `height` picture: about [`BLOCKS`] blocks, never more than pixels.
@@ -148,8 +171,7 @@ pub(crate) fn fit_transfer(camera: &Rgb32f, apple: &Rgb32f) -> Result<Transfer, 
     let mut weight = base.clone();
     let (mut m, mut s) = (Mat3::IDENTITY, 1.0f64);
     for _ in 0..ROUNDS {
-        m = solve_rows(&pairs, &weight, s)?;
-        s = solve_gain(&pairs, &weight, &m);
+        (m, s) = solve(&pairs, &weight)?;
         // Huber on the relative residual
         let rel: Vec<f64> = pairs
             .iter()
@@ -172,41 +194,72 @@ pub(crate) fn fit_transfer(camera: &Rgb32f, apple: &Rgb32f) -> Result<Transfer, 
     if error.is_nan() || error > MAX_ERROR {
         return Err(Refused::Error(error));
     }
+    let bright = bright_error(&pairs, &m, s);
+    if bright.is_nan() || bright > MAX_ERROR {
+        return Err(Refused::Bright(bright));
+    }
     Ok(Transfer { matrix: m, gain: s as f32, blocks: pairs.len(), error })
 }
 
-/// The rows of `M` (each summing to 1) for `apple / s ≈ M · camera`, weighted least squares: per output channel `k`,
-/// `a_k / s − c_2 = α (c_0 − c_2) + β (c_1 − c_2)`.
-fn solve_rows(pairs: &[([f64; 3], [f64; 3])], weight: &[f64], s: f64) -> Result<Mat3, Refused> {
-    let mut rows = [[0.0; 3]; 3];
-    for (k, row) in rows.iter_mut().enumerate() {
-        let (mut a11, mut a12, mut a22, mut b1, mut b2) = (0.0, 0.0, 0.0, 0.0, 0.0);
-        for ((c, a), w) in pairs.iter().zip(weight) {
-            let (z1, z2, t) = (c[0] - c[2], c[1] - c[2], a[k] / s - c[2]);
-            a11 += w * z1 * z1;
-            a12 += w * z1 * z2;
-            a22 += w * z2 * z2;
-            b1 += w * z1 * t;
-            b2 += w * z2 * t;
+/// The matrix (rows summing to 1) and the gain for `apple ≈ s · M · camera`, by weighted least squares in one step:
+/// with `A_k = s α_k`, `B_k = s β_k`, each output channel is `a_k = A_k (c_0 − c_2) + B_k (c_1 − c_2) + s c_2`, linear
+/// in the seven unknowns, so the gain is never held fixed while the matrix is solved (which let the matrix take it up,
+/// #359).
+fn solve(pairs: &[([f64; 3], [f64; 3])], weight: &[f64]) -> Result<(Mat3, f64), Refused> {
+    let mut n = [[0.0f64; 7]; 7];
+    let mut r = [0.0f64; 7];
+    for ((c, a), w) in pairs.iter().zip(weight) {
+        let x = [c[0] - c[2], c[1] - c[2], c[2]];
+        for (k, ak) in a.iter().enumerate() {
+            let at = [2 * k, 2 * k + 1, 6];
+            for i in 0..3 {
+                r[at[i]] += w * x[i] * ak;
+                for j in 0..3 {
+                    n[at[i]][at[j]] += w * x[i] * x[j];
+                }
+            }
         }
-        let det = a11 * a22 - a12 * a12;
-        if !(det.is_finite() && det > 1e-9 * (a11 + a22).powi(2) && det > 0.0) {
-            return Err(Refused::Singular);
-        }
-        let (alpha, beta) = ((b1 * a22 - b2 * a12) / det, (a11 * b2 - a12 * b1) / det);
-        *row = [alpha, beta, 1.0 - alpha - beta];
     }
-    Ok(Mat3(rows))
+    // the scene's colours must tell the matrix apart: the spread of its two colour differences
+    let (a11, a12, a22) = (n[0][0], n[0][1], n[1][1]);
+    let det = a11 * a22 - a12 * a12;
+    if !(det.is_finite() && det > 1e-9 * (a11 + a22).powi(2) && det > 0.0) {
+        return Err(Refused::Singular);
+    }
+    let p = solve_linear(n, r).ok_or(Refused::Singular)?;
+    let s = p[6];
+    if !(s.is_finite() && s > 0.0) {
+        return Err(Refused::Gain);
+    }
+    let row = |k: usize| [p[2 * k] / s, p[2 * k + 1] / s, 1.0 - (p[2 * k] + p[2 * k + 1]) / s];
+    Ok((Mat3([row(0), row(1), row(2)]), s))
 }
 
-/// The gain: the weighted geometric mean of the luminance ratios.
-fn solve_gain(pairs: &[([f64; 3], [f64; 3])], weight: &[f64], m: &Mat3) -> f64 {
-    let (mut num, mut den) = (0.0, 0.0);
-    for ((c, a), w) in pairs.iter().zip(weight) {
-        num += w * (luma(*a).max(1e-6) / luma(m.apply(*c)).max(1e-6)).ln();
-        den += w;
+/// `x` with `n · x = r`, by Gaussian elimination with partial pivoting; `None` when `n` is singular.
+fn solve_linear<const N: usize>(mut n: [[f64; N]; N], mut r: [f64; N]) -> Option<[f64; N]> {
+    let scale = n.iter().enumerate().map(|(i, row)| row[i].abs()).fold(0.0, f64::max);
+    for col in 0..N {
+        let pivot = (col..N).max_by(|&i, &j| n[i][col].abs().total_cmp(&n[j][col].abs()))?;
+        let size = n[pivot][col].abs();
+        if size.is_nan() || size <= 1e-14 * scale {
+            return None;
+        }
+        n.swap(col, pivot);
+        r.swap(col, pivot);
+        for row in col + 1..N {
+            let f = n[row][col] / n[col][col];
+            for k in col..N {
+                n[row][k] -= f * n[col][k];
+            }
+            r[row] -= f * r[col];
+        }
     }
-    if den > 0.0 { (num / den).exp() } else { 1.0 }
+    let mut x = [0.0; N];
+    for row in (0..N).rev() {
+        let tail: f64 = (row + 1..N).map(|k| n[row][k] * x[k]).sum();
+        x[row] = (r[row] - tail) / n[row][row];
+    }
+    x.iter().all(|v| v.is_finite()).then_some(x)
 }
 
 fn median(mut v: Vec<f64>) -> f64 {
@@ -222,7 +275,24 @@ fn median(mut v: Vec<f64>) -> f64 {
 /// The fit's median ΔE00 on its own blocks, both sides through one display mapping: scaled so the Mac's median
 /// luminance is 0.18, sRGB, clipped.
 fn in_sample_error(pairs: &[([f64; 3], [f64; 3])], m: &Mat3, s: f64) -> f64 {
-    let k = 0.18 / median(pairs.iter().map(|(_, a)| luma(*a)).collect()).max(1e-6);
+    median_error(pairs, m, s, 0.18 / median(pairs.iter().map(|(_, a)| luma(*a)).collect()).max(1e-6))
+}
+
+/// The fit's median ΔE00 on the brightest quarter of its blocks (the Mac's luminance), scaled so their median is 0.18.
+/// On a night photo the in-sample error's display mapping clips them all to white, so it cannot see them.
+fn bright_error(pairs: &[([f64; 3], [f64; 3])], m: &Mat3, s: f64) -> f64 {
+    let mut lumas: Vec<f64> = pairs.iter().map(|(_, a)| luma(*a)).collect();
+    if lumas.is_empty() {
+        return f64::NAN;
+    }
+    let at = lumas.len() * 3 / 4;
+    let cut = *lumas.select_nth_unstable_by(at, f64::total_cmp).1;
+    let bright: Vec<([f64; 3], [f64; 3])> = pairs.iter().filter(|(_, a)| luma(*a) >= cut).copied().collect();
+    median_error(&bright, m, s, 0.18 / median(bright.iter().map(|(_, a)| luma(*a)).collect()).max(1e-6))
+}
+
+/// The median ΔE00 of the fit on `pairs`, both sides scaled by `k`, as sRGB on a display, clipped.
+fn median_error(pairs: &[([f64; 3], [f64; 3])], m: &Mat3, s: f64, k: f64) -> f64 {
     let e = pairs
         .iter()
         .map(|(c, a)| {

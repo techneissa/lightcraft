@@ -75,6 +75,62 @@ fn the_fit_recovers_a_known_matrix_and_keeps_white() {
     assert!((f64::from(t.gain) - S).abs() < 0.02, "{}", t.gain);
 }
 
+/// A night scene's blocks (#359): most of them about one dark, bluish colour (a dim scene under one light), the rest
+/// (`lit` of them) bright colours of all kinds; the Mac's blocks through `M` and `S`.
+fn night_blocks(lit: f64, seed: u64) -> (Rgb32f, Rgb32f) {
+    let mut rng = Lcg(seed);
+    let (cols, rows) = grid(2560, 1707);
+    let camera: Vec<[f32; 3]> = (0..cols * rows)
+        .map(|_| {
+            let colour = if rng.unit() < lit {
+                let level = 0.1 + 0.5 * rng.unit();
+                [0.3 + 0.7 * rng.unit(), 0.3 + 0.7 * rng.unit(), 0.3 + 0.7 * rng.unit()].map(|v| v * level)
+            } else {
+                let level = 0.012 + 0.03 * rng.unit();
+                [0.81, 0.97, 1.24].map(|v| v * level * (1.0 + 0.03 * rng.normal()))
+            };
+            colour.map(|v| v as f32)
+        })
+        .collect();
+    let apple = camera.iter().map(|c| M.apply(c.map(f64::from)).map(|v| (S * v) as f32)).collect();
+    (Rgb32f { width: cols, height: rows, data: camera }, Rgb32f { width: cols, height: rows, data: apple })
+}
+
+/// #359: on a night scene the matrix does not take up the gain. Solved in turns from a gain of 1, the fit kept a gain
+/// near 1 and a matrix far from a colour matrix that still matched the dark blocks; the pair is exact, so the fit must
+/// be the scene's own matrix and gain.
+#[test]
+fn a_night_scene_keeps_its_matrix_and_gain() {
+    for lit in [0.05, 0.2] {
+        let (camera, apple) = night_blocks(lit, 11);
+        let (cols, rows) = (camera.width, camera.height);
+        let t = fit_transfer(&means(&camera, cols, rows), &apple_blocks(&apple, cols, rows)).unwrap();
+        assert!(worst_entry(&t.matrix, &M) < 0.01, "lit {lit}: {t:?}");
+        assert!((f64::from(t.gain) - S).abs() < 0.01, "lit {lit}: {t:?}");
+    }
+}
+
+/// #359: a fit that matches a dark majority but not the photo's lit colours is refused, though its error over all
+/// its blocks is small (that error's display mapping clips the lit blocks to white).
+#[test]
+fn a_fit_that_misses_the_lit_colours_is_refused() {
+    let (camera, apple) = night_blocks(0.2, 12);
+    let (cols, rows) = (camera.width, camera.height);
+    // the lit blocks on the Mac's side through another matrix, far more saturated
+    let other = Mat3([[1.6, -0.2, -0.4], [-0.3, 1.8, -0.5], [-0.2, -0.6, 1.8]]);
+    let apple = Rgb32f {
+        data: camera
+            .data
+            .iter()
+            .zip(&apple.data)
+            .map(|(c, a)| if luma(a.map(f64::from)) > 0.1 { other.apply(c.map(f64::from)).map(|v| (S * v) as f32) } else { *a })
+            .collect(),
+        ..apple
+    };
+    let got = fit_transfer(&means(&camera, cols, rows), &apple_blocks(&apple, cols, rows));
+    assert!(matches!(got, Err(Refused::Bright(e)) if e > MAX_ERROR), "{got:?}");
+}
+
 /// A block with one clipped camera sample (or one the binned clip mask marks) is left out; a dark block on the Mac's
 /// side too.
 #[test]
