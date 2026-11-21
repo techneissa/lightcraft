@@ -133,14 +133,33 @@ fn fs_load<T>(path: &str, max_edge: usize, options: LoadOptions, load: impl FnOn
 /// `macos_edge` (`files::macos::gate_weight`: 1 GB at any size up to 33 MP, more for larger sensors), far more than
 /// its file size times the decode's expansion; `None` for any other load. If the decoder then fails, the Camera
 /// Matching decode that replaces it fits in the same weight.
-pub(crate) fn load_weight(own: usize, bytes: &[u8], macos_edge: usize, options: LoadOptions, macos_available: bool) -> Option<usize> {
+///
+/// A picture no larger than a preview ([`SMALL_MACOS_EDGE`]: grid thumbnails, the loupe's preview) weighs at most half
+/// of the gate's `gate_limit`, so two of them run side by side (the decoder runs at most two that small,
+/// `lightcraft_macraw`'s slots) instead of one at a time: one at a time, a folder's thumbnails came in one every 0.4 s
+/// (issue #352). A larger one keeps its whole weight: it waits until the gate is empty, and nothing starts beside it.
+pub(crate) fn load_weight(
+    own: usize,
+    bytes: &[u8],
+    macos_edge: usize,
+    options: LoadOptions,
+    macos_available: bool,
+    gate_limit: usize,
+) -> Option<usize> {
     let macos = options.colour == lightcraft_develop::CameraColour::Macos && macos_available;
-    macos.then(|| own.max(super::macos::gate_weight(bytes, macos_edge)))
+    macos.then(|| {
+        let weight = own.max(super::macos::gate_weight(bytes, macos_edge));
+        if macos_edge <= SMALL_MACOS_EDGE { weight.min((gate_limit / 2).max(1)) } else { weight }
+    })
 }
 
+/// The largest macOS Colour picture that counts as small at the memory gate ([`load_weight`]): a preview's edge, as the
+/// decoder's own slots count it.
+pub(crate) const SMALL_MACOS_EDGE: usize = crate::media::SourceLevel::Preview.max_edge();
+
 /// The permit a load holds while it decodes: `permit` (its own weight, taken before the file was read), or for a
-/// macOS Colour load ([`load_weight`]) Core Image's weight instead, waited for even by an interactive load, so the
-/// loupe never stacks a second gigabyte on a thumbnail's render.
+/// macOS Colour load ([`load_weight`]) Core Image's weight instead, waited for even by an interactive load, so a
+/// full-size render never has another beside it.
 pub(super) fn macos_permit<'g>(
     gate: &'g crate::memory::WorkGate,
     permit: crate::memory::Permit<'g>,
@@ -149,7 +168,7 @@ pub(super) fn macos_permit<'g>(
     macos_edge: usize,
     options: LoadOptions,
 ) -> crate::memory::Permit<'g> {
-    match load_weight(own, bytes, macos_edge, options, lightcraft_macraw::available()) {
+    match load_weight(own, bytes, macos_edge, options, lightcraft_macraw::available(), gate.usage().1) {
         Some(weight) => {
             drop(permit);
             gate.acquire(weight)
