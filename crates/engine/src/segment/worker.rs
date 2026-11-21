@@ -30,6 +30,7 @@ use lightcraft_segment::{
 };
 
 mod birefnet;
+mod keep;
 mod warm;
 
 use super::{Input, Prompt, Tag};
@@ -218,6 +219,17 @@ pub struct Shared {
     pub sam3_backend: std::sync::Mutex<Option<&'static str>>,
     /// Core ML's warm-up while the worker is idle (issue #268): [`Worker::submit`] pauses it.
     pub warm: warm::Flags,
+    /// The models stay loaded while the Masking panel is open (fork, issue #353).
+    pub hold: std::sync::Mutex<keep::Hold>,
+    /// The job under way loads a model, or runs one for the first time since its load (Core ML plans it then): the
+    /// panel says so instead of "Selecting…" (fork, issue #353).
+    pub loading: AtomicBool,
+}
+
+impl Shared {
+    fn hold(&self) -> keep::Hold {
+        *self.hold.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
 }
 
 /// Decrements a counter when dropped (also when unwinding).
@@ -280,6 +292,20 @@ impl Worker {
         !self.dead() && self.shared.loaded.load(Ordering::SeqCst)
     }
 
+    /// Whether the job under way waits for a model to load or to be planned on the GPU (fork, issue #353).
+    pub fn loading(&self) -> bool {
+        !self.dead() && self.shared.loading.load(Ordering::SeqCst)
+    }
+
+    /// Keep the models loaded (`true`: the Masking panel is open in the front window), or let them go after the idle
+    /// time from now on (fork, issue #353).
+    pub fn hold(&self, on: bool) {
+        let mut hold = self.shared.hold.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if hold.on != on {
+            *hold = keep::Hold { on, since: web_time::Instant::now() };
+        }
+    }
+
     /// The engine BiRefNet ran on last (`coreml` or `candle`); `None` before its first run.
     pub fn birefnet_backend(&self) -> Option<&'static str> {
         *self.shared.birefnet_backend.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -296,7 +322,9 @@ impl Worker {
             // a thread that ended took its counters' meaning with it
             self.tx = None;
             self.thread = None;
+            let hold = self.shared.hold();
             self.shared = Arc::new(Shared::default());
+            self.hold(hold.on);
         }
         self.counter(&job).fetch_add(1, Ordering::SeqCst);
         let job = match &self.tx {
@@ -383,7 +411,9 @@ fn run(rx: &mpsc::Receiver<Job>, shared: &Shared, idle: Duration, mut placement:
     let mut last = web_time::Instant::now();
     loop {
         if queue.is_empty() {
-            let left = idle.saturating_sub(last.elapsed());
+            // (held while the Masking panel is open: looked at again after `idle`, fork issue #353)
+            let due = keep::unload_at(last, shared.hold(), idle);
+            let left = due.map_or(idle, |d| d.saturating_duration_since(web_time::Instant::now()));
             let warming = state.warm.as_ref().is_some_and(|(s, _)| !s.done());
             // (with nothing loaded and nothing warming there is no deadline: it sleeps until a request comes)
             let got = if state.loaded() || warming {
@@ -393,7 +423,7 @@ fn run(rx: &mpsc::Receiver<Job>, shared: &Shared, idle: Duration, mut placement:
             };
             match got {
                 Ok(j) => queue.push_back(j),
-                Err(RecvTimeoutError::Timeout) if last.elapsed() < idle => {
+                Err(RecvTimeoutError::Timeout) if keep::unload_at(last, shared.hold(), idle).is_none_or(|d| web_time::Instant::now() < d) => {
                     warm_if_idle(&mut state, shared);
                     continue;
                 }
@@ -426,6 +456,8 @@ fn run(rx: &mpsc::Receiver<Job>, shared: &Shared, idle: Duration, mut placement:
         // what a retry on the CPU needs (running the job takes them)
         let is_remote = (job.remote.is_some() || remote::configured().is_some()) && !matches!(job.kind, Kind::BiRefNet { .. });
         let retry = (placement == Placement::Gpu && !is_remote).then(|| (job.kind.clone(), job.render.clone()));
+        // (a load during the job raises it; it ends with the job)
+        let _loading = Flag(&shared.loading);
         let mut result = attempt(&mut state, shared, &mut job, placement);
         let mut notice = None;
         if matches!(result, Err(Failure::Cancelled)) {
@@ -511,6 +543,8 @@ fn model<'a>(state: &'a mut State, shared: &Shared, job: &Job, placement: Placem
         // (a running warm-up of the model before was paused by this job's `submit`)
         state.warm = None;
         let _busy = Flag::raise(&shared.encoding);
+        // (until the job ends: Core ML plans each part at its first run, fork issue #353)
+        shared.loading.store(true, Ordering::SeqCst);
         let t = web_time::Instant::now();
         let device = match placement {
             Placement::Gpu => lightcraft_segment::best_device(),

@@ -20,6 +20,7 @@ pub mod birefnet;
 pub(crate) mod clicks_request;
 #[cfg(feature = "sam")]
 pub(crate) mod download;
+mod kept;
 pub(crate) mod request;
 #[cfg(feature = "sam")]
 mod worker;

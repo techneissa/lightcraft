@@ -18,6 +18,8 @@ pub struct Background {
     since: Option<f64>,
     /// The caches were released for this stay.
     released: bool,
+    /// The AI mask models are kept loaded (fork, issue #353): the Masking panel is open in the front window.
+    mask_models: bool,
 }
 
 /// Called every frame (also from hidden ticks).
@@ -25,8 +27,17 @@ pub fn tick(app: &mut LightcraftApp, ctx: &egui::Context, now: f64) {
     let (focused, minimized, visible) = ctx.input(|i| (i.raw.focused, i.viewport().minimized == Some(true), i.viewport().visible()));
     let background = !focused || minimized || visible == Some(false);
     lightcraft_engine::idle::set_background(background);
+    // (fork, issue #353: a mask made after a pause in the Masking panel does not load and plan the models again)
+    let masking = !background
+        && app.ui.right == crate::state::RightPanel::Masking
+        && !app.ui.fullscreen
+        && crate::docking::exposed(app, crate::docking::Panel::Tools);
+    if masking != app.background.mask_models {
+        app.background.mask_models = masking;
+        app.session.keep_mask_models(masking);
+    }
     if !background {
-        app.background = Background::default();
+        (app.background.since, app.background.released) = (None, false);
         return;
     }
     let since = *app.background.since.get_or_insert(now);

@@ -39,6 +39,8 @@ fn model<'a>(
     if state.birefnet.as_ref().is_none_or(|(d, r, _)| d != dir || *r != runtime) {
         state.birefnet = None;
         let _busy = Flag::raise(&shared.encoding);
+        // (until the job ends: Core ML plans the model at its first run, fork issue #353)
+        shared.loading.store(true, Ordering::SeqCst);
         let t = web_time::Instant::now();
         let variant = lightcraft_birefnet::Variant::General;
         let m = match placement {
@@ -197,6 +199,10 @@ fn decide(state: &mut State, shared: &Shared, job: &mut Job, placement: Placemen
         }
         None => render(job)?,
     };
+    if edge == crate::hair_edges::Edge::Matting && !edges.model_loaded() {
+        // (the matting model loads and is planned in this run, fork issue #353)
+        shared.loading.store(true, Ordering::SeqCst);
+    }
     let m = edges.subject_matte(edge, &input.rgb, input.w, input.h, &job.cancel).map_err(|e| match job.cancel.load(Ordering::Relaxed) {
         true => Failure::Cancelled,
         false => Failure::Other(format!("Hair edges: {e}")),
