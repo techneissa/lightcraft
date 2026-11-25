@@ -556,8 +556,8 @@ pub fn specs() -> Vec<CommandSpec> {
                     if v.is_finite() { v.clamp(lo, hi) } else { def }
                 };
                 let stroke = lightcraft_develop::BrushStroke {
-                    pressure: super::masks::pressure_list(p.get("pressure"), points.len())?,
-                    points,
+                    pressure: super::masks::pressure_list(p.get("pressure"), points.len())?.into(),
+                    points: points.into(),
                     size: num("size", d.size, 0.001, 0.5),
                     feather: num("feather", d.feather, 0.0, 100.0),
                     flow: num("flow", d.flow, 1.0, 100.0),

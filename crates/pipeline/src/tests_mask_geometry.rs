@@ -158,7 +158,7 @@ fn brush() -> MaskShape {
     let l = W.max(H) as f64;
     MaskShape::Brush {
         strokes: vec![BrushStroke {
-            points: vec![Point::new(MARK.0 - 0.005, MARK.1), Point::new(MARK.0 + 0.005, MARK.1)],
+            points: vec![Point::new(MARK.0 - 0.005, MARK.1), Point::new(MARK.0 + 0.005, MARK.1)].into(),
             size: 8.0 / l,
             ..Default::default()
         }],
@@ -215,7 +215,7 @@ fn a_brush_point_the_warp_cannot_place_lays_no_dab() {
         .map(|i| Point::new((i % 200) as f64 / 199.0, (i / 200) as f64 / 199.0))
         .find(|p| warp.from_source(Point::new(p.x * frame.ow, p.y * frame.oh)).is_none());
     let lost = lost.expect("these settings leave points the inverse can't reach");
-    let stroke = BrushStroke { points: vec![lost], size: 0.01, ..Default::default() };
+    let stroke = BrushStroke { points: vec![lost].into(), size: 0.01, ..Default::default() };
     let dabs = crate::masks::brush_dabs_within(&stroke, &frame, w, h, 1000);
     assert!(dabs.dabs.is_empty(), "{lost:?} laid {:?}", dabs.dabs);
 }

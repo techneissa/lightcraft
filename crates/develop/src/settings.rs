@@ -5,6 +5,7 @@
 
 use lightcraft_geom::{CropGeometry, Homography, Orientation, Point};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 pub const SCHEMA_VERSION: u32 = 1;
 
@@ -1055,10 +1056,14 @@ pub enum MaskOp {
 }
 
 /// One brush dab sequence. Coordinates normalized to the uncropped oriented image.
+///
+/// The points and pressures are shared (`Arc`): every edit copies the settings into a History and an undo step, and
+/// a copy of a mask with many strokes then shares their points instead of holding its own (issue #370). They are
+/// written and read as plain arrays, as before.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct BrushStroke {
-    pub points: Vec<Point>,
+    pub points: Arc<[Point]>,
     /// Radius as a fraction of the image's long edge.
     pub size: f64,
     /// 0..100.
@@ -1070,8 +1075,12 @@ pub struct BrushStroke {
     /// Pen pressure (0..1) at each of `points`, recorded when the brush's pressure switch is on: it scales each dab's
     /// radius and flow. Empty (the default, a mouse or the switch off) is full pressure everywhere; a point past the
     /// end of a shorter list takes the last value.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub pressure: Vec<f32>,
+    #[serde(skip_serializing_if = "no_pressure")]
+    pub pressure: Arc<[f32]>,
+}
+
+fn no_pressure(p: &Arc<[f32]>) -> bool {
+    p.is_empty()
 }
 
 impl BrushStroke {
@@ -1084,7 +1093,16 @@ impl BrushStroke {
 
 impl Default for BrushStroke {
     fn default() -> Self {
-        Self { points: Vec::new(), size: 0.03, feather: 50.0, flow: 100.0, density: 100.0, erase: false, auto_mask: false, pressure: Vec::new() }
+        Self {
+            points: Arc::default(),
+            size: 0.03,
+            feather: 50.0,
+            flow: 100.0,
+            density: 100.0,
+            erase: false,
+            auto_mask: false,
+            pressure: Arc::default(),
+        }
     }
 }
 

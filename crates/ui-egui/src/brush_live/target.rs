@@ -56,7 +56,7 @@ mod tests {
     }
 
     fn with_mask(adjust: LocalAdjustments) -> DevelopSettings {
-        let stroke = BrushStroke { points: vec![Point::new(0.5, 0.5)], ..Default::default() };
+        let stroke = BrushStroke { points: vec![Point::new(0.5, 0.5)].into(), ..Default::default() };
         let comp = MaskComponent { name: None, op: MaskOp::Add, invert: false, shape: MaskShape::Brush { strokes: vec![stroke] } };
         DevelopSettings { masks: vec![Mask { id: 3, adjust, components: vec![comp], ..Default::default() }], ..Default::default() }
     }

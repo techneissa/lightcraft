@@ -226,7 +226,7 @@ fn a_stroke_along_an_edge_paints_one_side_only() {
 fn a_stroke_follows_a_gradient_and_a_move_to_another_surface() {
     let r = 20.0;
     let across = |auto_mask| BrushStroke {
-        points: vec![Point::new(0.05, 0.5), Point::new(0.95, 0.5)],
+        points: vec![Point::new(0.05, 0.5), Point::new(0.95, 0.5)].into(),
         size: r / W as f64,
         feather: 50.0,
         auto_mask,
@@ -283,7 +283,7 @@ fn two_sizes(g: f32) -> ([f64; 2], [f64; 2], f64) {
     let to_norm = f.out_to_norm(n1, n1);
     let pt = |x: f64, y: f64| to_norm.apply(Point::new(x, y));
     let stroke = |auto_mask| BrushStroke {
-        points: vec![pt(154.0, 40.0), pt(154.0, 280.0)],
+        points: vec![pt(154.0, 40.0), pt(154.0, 280.0)].into(),
         size: 20.0 / long as f64,
         feather: 50.0,
         auto_mask,

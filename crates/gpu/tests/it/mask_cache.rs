@@ -43,14 +43,14 @@ fn strokes(n: usize, auto: bool, pressure: bool) -> Vec<BrushStroke> {
             let t = i as f64 / n.max(1) as f64;
             let (x, y) = (0.15 + 0.7 * ((t * 7.3) % 1.0), 0.15 + 0.5 * ((t * 3.1) % 1.0));
             BrushStroke {
-                points: vec![Point::new(x - 0.12, y), Point::new(x, y + 0.08), Point::new(x + 0.15, y - 0.03)],
+                points: vec![Point::new(x - 0.12, y), Point::new(x, y + 0.08), Point::new(x + 0.15, y - 0.03)].into(),
                 size: 0.02 + 0.03 * (i % 3) as f64,
                 feather: if i % 2 == 0 { 0.0 } else { 80.0 },
                 flow: 50.0 + 12.0 * (i % 4) as f64,
                 density: if i % 5 == 0 { 70.0 } else { 100.0 },
                 erase: i % 6 == 5,
                 auto_mask: auto && i % 2 == 0,
-                pressure: if pressure && i % 2 == 1 { vec![0.3, 1.0, 0.5] } else { Vec::new() },
+                pressure: if pressure && i % 2 == 1 { vec![0.3, 1.0, 0.5].into() } else { Arc::default() },
             }
         })
         .collect()

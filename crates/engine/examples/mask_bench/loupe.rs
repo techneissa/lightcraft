@@ -231,7 +231,7 @@ pub fn count_rows(loupe: &Loupe, out: &Out<'_>, base: &DevelopSettings, extra: &
 fn covering(base: &DevelopSettings) -> DevelopSettings {
     let mut t = base.clone();
     if let Some(MaskShape::Brush { strokes }) = t.masks.first_mut().and_then(|m| m.components.first_mut()).map(|c| &mut c.shape) {
-        let cover = BrushStroke { points: vec![Point::new(0.5, 0.33)], size: 2.0, ..BrushStroke::default() };
+        let cover = BrushStroke { points: vec![Point::new(0.5, 0.33)].into(), size: 2.0, ..BrushStroke::default() };
         *strokes = vec![cover];
     }
     t

@@ -140,7 +140,7 @@ mod tests {
     #[test]
     fn inverting_twice_restores_every_part_exactly() {
         let ops = [MaskOp::Add, MaskOp::Subtract, MaskOp::Intersect];
-        let brush = MaskShape::Brush { strokes: vec![BrushStroke { points: vec![Point::new(0.3, 0.1)], size: 0.05, ..Default::default() }] };
+        let brush = MaskShape::Brush { strokes: vec![BrushStroke { points: vec![Point::new(0.3, 0.1)].into(), size: 0.05, ..Default::default() }] };
         for base in [half(0.5, false), brush] {
             for mask_invert in [false, true] {
                 for base_own in [false, true] {

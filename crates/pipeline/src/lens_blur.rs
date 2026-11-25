@@ -837,7 +837,7 @@ mod tests {
         // in focus: the middle
         s.masks.push(centre_mask(5, 0.15));
         s.lens_blur.focus_mask = Some(5);
-        let dab = |x: f64, y: f64| BrushStroke { points: vec![Point::new(x, y)], size: 0.08, feather: 0.0, ..BrushStroke::default() };
+        let dab = |x: f64, y: f64| BrushStroke { points: vec![Point::new(x, y)].into(), size: 0.08, feather: 0.0, ..BrushStroke::default() };
         // Focus brush on the top-left corner (out of focus otherwise), Blur brush on the centre
         s.lens_blur.focus_strokes.push(dab(0.1, 0.12));
         s.lens_blur.blur_strokes.push(dab(0.5, 0.5));

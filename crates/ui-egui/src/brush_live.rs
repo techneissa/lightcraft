@@ -603,7 +603,7 @@ mod tests {
                 feather,
                 flow,
                 density,
-                pressure,
+                pressure: pressure.into(),
                 ..Default::default()
             };
             let committed =

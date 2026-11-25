@@ -69,14 +69,14 @@ fn strokes(n: usize, auto: bool) -> Vec<BrushStroke> {
             let t = i as f64 / n.max(1) as f64;
             let (x, y) = (0.05 + 0.9 * ((t * 7.3) % 1.0), 0.05 + 0.9 * ((t * 3.1) % 1.0));
             BrushStroke {
-                points: vec![Point::new(x - 0.3, y), Point::new(x, y + 0.1), Point::new(x + 0.35, y - 0.05)],
+                points: vec![Point::new(x - 0.3, y), Point::new(x, y + 0.1), Point::new(x + 0.35, y - 0.05)].into(),
                 size: 0.02 + 0.04 * (i % 3) as f64,
                 feather: if i % 2 == 0 { 0.0 } else { 80.0 },
                 flow: 40.0 + 15.0 * (i % 4) as f64,
                 density: if i % 5 == 0 { 70.0 } else { 100.0 },
                 erase: i % 6 == 5,
                 auto_mask: auto,
-                pressure: if i % 4 == 1 { vec![0.3, 1.0, 0.5] } else { Vec::new() },
+                pressure: if i % 4 == 1 { vec![0.3, 1.0, 0.5].into() } else { Arc::default() },
             }
         })
         .collect()
@@ -100,9 +100,9 @@ fn bounded_strokes_equal_strokes_on_the_whole_frame() {
     assert_eq!(got.data, reference_brush(&s, &f, w, h, &img, &l).data);
     // a stroke wholly off the frame, and an empty one, change nothing
     let odd = vec![
-        BrushStroke { points: vec![Point::new(-3.0, -3.0), Point::new(-2.0, -3.0)], ..Default::default() },
+        BrushStroke { points: vec![Point::new(-3.0, -3.0), Point::new(-2.0, -3.0)].into(), ..Default::default() },
         BrushStroke::default(),
-        BrushStroke { points: vec![Point::new(f64::NAN, 0.5)], ..Default::default() },
+        BrushStroke { points: vec![Point::new(f64::NAN, 0.5)].into(), ..Default::default() },
     ];
     let got = shape_alpha(&MaskShape::Brush { strokes: odd }, &f, w, h, &img, &l, 0.0, None);
     assert!(got.data.iter().all(|v| *v == 0.0));
@@ -430,14 +430,14 @@ fn a_change_to_any_one_number_of_a_mask_is_a_new_key() {
     assert_eq!(brush_chain(&strokes), chain);
     // one coordinate (one ulp) of one point of stroke 123
     let mut edited = strokes.clone();
-    edited[123].points[17].x = f64::from_bits(edited[123].points[17].x.to_bits() + 1);
+    Arc::make_mut(&mut edited[123].points)[17].x = f64::from_bits(edited[123].points[17].x.to_bits() + 1);
     assert_ne!(alpha_key(&mask_of(MaskShape::Brush { strokes: edited.clone() }), keys, 0.0), key, "one coordinate of one point");
     let changed = brush_chain(&edited);
     assert_eq!(changed[..123], chain[..123], "the strokes before it keep their place in the chain");
     assert!(changed[123..].iter().zip(&chain[123..]).all(|(a, b)| a != b), "it and every stroke after it are new");
     // a pressure sample, a flag, the order
     let mut edited = strokes.clone();
-    edited[299].pressure[39] += 0.01;
+    Arc::make_mut(&mut edited[299].pressure)[39] += 0.01;
     assert_ne!(brush_chain(&edited)[299], chain[299], "a pressure sample");
     let mut edited = strokes.clone();
     edited[5].erase = !edited[5].erase;

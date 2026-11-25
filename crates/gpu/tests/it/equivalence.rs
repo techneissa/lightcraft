@@ -490,12 +490,12 @@ fn cases() -> Vec<(&'static str, Edit)> {
         }),
         ("masks (brush + ranges)", |s| {
             let stroke = BrushStroke {
-                points: vec![Point::new(0.1, 0.3), Point::new(0.5, 0.4), Point::new(0.8, 0.35)],
+                points: vec![Point::new(0.1, 0.3), Point::new(0.5, 0.4), Point::new(0.8, 0.35)].into(),
                 size: 0.04,
                 flow: 60.0,
                 ..Default::default()
             };
-            let erase = BrushStroke { points: vec![Point::new(0.5, 0.4)], size: 0.03, erase: true, ..Default::default() };
+            let erase = BrushStroke { points: vec![Point::new(0.5, 0.4)].into(), size: 0.03, erase: true, ..Default::default() };
             s.masks = vec![
                 Mask {
                     components: vec![MaskComponent {
@@ -955,7 +955,7 @@ fn overlays_match() {
     }
     // Mask overlays: the alpha the GPU evaluated (or, for a hidden mask, the CPU's) drawn the same way.
     let mut s = DevelopSettings::default();
-    let stroke = BrushStroke { points: vec![Point::new(0.2, 0.3), Point::new(0.6, 0.5)], size: 0.05, ..Default::default() };
+    let stroke = BrushStroke { points: vec![Point::new(0.2, 0.3), Point::new(0.6, 0.5)].into(), size: 0.05, ..Default::default() };
     s.masks = vec![
         Mask {
             id: 1,

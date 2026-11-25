@@ -27,7 +27,7 @@ Measured with `crates/engine/src/tests/journal_growth.rs` (300 strokes of 60 poi
 | `catalog.snap` after closing | 107 MB | 1.7 MB |
 | Reopening the library | 1.5 s | 0.15 s |
 
-History in memory is unchanged: each of the 200 steps still holds its own copy of the settings (106 MB as JSON at 300 strokes). Sharing strokes between steps needs shared types in the develop crate.
+History in memory: each step holds its own settings, but a brush stroke's points and pressures are shared (`Arc`) by every step and undo step that holds the stroke, and a History read from the catalog shares them between steps again (`DevelopSettings::share_strokes_with`, issue #370).
 
 ## Branch
 
