@@ -68,7 +68,7 @@ mod vram;
 #[cfg(not(target_arch = "wasm32"))]
 pub use dirty::{FrameNote, HostData, TILE, host_of, keep_host, take_frame_note, tiles_rendered};
 #[cfg(not(target_arch = "wasm32"))]
-pub use render::{DisplayFrame, GpuStages, Output, device_fits};
+pub use render::{DisplayFrame, GpuStages, Output, device_fits, drafts_resampled, linear_stages_made};
 /// The wgpu the renderer is built on (the same crate eframe uses: hosts hand over its device).
 #[cfg(not(target_arch = "wasm32"))]
 pub use wgpu;

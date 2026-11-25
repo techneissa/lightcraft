@@ -40,7 +40,7 @@ pub(crate) fn spots(
         }
         return (img, None, None);
     }
-    let key = keep::key(info, plan, &[]);
+    let key = keep::key(info, plan);
     let new = keep::entries(&s.spots, &[], &plan.frame, w, h, plan.px_per_long);
     let mut patches: Vec<DevicePatch> = vec![None; new.len()];
     let plan_from =

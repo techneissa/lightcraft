@@ -243,9 +243,16 @@ fn a_pan_or_a_later_edit_asks_the_learned_fill_nothing() {
 }
 
 /// Review F3: a Heal spot that copies from a LaMa spot whose fill has not come yet holds pixels that never saw the fill;
-/// a later window must not paste them once the fill is there.
+/// a later window must not paste them once the fill is there. Issue #372: the same when the first window is a drag's
+/// draft (drafts and full renders now share the spots kept per scale).
 #[test]
 fn a_spot_beside_a_pending_fill_is_not_kept() {
+    for quality in [Quality::Full, Quality::Draft] {
+        a_spot_beside_a_pending_fill_is_not_kept_after(quality);
+    }
+}
+
+fn a_spot_beside_a_pending_fill_is_not_kept_after(first: Quality) {
     let fill = Arc::new(MeanFill::default());
     let lama = Spot { points: vec![Point::new(0.5, 0.5)], size: 0.01, ..spot(SpotMode::Remove, SpotFill::Lama) };
     // a Heal spot to its right, copying from where the LaMa spot is
@@ -263,7 +270,7 @@ fn a_spot_beside_a_pending_fill_is_not_kept() {
     install(&fill, || {
         // the fill says nothing yet: the LaMa spot shows the Classic fill
         *fill.reply.lock().unwrap_or_else(PoisonError::into_inner) = Some(None);
-        crate::render_cached(&src, &SourceInfo::default(), &s, &at(600, 450), &cache);
+        crate::render_cached(&src, &SourceInfo::default(), &s, &RenderRequest { quality: first, ..at(600, 450) }, &cache);
         *fill.reply.lock().unwrap_or_else(PoisonError::into_inner) = None;
         // a window over the Heal spot alone, once the fill comes
         let (x, y) = (880, 450);
@@ -274,7 +281,7 @@ fn a_spot_beside_a_pending_fill_is_not_kept() {
             (0..3).map(|k| a[k].abs_diff(b[k])).max().unwrap_or(0)
         });
         let worst = worst.max().unwrap_or(0);
-        assert!(worst <= 1, "the Heal spot is the whole render's: {worst} levels off");
+        assert!(worst <= 1, "after a {first:?} window, the Heal spot is the whole render's: {worst} levels off");
     });
 }
 

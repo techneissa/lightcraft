@@ -6,6 +6,8 @@
 
 mod decontam;
 mod dirty_render;
+// fork: issue #372
+mod draft_reuse;
 mod equivalence;
 mod fallback;
 mod fit;

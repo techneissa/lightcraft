@@ -157,19 +157,31 @@ impl Redo {
 
 /// [`Redo`] from the result of `old` to that of `new` (both drawn on the same image).
 pub fn redo(old: &[Option<Drawn>], new: &[Option<Drawn>]) -> Redo {
+    redo_under(old, new, &[])
+}
+
+/// [`Redo`] from the result of `old` to that of `new`, drawn on an image that changed in the boxes `under` since `old`
+/// was drawn (issue #372: a LaMa spot added under the Classic ones). The old spots that wrote there are taken off, the
+/// caller puts the new image back in `under` after [`Redo::undo`], and every spot that reads it is drawn again.
+pub fn redo_under(old: &[Option<Drawn>], new: &[Option<Drawn>], under: &[Rect]) -> Redo {
     // the spots changed: what lies between the longest common start and end
     let a = old.iter().zip(new).take_while(|(o, n)| o == n).count();
     let (old_rest, new_rest) = (old.get(a..).unwrap_or_default(), new.get(a..).unwrap_or_default());
     let b = old_rest.iter().rev().zip(new_rest.iter().rev()).take_while(|(o, n)| o == n).count();
     let (old_end, new_end) = (old.len().saturating_sub(b), new.len().saturating_sub(b));
     let write = |v: &[Option<Drawn>], i: usize| v.get(i).and_then(Option::as_ref).map(|d| d.at.write);
-    // the spots drawn: the new and changed ones, and each later one that reads what one drawn before it changed
-    let mut changed: Vec<Rect> = (a..old_end).filter_map(|i| write(old, i)).collect();
+    // the old spot a new one is (before the change, the same index; after it, the same distance from the end)
+    let old_of = |i: usize| if i < a { Some(i) } else { (i >= new_end).then(|| i + old_end - new_end) };
+    // with nothing changed under the spots, none before the first change is drawn or taken off (`from`)
+    let from = if under.is_empty() { a } else { 0 };
+    // the spots drawn: the new and changed ones, and each later one that reads what one drawn before it changed (or
+    // what changed under them)
+    let mut changed: Vec<Rect> = under.iter().copied().chain((a..old_end).filter_map(|i| write(old, i))).collect();
     let mut read_by_drawn: Vec<Rect> = Vec::new();
     let mut draw = vec![false; new.len()];
-    for (i, d) in new.iter().enumerate().skip(a) {
+    for (i, d) in new.iter().enumerate().skip(from) {
         let Some(d) = d else { continue };
-        if i < new_end || changed.iter().any(|r| overlaps(r, &d.at.read)) {
+        if (a..new_end).contains(&i) || changed.iter().any(|r| overlaps(r, &d.at.read)) {
             if let Some(slot) = draw.get_mut(i) {
                 *slot = true;
             }
@@ -177,31 +189,33 @@ pub fn redo(old: &[Option<Drawn>], new: &[Option<Drawn>]) -> Redo {
             read_by_drawn.push(d.at.read);
         }
     }
-    // the old spots taken off: those whose box holds what a drawn spot reads or what a removed one drew, and every
-    // later one drawn over one taken off
-    let old_of = |i: usize| i + old_end - new_end;
+    // the old spots taken off: those drawn again or removed, those after the first change whose box holds what a drawn
+    // spot reads or what a removed one drew, those whose box holds what changed under them, and every later one drawn
+    // over one taken off
+    let new_of = |k: usize| if k < a { Some(k) } else { (k >= old_end).then(|| k + new_end - old_end) };
     let mut undone = vec![false; old.len()];
-    for (k, d) in old.iter().enumerate().skip(a) {
+    for (k, d) in old.iter().enumerate().skip(from) {
         let Some(d) = d else { continue };
-        let removed = k < old_end;
-        let redrawn = k >= old_end && draw.get(k + new_end - old_end).copied().unwrap_or(false);
-        let needed = read_by_drawn.iter().chain(&changed).any(|r| overlaps(r, &d.at.write));
-        let over = (a..k).any(|u| undone.get(u).copied().unwrap_or(false) && write(old, u).is_some_and(|w| overlaps(&w, &d.at.write)));
+        let removed = (a..old_end).contains(&k);
+        let redrawn = new_of(k).is_some_and(|i| draw.get(i).copied().unwrap_or(false));
+        let needed = k >= a && read_by_drawn.iter().chain(&changed).any(|r| overlaps(r, &d.at.write));
+        let beneath = under.iter().any(|r| overlaps(r, &d.at.write));
+        let over = (from..k).any(|u| undone.get(u).copied().unwrap_or(false) && write(old, u).is_some_and(|w| overlaps(&w, &d.at.write)));
         if let Some(slot) = undone.get_mut(k) {
-            *slot = removed || redrawn || needed || over;
+            *slot = removed || redrawn || needed || beneath || over;
         }
     }
-    let undo = (a..old.len()).rev().filter(|k| undone.get(*k).copied().unwrap_or(false)).collect();
-    let steps = (a..new.len())
+    let undo = (from..old.len()).rev().filter(|k| undone.get(*k).copied().unwrap_or(false)).collect();
+    let steps = (from..new.len())
         .filter_map(|i| {
             if draw.get(i).copied().unwrap_or(false) {
                 Some(Step::Draw(i))
             } else {
-                (i >= new_end && undone.get(old_of(i)).copied().unwrap_or(false)).then(|| Step::Paste { i, old: old_of(i) })
+                old_of(i).filter(|o| undone.get(*o).copied().unwrap_or(false)).map(|old| Step::Paste { i, old })
             }
         })
         .collect();
-    let same = (0..new.len()).map(|i| if i < a { Some(i) } else { (i >= new_end).then(|| old_of(i)) }).collect();
+    let same = (0..new.len()).map(old_of).collect();
     Redo { undo, steps, same }
 }
 
@@ -305,15 +319,13 @@ pub fn pre_spot_sections(s: &lightcraft_develop::DevelopSettings) -> [bool; 2] {
     ["optics", "geometry"].map(|section| s.section_enabled(section))
 }
 
-/// Key of the image the Classic spots are drawn on: the resampled source after the LaMa spots (with which of them got
-/// their fill, `done`), and when they are drawn after the white balance ([`Plan::spots_after_wb`]), everything
-/// [`Plan::pre_nr_key`] holds before them too (white balance, defringe, the local tone mapping). Red eye is drawn after
-/// them either way.
-pub fn key(info: &SourceInfo, p: &Plan<'_>, done: &[bool]) -> u64 {
+/// Key of the image the Classic spots are drawn on, apart from the LaMa spots drawn on it first (the boxes they changed
+/// are handed to the Classic layer instead, issue #372): the resampled source, and when the Classic spots are drawn
+/// after the white balance ([`Plan::spots_after_wb`]), everything [`Plan::pre_nr_key`] holds before them too (white
+/// balance, defringe, the local tone mapping). Red eye is drawn after them either way.
+pub fn key(info: &SourceInfo, p: &Plan<'_>) -> u64 {
     let s = &*p.settings;
-    let learned: Vec<(usize, String)> =
-        s.spots.iter().enumerate().filter(|(_, sp)| crate::spots_learned::is_learned(sp)).map(|(i, sp)| (i, format!("{sp:?}"))).collect();
-    crate::hash_of((learned_key(p), before_spots(info, s, p.spots_after_wb), format!("{:?}", s.optics), pre_spot_sections(s), learned, done))
+    crate::hash_of((learned_key(p), before_spots(info, s, p.spots_after_wb), format!("{:?}", s.optics), pre_spot_sections(s)))
 }
 
 /// What the image the Classic spots read holds beyond the resampled source: in the old order ([`spots_after_wb`]), the
@@ -372,17 +384,18 @@ impl CpuKept {
 }
 
 /// One layer of spots drawn in order on `img`, reusing `kept` (the layer's last result, `key` naming the image it was
-/// drawn on) for only the spots an edit reaches. Otherwise `prepare` makes `img` the layer's image and every spot is
+/// drawn on) for only the spots an edit reaches. `under`: the boxes where `img` differs from the image `kept` was drawn
+/// on (`None`: not known, every spot is drawn). Otherwise `prepare` makes `img` the layer's image and every spot is
 /// drawn. `draw` draws spot `i` and says whether it drew (a spot that did not is tried again next time). `img` ends as
-/// the layer's result.
+/// the layer's result. Also says which boxes of the result changed from `kept`'s (`None`: it was drawn whole).
 fn layer(
     img: &mut Rgb32f,
-    key: u64,
+    (key, under): (u64, Option<&[Rect]>),
     kept: Option<&CpuLayer>,
     mut new: Vec<Option<Drawn>>,
     prepare: impl FnOnce(&mut Rgb32f),
     mut draw: impl FnMut(&mut Rgb32f, usize) -> bool,
-) -> CpuLayer {
+) -> (CpuLayer, Option<Vec<Rect>>) {
     let mut patches: Vec<CpuPatch> = vec![None; new.len()];
     let mut draw_one = |img: &mut Rgb32f, i: usize, new: &mut [Option<Drawn>], patches: &mut [CpuPatch]| {
         let Some(r) = new.get(i).and_then(Option::as_ref).map(|d| d.at.write) else { return };
@@ -396,24 +409,34 @@ fn layer(
         }
     };
     let hit = kept.filter(|k| k.key == key && (k.post.width, k.post.height) == (img.width, img.height));
-    let plan = hit.map(|k| (k, redo(&k.drawn, &new))).filter(|(k, r)| k.has_patches(r));
+    let plan = hit.zip(under).map(|(k, u)| (k, redo_under(&k.drawn, &new, u), u)).filter(|(k, r, _)| k.has_patches(r));
     if crate::profiling() {
-        let why = plan.as_ref().map_or_else(|| "drew all".to_string(), |(_, r)| format!("drew {} (took off {})", r.drawn(), r.undo.len()));
+        let why = plan.as_ref().map_or_else(|| "drew all".to_string(), |(_, r, _)| format!("drew {} (took off {})", r.drawn(), r.undo.len()));
         eprintln!("  spots: {} of {} in {}×{}: {why}", new.iter().flatten().count(), new.len(), img.width, img.height);
     }
-    match plan {
-        Some((k, r)) => {
+    let rewrote = match plan {
+        Some((k, r, under)) => {
+            // (the image under the spots where it changed, put back once the spots drawn there are taken off)
+            let fresh: Vec<(Rect, Vec<[f32; 3]>)> = under.iter().map(|u| (*u, cut(img, u))).collect();
             *img = (*k.post).clone();
             // (a spot not drawn again keeps its patches: it is the old one, reading the same pixels)
             for (slot, old) in patches.iter_mut().zip(&r.same) {
                 *slot = old.and_then(|o| k.patches.get(o).cloned().flatten());
             }
+            let mut rects: Vec<Rect> = under.to_vec();
             for u in &r.undo {
                 if let (Some(Some(d)), Some(Some(pt))) = (k.drawn.get(*u), k.patches.get(*u)) {
                     paste(img, &d.at.write, &pt.before);
+                    rects.push(d.at.write);
                 }
             }
+            for (u, px) in &fresh {
+                paste(img, u, px);
+            }
             for step in &r.steps {
+                let (Step::Draw(i) | Step::Paste { i, .. }) = *step;
+                // (a spot that did not draw left its box as it was)
+                let at = new.get(i).and_then(Option::as_ref).map(|d| d.at.write);
                 match *step {
                     Step::Draw(i) => draw_one(img, i, &mut new, &mut patches),
                     Step::Paste { i, old } => {
@@ -422,16 +445,21 @@ fn layer(
                         }
                     }
                 }
+                if let Some(r) = at.filter(|_| new.get(i).is_some_and(Option::is_some)) {
+                    rects.push(r);
+                }
             }
+            Some(rects)
         }
         None => {
             prepare(img);
             for i in 0..new.len() {
                 draw_one(img, i, &mut new, &mut patches);
             }
+            None
         }
-    }
-    Kept { key, post: Arc::new(img.clone()), drawn: new, patches, done: Vec::new() }
+    };
+    (Kept { key, post: Arc::new(img.clone()), drawn: new, patches, done: Vec::new() }, rewrote)
 }
 
 /// [`crate::lin_cpu`] on `img` (the resampled source), reusing `kept` (the view's last spots): only the spots an edit
@@ -474,15 +502,17 @@ pub fn lin_cpu_pre_retouch(img: &mut Rgb32f, info: &SourceInfo, p: &Plan<'_>, ke
             crate::spots_learned::footprint(sp, &p.frame, w, h, ppl).map(|(write, read)| Drawn { spot: sp.clone(), at: Footprint { write, read } })
         })
         .collect();
+    let kept_learned = kept.and_then(|k| k.learned.as_ref());
+    let boxes = |k: &CpuLayer| k.drawn.iter().flatten().map(|d| d.at.write).collect::<Vec<Rect>>();
     let learned = lnew.iter().any(Option::is_some).then(|| {
         let provider = crate::learned_fill::current();
         let at = crate::spots_learned::Where { frame: &p.frame, ppl, reference_long: crate::native_long(info, p.src_long) as f64, draft: p.draft };
         let run = crate::learned_fill::FillRun::new();
-        let kept = kept.and_then(|k| k.learned.as_ref());
         layer(
             img,
-            learned_key(p),
-            kept,
+            // (the image under the LaMa spots is the resampled source, which the key names)
+            (learned_key(p), Some(&[])),
+            kept_learned,
             lnew,
             |_| {},
             |img, i| {
@@ -494,6 +524,18 @@ pub fn lin_cpu_pre_retouch(img: &mut Rgb32f, info: &SourceInfo, p: &Plan<'_>, ke
             },
         )
     });
+    // what changed under the Classic spots since the kept ones were drawn (issue #372: a LaMa spot added, moved or
+    // removed redraws only the Classic spots it reaches): the boxes the LaMa layer redrew; with no LaMa layer before or
+    // now, every box the one there is drew; `None` (draw them all) when the LaMa layer was drawn whole over another
+    let under = match (&learned, kept_learned) {
+        (Some((_, Some(rewrote))), _) => Some(rewrote.clone()),
+        (Some((k, None)), None) => Some(boxes(k)),
+        (Some((_, None)), Some(_)) => None,
+        (None, old) => Some(old.map(boxes).unwrap_or_default()),
+    };
+    // (drawn after the white balance and defringe, what changed under them reaches further: drawn again whole)
+    let under = under.filter(|u| !p.spots_after_wb || u.is_empty());
+    let learned = learned.map(|(k, _)| k);
     let done: Vec<bool> = learned.as_ref().map(|k| k.drawn.iter().map(Option::is_some).collect()).unwrap_or_default();
     // 2. the Classic spots (and the LaMa ones that got no fill): on what the LaMa spots left, or after the white balance
     let cnew = entries(&s.spots, &done, &p.frame, w, h, ppl);
@@ -502,7 +544,7 @@ pub fn lin_cpu_pre_retouch(img: &mut Rgb32f, info: &SourceInfo, p: &Plan<'_>, ke
             before_classic(img, info, p);
         }
     };
-    let classic = layer(img, key(info, p, &done), kept.map(|k| &k.classic), cnew, prepare, |img, i| {
+    let (classic, _) = layer(img, (key(info, p), under.as_deref()), kept.map(|k| &k.classic), cnew, prepare, |img, i| {
         if let Some(sp) = s.spots.get(i) {
             spots::apply(img, std::slice::from_ref(sp), &p.frame, ppl);
         }
