@@ -134,6 +134,8 @@ fn stroke_param(p: &Value, c: &str, add_ok: bool) -> Result<RefineStroke> {
         flow: num("flow", d.flow)?,
         strength: num("strength", d.strength)?,
         pressure,
+        // (a new stroke: Flow per radius travelled and one soft edge, as brush masks from process V10)
+        by_stroke: true,
     };
     s.sanitized().ok_or_else(|| bad(c, "the stroke has no point on the photo"))
 }

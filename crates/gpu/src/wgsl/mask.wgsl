@@ -148,8 +148,9 @@ fn finalize(@builtin(global_invocation_id) g: vec3<u32>, @builtin(num_workgroups
 
 // One brush stroke stamped inside its bounding box into `c` (`masks::brush`'s `stamp`): one dab is
 // five words in aux (x, y, r, hard, flow), pen pressure already applied. P: w, h, (unused 2..9),
-// box x0, y0, x1, y1 (10..13), dab count, density, erase (14..16): the stroke is combined into `c`
-// (max, or subtract when erasing). (Auto Mask strokes are stamped on the CPU.)
+// box x0, y0, x1, y1 (10..13), dab count, density, erase (14..16), the edge feathered by stroke (17,
+// process V10: the Flow build-up times the highest dab falloff, `masks::feather_dab`): the stroke is
+// combined into `c` (max, or subtract when erasing). (Auto Mask strokes are stamped on the CPU.)
 //
 // Each 16 × 16 tile first picks, 256 dabs at a time, the dabs that reach it into workgroup memory:
 // a pixel then reads the few dabs near it, not every dab of the stroke. A stroke's coverage is a
@@ -174,7 +175,9 @@ fn stroke(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation
     }
     workgroupBarrier();
     let cnt = workgroupUniformLoad(&dab_count);
+    let by_stroke = pu(17u) != 0u;
     var keep = 1.0;
+    var edge = 0.0;
     for (var base = 0u; base < cnt; base += 256u) {
         if (li == 0u) {
             atomicStore(&near_count, 0u);
@@ -208,7 +211,16 @@ fn stroke(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation
                 if (dd > aux[o + 3u]) {
                     a = 1.0 - sstep(aux[o + 3u], r, dd);
                 }
-                keep *= 1.0 - a * aux[o + 4u];
+                let flow = aux[o + 4u];
+                if (by_stroke) {
+                    // masks::feather_dab: a dab with no Flow changes neither
+                    if (flow > 0.0) {
+                        keep *= 1.0 - flow;
+                        edge = max(edge, a);
+                    }
+                } else {
+                    keep *= 1.0 - a * flow;
+                }
             }
         }
         // (the next batch overwrites the list)
@@ -216,7 +228,12 @@ fn stroke(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation
     }
     if (inside) {
         let i = y * w + x;
-        let sa = min(1.0 - keep, bitcast<f32>(pu(15u)));
+        var cover = 1.0 - keep;
+        if (by_stroke) {
+            // masks::stroke_coverage
+            cover = cover * edge;
+        }
+        let sa = min(cover, bitcast<f32>(pu(15u)));
         if (pu(16u) != 0u) {
             c[i] = c[i] * (1.0 - sa);
         } else {

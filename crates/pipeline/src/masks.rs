@@ -708,11 +708,25 @@ pub struct BrushDabs {
     pub auto: bool,
     /// Pen pressure (0..1) of each dab, parallel to `dabs`; empty when the stroke has no pressure data (full pressure).
     pub pressure: Vec<f32>,
+    /// What each dab adds under process V9 ([`travel_flow`], pressure applied), parallel to `dabs`;
+    /// empty before V9, where every dab adds the stroke's flow.
+    pub flows: Vec<f32>,
+    /// The stroke's edge is feathered as one dab's is (process V10, [`stroke_feather`]). An Auto Mask
+    /// stroke too: its dabs' colour weights go into the edge (the falloff times the weight), so the
+    /// stroke still stops at the photo's edges while Feather softens its outer edge where colours match.
+    pub feather_by_stroke: bool,
 }
 
 impl BrushDabs {
-    /// Radius, hard core and flow of dab `i`, pen pressure applied ([`pressure_radius`], [`pressure_flow`]).
+    /// Radius, hard core and flow of dab `i`, pen pressure applied ([`pressure_radius`], [`pressure_flow`]);
+    /// under process V9 the flow is what the dab adds for the distance it travelled ([`travel_flow`]).
     pub fn dab(&self, i: usize) -> (f64, f64, f32) {
+        let (r, hard, flow) = self.pressed(i);
+        (r, hard, self.flows.get(i).copied().unwrap_or(flow))
+    }
+
+    /// [`Self::dab`] with the stroke's flow for every dab, as before process V9.
+    fn pressed(&self, i: usize) -> (f64, f64, f32) {
         match self.pressure.get(i) {
             Some(&p) => {
                 let r = pressure_radius(self.r, p);
@@ -721,6 +735,76 @@ impl BrushDabs {
             None => (self.r, self.hard, self.flow),
         }
     }
+
+    /// Give every dab what it adds for the distance it travelled ([`travel_flow`], process V9).
+    fn flow_by_travel(mut self) -> BrushDabs {
+        let flows = (0..self.dabs.len())
+            .map(|i| {
+                let (r, _, flow) = self.pressed(i);
+                // the first dab counts one radius: a click paints its flow, as before
+                let dist = match (i.checked_sub(1).and_then(|j| self.dabs.get(j)), self.dabs.get(i)) {
+                    (Some(a), Some(b)) => a.dist(*b),
+                    _ => r,
+                };
+                travel_flow(flow, dist, r)
+            })
+            .collect();
+        self.flows = flows;
+        self
+    }
+}
+
+/// Whether a brush stroke's edge is feathered as one dab's is (process V10 on): its coverage is
+/// [`stroke_coverage`] of its Flow build-up and its dabs' highest falloff, not every dab's falloff
+/// accumulated ([`accumulate`]), which piles the soft edges of overlapping dabs up into a hard one.
+pub fn stroke_feather(s: &lightcraft_develop::DevelopSettings) -> bool {
+    s.process.process() >= lightcraft_develop::Process::V10
+}
+
+/// One dab's paint at a pixel of a stroke under [`stroke_feather`]: the Flow build-up `build` grows
+/// by the dab's `flow` wherever the dab reaches, and the edge `edge` keeps the highest falloff
+/// `falloff`. A dab with no Flow (at pen pressure 0) paints nothing and shapes nothing. For an Auto
+/// Mask stroke `falloff` is the dab's falloff times its colour weight at the pixel, so a pixel unlike
+/// every dab's reference keeps no edge and takes no paint, however much Flow built up there.
+#[inline]
+pub fn feather_dab(build: &mut f32, edge: &mut f32, falloff: f32, flow: f32) {
+    if flow.is_nan() || flow <= 0.0 {
+        return;
+    }
+    *build = accumulate(*build, 1.0, flow, 1.0);
+    *edge = edge.max(falloff);
+}
+
+/// A stroke's coverage under [`stroke_feather`] from its Flow build-up and its edge
+/// ([`feather_dab`]), up to its density. At Flow 100 the build-up is full wherever a dab reaches,
+/// so a stroke's edge falls off over the feather exactly as one dab's does; below it, the build-up
+/// is [`travel_flow`]'s, as under V9, shaped by the same edge.
+#[inline]
+pub fn stroke_coverage(build: f32, edge: f32, density: f32) -> f32 {
+    (build * edge).min(density)
+}
+
+/// Whether brush Flow is the coverage a stroke adds per brush radius it travels (process V9 on), as
+/// in Lightroom, rather than what every dab adds whatever the spacing of the dabs.
+pub fn flow_per_radius(s: &lightcraft_develop::DevelopSettings) -> bool {
+    s.process.process() >= lightcraft_develop::Process::V9
+}
+
+/// What one dab adds to a stroke's coverage when Flow is coverage per brush radius travelled
+/// (process V9): `1 − (1 − flow)^(dist / r)` for a dab `dist` past the previous one, brush radius
+/// `r`. A stroke then covers a point it passes over for a length `L` by `1 − (1 − flow)^(L / r)`
+/// however densely its dabs lie: a straight stroke's centre (`L` = 2 r) by 44 % at Flow 25, 75 % at
+/// Flow 50 and fully at 100, as Lightroom Classic's strokes measure on a grey card (storytold/lightcraft#4045).
+pub fn travel_flow(flow: f32, dist: f64, r: f64) -> f32 {
+    if flow.is_nan() || flow <= 0.0 {
+        return 0.0;
+    }
+    if flow >= 1.0 {
+        return 1.0;
+    }
+    // (a degenerate radius or distance counts one radius; a long jump at most saturates)
+    let t = if r > 0.0 && dist.is_finite() { (dist / r).clamp(0.0, 64.0) } else { 1.0 };
+    1.0 - (1.0 - flow).powf(t as f32)
 }
 
 /// The radius of a dab of a brush of radius `r` (pixels) painted at pen pressure `p` (0..1): from a tenth of the
@@ -801,7 +885,7 @@ pub fn brush_dabs_within(s: &BrushStroke, frame: &Frame, w: usize, h: usize, max
             prev_p = pq;
         }
     }
-    BrushDabs {
+    let bd = BrushDabs {
         dabs,
         r,
         hard,
@@ -810,7 +894,10 @@ pub fn brush_dabs_within(s: &BrushStroke, frame: &Frame, w: usize, h: usize, max
         erase: s.erase,
         auto: s.auto_mask,
         pressure,
-    }
+        flows: Vec::new(),
+        feather_by_stroke: frame.brush_stroke_feather,
+    };
+    if frame.brush_flow_per_radius { bd.flow_by_travel() } else { bd }
 }
 
 /// Distance between consecutive dabs of a brush of radius `r` (pixels): a quarter of the radius,

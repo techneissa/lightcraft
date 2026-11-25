@@ -45,7 +45,7 @@ fn smooth_skin() -> Retouch {
 }
 
 fn stroke(mode: RefineMode, points: &[(f64, f64)], size: f64) -> RefineStroke {
-    RefineStroke { mode, points: points.to_vec(), size, feather: 0.0, flow: 100.0, strength: 100.0, pressure: Vec::new() }
+    RefineStroke { mode, points: points.to_vec(), size, feather: 0.0, flow: 100.0, strength: 100.0, pressure: Vec::new(), by_stroke: true }
 }
 
 fn same_bits(a: [f32; 3], b: [f32; 3]) -> bool {

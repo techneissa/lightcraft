@@ -4,6 +4,8 @@
 
 Brush live adjustment: painting with the Brush shows the mask's adjustment under the brush while the button is down (the loupe's pixels and a second render with the brush covering everything, mixed by the stroke's coverage in each frame's dirty rectangle; erase blends toward the render without the brush; Auto Mask weighs the live dabs by the picture under them; the blend stays until the committed render replaces it).
 
+The live stroke paints with the committed stroke's maths for the photo's process (issue #369, ported from upstream PRs storytold/lightcraft#4047 and #4517): from process V9 Flow is coverage per brush radius travelled (`per_radius`), from V10 a stroke's edge is feathered as one dab's (`by_stroke`, Auto Mask strokes included, their colour weight in the edge). Under `by_stroke` the build-up and edge live in 64 × 64 tiles made where the stroke paints (`brush_live/feather.rs`), not in full-buffer planes, and a released stroke drops its coverage once only its blend is drawn.
+
 ## Branch
 
 `claude/brush-live-preview`

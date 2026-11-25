@@ -976,7 +976,7 @@ fn tool_interaction(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Res
         }
         RightPanel::RedEye => eye_overlay(app, ui, resp, map, d),
         RightPanel::Edit if app.ui.tool == "lensBlurShape" => lens_blur_shape_overlay(app, ui, resp, map, d),
-        RightPanel::Edit if app.ui.tool.starts_with("lensBlur") => lens_blur_brush_overlay(app, ui, resp, map),
+        RightPanel::Edit if app.ui.tool.starts_with("lensBlur") => lens_blur_brush_overlay(app, ui, resp, map, d),
         // fork (issue #288): Relight's light, dragged on the photo while its section is open
         RightPanel::Edit if relight::shown(app, d) && relight::overlay(app, ui, resp, map, d) => {}
         _ => {

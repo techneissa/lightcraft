@@ -9,13 +9,16 @@
 
 pub mod auto;
 pub mod composite;
+mod feather;
 pub mod target;
 
 use composite::{Blend, Mapping, PxRect};
 use egui::{Color32, ColorImage, Pos2, Rect, TextureHandle, TextureOptions, pos2};
+use feather::FeatherTiles;
 use lightcraft_geom::Point;
 use lightcraft_pipeline::masks::{
-    AutoRefs, accumulate, dab_alpha, dab_sample, median_radius, pressure_flow, pressure_radius, push_dabs_counted, push_pressures, search_reach,
+    AutoRefs, accumulate, dab_alpha, dab_sample, feather_dab, median_radius, pressure_flow, pressure_radius, push_dabs_counted, push_pressures,
+    search_reach, stroke_coverage, travel_flow,
 };
 use std::sync::Arc;
 
@@ -36,6 +39,12 @@ pub struct LiveParams {
     /// Flow and density, 0..1.
     pub flow: f32,
     pub density: f32,
+    /// Flow is coverage per brush radius travelled (process V9, `masks::flow_per_radius`), as the
+    /// committed stroke paints it.
+    pub per_radius: bool,
+    /// The stroke's edge is feathered as one dab's is (process V10, `masks::stroke_feather`), as
+    /// the committed stroke paints it.
+    pub by_stroke: bool,
     /// Overlay colour and its opacity (0..1) at full coverage.
     pub color: [u8; 3],
     pub opacity: f32,
@@ -76,7 +85,10 @@ pub struct LiveStroke {
     params: LiveParams,
     w: usize,
     h: usize,
+    /// Coverage per buffer pixel; empty under `by_stroke`, whose coverage comes from `feather`.
     alpha: Vec<f32>,
+    /// Under `by_stroke`, the Flow build-up and the edge (`masks::feather_dab`), only where painted.
+    feather: FeatherTiles,
     /// Samples stamped so far, and the last one (buffer pixels).
     placed: usize,
     /// Total dabs emitted across every stamp, including the first sample.
@@ -86,6 +98,8 @@ pub struct LiveStroke {
     last_pressure: f32,
     /// Auto Mask: the references of the dabs stamped so far, as the committed stroke makes them.
     refs: AutoRefs,
+    /// The last dab painted (buffer pixels): how far the next one travelled.
+    last_dab: Option<Point>,
     /// Buffer pixels painted since the last upload: (x0, y0, x1, y1), exclusive ends.
     dirty: Option<(usize, usize, usize, usize)>,
     texture: Option<TextureHandle>,
@@ -120,12 +134,14 @@ impl LiveStroke {
             params,
             w,
             h,
-            alpha: vec![0.0; w * h],
+            alpha: if params.by_stroke { Vec::new() } else { vec![0.0; w * h] },
+            feather: if params.by_stroke { FeatherTiles::new(w, h) } else { FeatherTiles::default() },
             placed: 0,
             emitted: 0,
             last: None,
             last_pressure: 1.0,
             refs: AutoRefs::default(),
+            last_dab: None,
             dirty: None,
             texture: None,
             blend_dirty: None,
@@ -138,8 +154,11 @@ impl LiveStroke {
 
     /// Stroke coverage (0..1) at buffer pixel `(x, y)`; 0 outside.
     pub fn coverage(&self, x: usize, y: usize) -> f32 {
-        if x >= self.w {
+        if x >= self.w || y >= self.h {
             return 0.0;
+        }
+        if self.params.by_stroke {
+            return self.feather.get(x, y).map_or(0.0, |[b, e]| stroke_coverage(b, e, self.params.density));
         }
         y.checked_mul(self.w).and_then(|i| i.checked_add(x)).and_then(|i| self.alpha.get(i)).copied().unwrap_or(0.0)
     }
@@ -163,7 +182,7 @@ impl LiveStroke {
         if new.is_empty() {
             return false;
         }
-        let LiveParams { clip, scale, r, hard, flow, density, .. } = self.params;
+        let LiveParams { clip, scale, r, hard, flow, density, per_radius, by_stroke, .. } = self.params;
         let (r, hard) = ((r * scale) as f64, (hard * scale) as f64);
         let mut dabs = Vec::new();
         let mut pressures = Vec::new();
@@ -201,6 +220,10 @@ impl LiveStroke {
                 let rg = r / f64::from(scale) * a.guide.size()[0] as f64 / f64::from(a.img_rect.width().max(1e-6));
                 self.refs.next(dab_sample(|x, y| a.guide.median(x, y, rho), gx, gy, search_reach(rg)))
             });
+            // the first dab counts one radius, as the committed stroke's does
+            let travelled = self.last_dab.map_or(r, |a| a.dist(d));
+            self.last_dab = Some(d);
+            let flow = if per_radius { travel_flow(flow, travelled, r) } else { flow };
             let x0 = (d.x - r).floor().clamp(0.0, self.w as f64) as usize;
             let x1 = (d.x + r).ceil().clamp(0.0, self.w as f64) as usize;
             let y0 = (d.y - r).floor().clamp(0.0, self.h as f64) as usize;
@@ -209,8 +232,7 @@ impl LiveStroke {
                 continue;
             }
             for y in y0..y1 {
-                let Some(row) = self.alpha.get_mut(y * self.w + x0..y * self.w + x1) else { continue };
-                for (x, v) in (x0..x1).zip(row.iter_mut()) {
+                for x in x0..x1 {
                     let dd = Point::new(x as f64 + 0.5, y as f64 + 0.5).dist(d);
                     if dd > r {
                         continue;
@@ -223,7 +245,14 @@ impl LiveStroke {
                         );
                         a *= rf.weight(ctx.guide.median(gx, gy, rho));
                     }
-                    *v = accumulate(*v, a, flow, density);
+                    if by_stroke {
+                        // (a dab with no Flow paints nothing: no tile is made for it)
+                        if let Some([b, e]) = (flow > 0.0).then(|| self.feather.get_mut(x, y)).flatten() {
+                            feather_dab(b, e, a, flow);
+                        }
+                    } else if let Some(v) = self.alpha.get_mut(y * self.w + x) {
+                        *v = accumulate(*v, a, flow, density);
+                    }
                 }
             }
             grow(&mut self.dirty, (x0, y0, x1, y1));
@@ -387,6 +416,12 @@ impl LiveStroke {
         }
     }
 
+    /// Every buffer pixel's coverage, row by row.
+    #[cfg(test)]
+    fn plane(&self) -> Vec<f32> {
+        (0..self.h).flat_map(|y| (0..self.w).map(move |x| (x, y))).map(|(x, y)| self.coverage(x, y)).collect()
+    }
+
     /// The blended picture drawn under the stroke.
     #[cfg(test)]
     pub(crate) fn blend_image(&self) -> Option<&ColorImage> {
@@ -469,7 +504,12 @@ pub fn paint_held(
 /// The stroke was committed over the loupe render `main_key`: keep showing it (see [`paint_held`]).
 pub fn hold(slot: &mut Option<LiveStroke>, main_key: Option<u64>, now: f64) {
     match (slot.as_mut(), main_key) {
-        (Some(s), Some(k)) if s.blend.is_some() => s.held = Some((k, now)),
+        (Some(s), Some(k)) if s.blend.is_some() => {
+            s.held = Some((k, now));
+            // only the blended picture is drawn from now on: the coverage goes
+            s.alpha = Vec::new();
+            s.feather = FeatherTiles::default();
+        }
         _ => *slot = None,
     }
 }
@@ -487,6 +527,8 @@ mod tests {
             hard: 5.0,
             flow: 1.0,
             density: 1.0,
+            per_radius: true,
+            by_stroke: false,
             color: [230, 30, 40],
             opacity: 0.5,
         }
@@ -508,6 +550,53 @@ mod tests {
         assert_eq!(s.coverage(200, 111), 0.0);
     }
 
+    /// Process V9: the live stroke adds Flow per brush radius travelled, as the committed one does,
+    /// so a slow drag (a sample every point) and a fast one cover a point the same; a stroke's centre
+    /// at Flow 25 is covered by 1 − 0.75² (Feather 0 here). Before V9 the slow drag built up more.
+    #[test]
+    fn flow_per_radius_does_not_depend_on_the_drag_speed() {
+        let p = LiveParams { flow: 0.25, hard: 10.0, ..params() };
+        let paint = |per_radius: bool, step: usize| {
+            let mut s = LiveStroke::new(LiveParams { per_radius, ..p });
+            let pts: Vec<Pos2> = (20..=380).step_by(step).map(|x| pos2(x as f32, 100.0)).collect();
+            for n in 1..=pts.len() {
+                s.stamp(&pts[..n], &[]);
+            }
+            s.coverage(200, 100)
+        };
+        let (fast, slow) = (paint(true, 360), paint(true, 1));
+        assert!((fast - 0.4375).abs() < 0.03, "{fast}");
+        assert!((fast - slow).abs() < 0.02, "fast {fast} vs slow {slow}");
+        assert!(paint(false, 1) > paint(false, 360), "before V9 a slow drag builds up more");
+    }
+
+    /// Process V10 (`by_stroke`): the live stroke's edge falls off over the feather as one dab's
+    /// does, as the committed stroke's does (`masks::stroke_coverage`), where accumulating every
+    /// dab piles the soft edges up; stamped a frame at a time it is the same.
+    #[test]
+    fn by_stroke_the_live_edge_is_feathered_as_one_dab() {
+        let soft = LiveParams { hard: 0.0, by_stroke: true, ..params() };
+        let mut s = LiveStroke::new(soft);
+        s.stamp(&[pos2(20.0, 100.0), pos2(380.0, 100.0)], &[]);
+        // (it holds the tiles the stroke crossed, not a plane of the whole buffer)
+        assert!(s.alpha.is_empty() && s.feather.bytes() < s.w * s.h * 4, "{} bytes", s.feather.bytes());
+        for dy in 0..10 {
+            let want = dab_alpha(dy as f64 + 0.5, 10.0, 0.0);
+            let got = s.coverage(200, 100 + dy);
+            assert!((got - want).abs() < 0.02, "{dy} px off the line: {got}, one dab paints {want}");
+        }
+        let mut old = LiveStroke::new(LiveParams { by_stroke: false, ..soft });
+        old.stamp(&[pos2(20.0, 100.0), pos2(380.0, 100.0)], &[]);
+        assert!(old.coverage(200, 105) > s.coverage(200, 105) + 0.2, "{} vs {}", old.coverage(200, 105), s.coverage(200, 105));
+        let pts = [pos2(30.0, 40.0), pos2(200.0, 150.0), pos2(390.0, 20.0)];
+        let (mut once, mut steps) = (LiveStroke::new(LiveParams { flow: 0.4, ..soft }), LiveStroke::new(LiveParams { flow: 0.4, ..soft }));
+        once.stamp(&pts, &[]);
+        for n in 1..=pts.len() {
+            steps.stamp(&pts[..n], &[]);
+        }
+        assert_eq!(once.plane(), steps.plane());
+    }
+
     /// Painting the samples one frame at a time gives the same coverage as all at once (what the
     /// committed stroke does).
     #[test]
@@ -519,7 +608,7 @@ mod tests {
         for n in 1..=pts.len() {
             steps.stamp(&pts[..n], &[]);
         }
-        assert_eq!(once.alpha, steps.alpha);
+        assert_eq!(once.plane(), steps.plane());
     }
 
     /// Crossing the budget in separate frames must match one stamp, including pressure state.
@@ -537,7 +626,7 @@ mod tests {
         for n in 1..=pts.len() {
             steps.stamp(&pts[..n], &pressure[..n]);
         }
-        assert_eq!(once.alpha, steps.alpha);
+        assert_eq!(once.plane(), steps.plane());
         assert_eq!(once.emitted, MAX_STROKE_DABS);
         assert_eq!(steps.emitted, once.emitted);
         assert_eq!(once.last, Some(Point::new(80.0, 20.0)));
@@ -546,10 +635,10 @@ mod tests {
         assert_eq!(steps.last_pressure, once.last_pressure);
         assert!(once.coverage(80, 20) > 0.0);
         assert_eq!(once.coverage(200, 80), 0.0);
-        let alpha = steps.alpha.clone();
+        let alpha = steps.plane().clone();
         let more = [pts[0], pts[1], pts[2], pts[3], pos2(300.0, 100.0)];
         steps.stamp(&more, &[1.0; 5]);
-        assert_eq!(steps.alpha, alpha, "later frames cannot paint or reconnect discarded samples");
+        assert_eq!(steps.plane(), alpha, "later frames cannot paint or reconnect discarded samples");
         assert_eq!(steps.last, once.last);
         assert_eq!(steps.last_pressure, once.last_pressure);
         assert_eq!(steps.emitted, MAX_STROKE_DABS);
@@ -559,7 +648,7 @@ mod tests {
     fn hostile_input_paints_nothing_and_does_not_panic() {
         let mut s = LiveStroke::new(params());
         s.stamp(&[pos2(f32::NAN, 3.0), pos2(f32::INFINITY, -1e30), pos2(-5000.0, 9000.0)], &[]);
-        assert!(s.alpha.iter().all(|a| *a == 0.0));
+        assert!(s.plane().iter().all(|a| *a == 0.0));
         // an enormous canvas is painted at a capped resolution
         let big = LiveStroke::new(LiveParams { clip: Rect::from_min_size(Pos2::ZERO, vec2(1e6, 10.0)), scale: 2.0, ..params() });
         assert!(big.w <= MAX_SIDE && big.h >= 1);
@@ -579,7 +668,7 @@ mod tests {
         assert!(light.coverage(200, 100) < full.coverage(200, 100));
         let mut odd = LiveStroke::new(params());
         odd.stamp(&pts, &[f32::NAN]);
-        assert!(odd.alpha.iter().all(|v| v.is_finite()));
+        assert!(odd.plane().iter().all(|v| v.is_finite()));
     }
 
     /// The live stroke, painted frame by frame at the output's resolution, is the mask the pipeline
@@ -616,6 +705,8 @@ mod tests {
                 hard: bd.hard as f32,
                 flow: bd.flow,
                 density: bd.density,
+                per_radius: frame.brush_flow_per_radius,
+                by_stroke: bd.feather_by_stroke,
                 color: [255, 0, 0],
                 opacity: 1.0,
             };
@@ -625,7 +716,7 @@ mod tests {
             for n in 1..=screen.len() {
                 steps.stamp(&screen[..n], &stroke.pressure[..n.min(stroke.pressure.len())]);
             }
-            let worst = steps.alpha.iter().zip(&committed.data).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+            let worst = steps.plane().iter().zip(&committed.data).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
             assert!(worst < 1e-5, "feather {feather}: live and committed coverage differ by {worst}");
             assert!(committed.data.iter().any(|v| *v > 0.5));
         }
@@ -676,6 +767,8 @@ mod tests {
             hard: bd.hard as f32,
             flow: bd.flow,
             density: bd.density,
+            per_radius: frame.brush_flow_per_radius,
+            by_stroke: bd.feather_by_stroke,
             color: [255, 0, 0],
             opacity: 1.0,
         };
@@ -685,7 +778,7 @@ mod tests {
         for n in 1..=screen.len() {
             steps.stamp_with(&screen[..n], &[], Some(AutoCtx { guide: &guide, img_rect: clip, long: w as f32 }));
         }
-        let worst = steps.alpha.iter().zip(&committed.data).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+        let worst = steps.plane().iter().zip(&committed.data).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
         assert!(worst < 1e-4, "live and committed Auto Mask coverage differ by {worst}");
         // (the dark side is painted, the light side is not)
         let (dark, light) = (committed.get(90, 60), committed.get(108, 60));
