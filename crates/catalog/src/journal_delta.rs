@@ -28,6 +28,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::delta::{self, Patch};
+use crate::delta_strokes::Skeletons;
 use crate::{Catalog, HistoryStep, Op, Photo, PhotoId};
 
 /// One op as a log record holds it.
@@ -85,8 +86,8 @@ pub(crate) fn decode(body: &str) -> serde_json::Result<LogOp> {
     if body.starts_with("{\"op\":\"patch") { serde_json::from_str(body).map(LogOp::Delta) } else { serde_json::from_str(body).map(LogOp::Plain) }
 }
 
-/// The JSON of settings, and the settings it was made from, so the next patch of the same photo
-/// doesn't convert them again. Holding the `Arc` keeps its address from being reused.
+/// The JSON of settings, and the settings it was made from, so the next patch replayed of the same photo
+/// doesn't convert them again (the writer keeps [`Skeletons`] instead). Holding the `Arc` keeps its address from being reused.
 type Cached = Option<(Arc<DevelopSettings>, Value)>;
 
 fn value_of(s: &Arc<DevelopSettings>, cache: &mut Cached) -> Option<Value> {
@@ -101,12 +102,12 @@ fn value_of(s: &Arc<DevelopSettings>, cache: &mut Cached) -> Option<Value> {
 pub(crate) struct Shadow {
     photos: BTreeMap<PhotoId, Arc<Photo>>,
     /// Keyed by the settings' identity, so it stays right whatever the shadow does.
-    cache: Cached,
+    cache: Skeletons,
 }
 
 impl Shadow {
     pub(crate) fn of(catalog: &Catalog) -> Shadow {
-        Shadow { photos: catalog.photos.clone(), cache: None }
+        Shadow { photos: catalog.photos.clone(), cache: Skeletons::default() }
     }
 
     /// Start encoding a batch of records; [`Shadow::commit`] keeps what it did once they are written.
@@ -132,7 +133,7 @@ pub(crate) struct Changes(BTreeMap<PhotoId, Option<Arc<Photo>>>);
 pub(crate) struct Pass<'a> {
     photos: &'a BTreeMap<PhotoId, Arc<Photo>>,
     changed: BTreeMap<PhotoId, Option<Arc<Photo>>>,
-    cache: &'a mut Cached,
+    cache: &'a mut Skeletons,
 }
 
 impl Pass<'_> {
@@ -156,14 +157,7 @@ impl Pass<'_> {
 
     /// The patch from `old` to `new` (`None` if they can't be converted to JSON).
     fn patch(&mut self, old: &Arc<DevelopSettings>, new: &Arc<DevelopSettings>) -> Option<Patch> {
-        if Arc::ptr_eq(old, new) {
-            return Some(Patch::Same);
-        }
-        let a = value_of(old, self.cache)?;
-        let b = serde_json::to_value(&**new).ok()?;
-        let p = delta::diff(&a, &b);
-        *self.cache = Some((new.clone(), b));
-        Some(p)
+        self.cache.patch(old, new)
     }
 
     /// `set`: the settings this record set so far, by photo.

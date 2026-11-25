@@ -49,7 +49,52 @@ pub enum Patch {
 
 /// The patch that turns `old` into `new`.
 pub fn diff(old: &Value, new: &Value) -> Patch {
-    if same(old, new) {
+    diff_in(old, new, &NoStandIns)
+}
+
+/// Values that stand for others in a tree being diffed (issue #378: a brush stroke stands in for its points, so a diff
+/// of the settings doesn't turn every earlier stroke into JSON). [`diff_in`] of two trees with stand-ins gives exactly
+/// the [`diff`] of the trees they stand for, as long as two stand-ins with the same id stand for values written the
+/// same.
+pub(crate) trait StandIns {
+    /// `v`'s id and the value it stands for, when `v` is a stand-in. The value has no stand-ins in it.
+    fn stand_in<'a>(&'a self, v: &Value) -> Option<(u64, &'a Value)>;
+
+    /// `v` with every stand-in replaced by what it stands for.
+    fn expand(&self, v: &Value) -> Value {
+        if let Some((_, real)) = self.stand_in(v) {
+            return real.clone();
+        }
+        match v {
+            Value::Array(a) => Value::Array(a.iter().map(|x| self.expand(x)).collect()),
+            Value::Object(o) => Value::Object(o.iter().map(|(k, x)| (k.clone(), self.expand(x))).collect()),
+            _ => v.clone(),
+        }
+    }
+}
+
+struct NoStandIns;
+
+impl StandIns for NoStandIns {
+    fn stand_in<'a>(&'a self, _: &Value) -> Option<(u64, &'a Value)> {
+        None
+    }
+
+    fn expand(&self, v: &Value) -> Value {
+        v.clone()
+    }
+}
+
+/// [`diff`] of the values `old` and `new` stand for.
+pub(crate) fn diff_in(old: &Value, new: &Value, ins: &impl StandIns) -> Patch {
+    match (ins.stand_in(old), ins.stand_in(new)) {
+        (Some((a, _)), Some((b, _))) if a == b => return Patch::Same,
+        (Some((_, x)), Some((_, y))) => return diff(x, y),
+        (Some((_, x)), None) => return diff_in(x, new, ins),
+        (None, Some((_, y))) => return diff_in(old, y, ins),
+        (None, None) => {}
+    }
+    if same_in(old, new, ins) {
         return Patch::Same;
     }
     match (old, new) {
@@ -57,14 +102,14 @@ pub fn diff(old: &Value, new: &Value) -> Patch {
             let mut s = BTreeMap::new();
             for (k, nv) in n {
                 match o.get(k) {
-                    Some(ov) => match diff(ov, nv) {
+                    Some(ov) => match diff_in(ov, nv, ins) {
                         Patch::Same => {}
                         p => {
                             s.insert(k.clone(), p);
                         }
                     },
                     None => {
-                        s.insert(k.clone(), Patch::Set(nv.clone()));
+                        s.insert(k.clone(), Patch::Set(ins.expand(nv)));
                     }
                 }
             }
@@ -72,30 +117,41 @@ pub fn diff(old: &Value, new: &Value) -> Patch {
             Patch::Obj { s, d }
         }
         (Value::Array(o), Value::Array(n)) => {
-            let h = o.iter().zip(n).take_while(|(a, b)| same(a, b)).count();
+            let h = o.iter().zip(n).take_while(|(a, b)| same_in(a, b, ins)).count();
             let room = o.len().min(n.len()) - h;
-            let t = o.iter().rev().zip(n.iter().rev()).take(room).take_while(|(a, b)| same(a, b)).count();
+            let t = o.iter().rev().zip(n.iter().rev()).take(room).take_while(|(a, b)| same_in(a, b, ins)).count();
             let (om, nm) = (&o[h..o.len() - t], &n[h..n.len() - t]);
             if om.len() == nm.len() {
-                Patch::Arr { n: o.len(), h, t, e: om.iter().zip(nm).map(|(a, b)| diff(a, b)).collect(), v: Vec::new() }
+                Patch::Arr { n: o.len(), h, t, e: om.iter().zip(nm).map(|(a, b)| diff_in(a, b, ins)).collect(), v: Vec::new() }
             } else {
-                Patch::Arr { n: o.len(), h, t, e: Vec::new(), v: nm.to_vec() }
+                Patch::Arr { n: o.len(), h, t, e: Vec::new(), v: nm.iter().map(|x| ins.expand(x)).collect() }
             }
         }
-        _ => Patch::Set(new.clone()),
+        _ => Patch::Set(ins.expand(new)),
     }
 }
 
 /// Whether `a` and `b` are written the same: `==` on JSON values takes `-0.0` for `0.0`, and a
 /// patch must keep the sign a setting was saved with.
 fn same(a: &Value, b: &Value) -> bool {
+    same_in(a, b, &NoStandIns)
+}
+
+/// [`same`] of the values `a` and `b` stand for.
+fn same_in(a: &Value, b: &Value, ins: &impl StandIns) -> bool {
+    match (ins.stand_in(a), ins.stand_in(b)) {
+        (Some((i, x)), Some((j, y))) => return i == j || same(x, y),
+        (Some((_, x)), None) => return same_in(x, b, ins),
+        (None, Some((_, y))) => return same_in(a, y, ins),
+        (None, None) => {}
+    }
     match (a, b) {
         (Value::Number(x), Value::Number(y)) => match (x.as_f64(), y.as_f64()) {
             (Some(p), Some(q)) if x.is_f64() || y.is_f64() => p.to_bits() == q.to_bits() && x.is_f64() == y.is_f64(),
             _ => x == y,
         },
-        (Value::Array(x), Value::Array(y)) => x.len() == y.len() && x.iter().zip(y).all(|(p, q)| same(p, q)),
-        (Value::Object(x), Value::Object(y)) => x.len() == y.len() && x.iter().all(|(k, v)| y.get(k).is_some_and(|w| same(v, w))),
+        (Value::Array(x), Value::Array(y)) => x.len() == y.len() && x.iter().zip(y).all(|(p, q)| same_in(p, q, ins)),
+        (Value::Object(x), Value::Object(y)) => x.len() == y.len() && x.iter().all(|(k, v)| y.get(k).is_some_and(|w| same_in(v, w, ins))),
         _ => a == b,
     }
 }
