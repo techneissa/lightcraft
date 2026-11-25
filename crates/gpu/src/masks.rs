@@ -185,7 +185,7 @@ fn stamp_stroke(cx: &mut Cx<'_>, env: &BrushEnv<'_>, s: &BrushStroke, plane: &Bu
     let aux = cx.gpu.upload(&aux);
     let mut p = vec![w as u32, h as u32, 0, 0, 0, 0, 0, 0, 0, 0];
     p.extend([x0, y0, x1, y1, bd.dabs.len()].map(|v| v as u32));
-    p.extend([bd.density.to_bits(), bd.erase as u32, 0, 0]);
+    p.extend([bd.density.to_bits(), bd.erase as u32, bd.feather_by_stroke as u32, 0]);
     let grid = groups2(x1 - x0, y1 - y0, [16, 16]);
     cx.run("stroke", &p, &[Some(env.lin), Some(env.log_l), Some(&aux), Some(plane), None], grid);
     true

@@ -8,7 +8,7 @@ use lightcraft_develop::BrushStroke;
 use lightcraft_raster::{Plane, Rgb32f};
 
 use super::auto_edge::{AutoColor, AutoRef, AutoRefs, MedianBox, dab_sample, median_radius, search_margin, search_reach};
-use super::{BrushDabs, accumulate, dab_alpha, dab_pixel};
+use super::{BrushDabs, accumulate, dab_alpha, dab_pixel, feather_dab, stroke_coverage};
 use crate::for_rows;
 use crate::geometry::Frame;
 
@@ -204,7 +204,8 @@ pub(crate) fn auto_refs(
 }
 
 /// Stamp stroke `s` into `out`: its dabs inside their bounding box (flow accumulating up to density
-/// within the stroke), then the stroke combined with `out` there, adding paint or erasing it.
+/// within the stroke; from process V10 the build-up shaped by the dabs' highest falloff,
+/// [`BrushDabs::feather_by_stroke`]), then the stroke combined with `out` there, adding paint or erasing it.
 /// At most `room` dabs are stamped, and `room` loses the ones that were.
 fn stamp(s: &BrushStroke, frame: &Frame, img: &Rgb32f, log_l: &Plane, out: &mut Plane, room: &mut usize) {
     note_stroke();
@@ -232,9 +233,13 @@ fn stamp(s: &BrushStroke, frame: &Frame, img: &Rgb32f, log_l: &Plane, out: &mut 
     let (refs, med) =
         if auto { auto_refs(&bd, img, log_l, (x0, y0, x1, y1), median_radius(frame.px_per_long(w))) } else { (Vec::new(), MedianBox::empty()) };
     let mut sp = Plane::new(bw, bh);
+    let by_stroke = bd.feather_by_stroke;
     for_rows(&mut sp.data, bw, |ry, row| {
         let y = y0 + ry;
         let cy = y as f64 + 0.5;
+        // process V10: `row` holds the Flow build-up and `edge` the highest dab falloff
+        // ([`super::feather_dab`]), combined once every dab is in ([`super::stroke_coverage`])
+        let mut edge = if by_stroke { vec![0.0f32; bw] } else { Vec::new() };
         for (k, d) in bd.dabs.iter().enumerate() {
             let (r, hard, flow) = bd.dab(k);
             if (cy - d.y).abs() > r {
@@ -251,11 +256,16 @@ fn stamp(s: &BrushStroke, frame: &Frame, img: &Rgb32f, log_l: &Plane, out: &mut 
                 if let Some(rf) = refs.get(k) {
                     a *= rf.weight(med.at(x as isize, y as isize));
                 }
-                if let Some(v) = row.get_mut(x - x0) {
+                let Some(v) = row.get_mut(x - x0) else { continue };
+                match edge.get_mut(x - x0) {
+                    Some(e) => feather_dab(v, e, a, flow),
                     // flow accumulates within a stroke up to density
-                    *v = accumulate(*v, a, flow, dens);
+                    None => *v = accumulate(*v, a, flow, dens),
                 }
             }
+        }
+        for (v, e) in row.iter_mut().zip(&edge) {
+            *v = stroke_coverage(*v, *e, dens);
         }
     });
     let Some(rows) = out.data.get_mut(y0 * w..y1 * w) else { return };

@@ -28,6 +28,8 @@ fn reference_brush(strokes: &[BrushStroke], frame: &Frame, w: usize, h: usize, i
         let bd = brush_dabs(s, frame, w, h);
         let (dens, erase, auto) = (bd.density, bd.erase, bd.auto);
         let mut stroke_alpha = Plane::new(w, h);
+        // (process V10: the highest dab falloff, the build-up in `stroke_alpha`)
+        let mut edge = Plane::new(w, h);
         // (Auto Mask: the dabs' references and the median colours of the whole frame)
         let (refs, med) = if auto {
             brush::auto_refs(&bd, img, log_l, (0, 0, w, h), auto_edge::median_radius(frame.px_per_long(w)))
@@ -50,8 +52,17 @@ fn reference_brush(strokes: &[BrushStroke], frame: &Frame, w: usize, h: usize, i
                         a *= rf.weight(med.at(x as isize, y as isize));
                     }
                     let v = &mut stroke_alpha.data[i];
-                    *v = accumulate(*v, a, flow, dens);
+                    if bd.feather_by_stroke {
+                        feather_dab(v, &mut edge.data[i], a, flow);
+                    } else {
+                        *v = accumulate(*v, a, flow, dens);
+                    }
                 }
+            }
+        }
+        if bd.feather_by_stroke {
+            for (v, e) in stroke_alpha.data.iter_mut().zip(&edge.data) {
+                *v = stroke_coverage(*v, *e, dens);
             }
         }
         for (o, a) in out.data.iter_mut().zip(&stroke_alpha.data) {
