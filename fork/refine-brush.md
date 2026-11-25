@@ -26,6 +26,9 @@ those for every face, strokes included); otherwise to every face.
 
 ## How
 
+- **Stroke maths** (issue #369). A stroke saved with `by_stroke` (every stroke painted since) builds Flow per brush
+  radius travelled and keeps one soft edge, as brush masks from process V10 (`refine/raster.rs`, `stamp`); one
+  saved without it keeps every dab adding its flow, so portrait edits made before look the same.
 - **One shared component.** `crates/retouch/src/refine.rs` keeps the strokes (`Refine`: per feature, in the order
   painted) and `run::run_one` wraps every feature's run: a feature without strokes runs as before, with no extra
   work; one with strokes runs through `refine::run_refined`. The panel draws the row from the tab's section loop

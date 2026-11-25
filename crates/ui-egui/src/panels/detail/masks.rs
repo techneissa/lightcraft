@@ -851,8 +851,7 @@ fn brush_tool(
             flow: (app.ui.brush_flow / 100.0).clamp(0.0, 1.0),
             density: 1.0,
             per_radius: lightcraft_pipeline::masks::flow_per_radius(d),
-            // (an Auto Mask stroke keeps V9's accumulation, as the committed one does)
-            by_stroke: lightcraft_pipeline::masks::stroke_feather(d) && !app.ui.brush_auto_mask,
+            by_stroke: lightcraft_pipeline::masks::stroke_feather(d),
             color: app.ui.mask_overlay_color,
             opacity: opacity.clamp(0.0, 1.0),
         };

@@ -711,9 +711,9 @@ pub struct BrushDabs {
     /// What each dab adds under process V9 ([`travel_flow`], pressure applied), parallel to `dabs`;
     /// empty before V9, where every dab adds the stroke's flow.
     pub flows: Vec<f32>,
-    /// The stroke's edge is feathered as one dab's is (process V10, [`stroke_feather`]), unless it
-    /// is an Auto Mask stroke: its edge follows the photo's, not the feather, and it keeps V9's
-    /// accumulation, which its colour weighting stays stable under.
+    /// The stroke's edge is feathered as one dab's is (process V10, [`stroke_feather`]). An Auto Mask
+    /// stroke too: its dabs' colour weights go into the edge (the falloff times the weight), so the
+    /// stroke still stops at the photo's edges while Feather softens its outer edge where colours match.
     pub feather_by_stroke: bool,
 }
 
@@ -763,8 +763,9 @@ pub fn stroke_feather(s: &lightcraft_develop::DevelopSettings) -> bool {
 
 /// One dab's paint at a pixel of a stroke under [`stroke_feather`]: the Flow build-up `build` grows
 /// by the dab's `flow` wherever the dab reaches, and the edge `edge` keeps the highest falloff
-/// `falloff`. A dab with no Flow (at pen pressure 0) paints nothing and shapes nothing. (Auto Mask
-/// strokes don't take this: [`BrushDabs::feather_by_stroke`].)
+/// `falloff`. A dab with no Flow (at pen pressure 0) paints nothing and shapes nothing. For an Auto
+/// Mask stroke `falloff` is the dab's falloff times its colour weight at the pixel, so a pixel unlike
+/// every dab's reference keeps no edge and takes no paint, however much Flow built up there.
 #[inline]
 pub fn feather_dab(build: &mut f32, edge: &mut f32, falloff: f32, flow: f32) {
     if flow.is_nan() || flow <= 0.0 {
@@ -894,7 +895,7 @@ pub fn brush_dabs_within(s: &BrushStroke, frame: &Frame, w: usize, h: usize, max
         auto: s.auto_mask,
         pressure,
         flows: Vec::new(),
-        feather_by_stroke: frame.brush_stroke_feather && !s.auto_mask,
+        feather_by_stroke: frame.brush_stroke_feather,
     };
     if frame.brush_flow_per_radius { bd.flow_by_travel() } else { bd }
 }

@@ -523,7 +523,7 @@ fn cases() -> Vec<(&'static str, Edit)> {
                 ..Default::default()
             }];
         }),
-        ("masks (brush, process V10: an Auto Mask stroke keeps V9 accumulation)", |s| {
+        ("masks (brush, process V10: an Auto Mask stroke, one soft edge where colours match)", |s| {
             s.process = lightcraft_develop::Process::V10.version();
             let stroke = BrushStroke {
                 points: vec![Point::new(0.1, 0.3), Point::new(0.5, 0.45), Point::new(0.85, 0.4)],

@@ -268,7 +268,30 @@ fn dabs(s: &RefineStroke, shape: Shape) -> Vec<Dab> {
         }
         prev = Some((x, y, p));
     }
+    if s.by_stroke {
+        // Flow per brush radius travelled; the first dab counts one radius, so a click paints its flow
+        let mut last: Option<(f64, f64)> = None;
+        for d in &mut out {
+            let dist = last.map_or(d.r, |(x, y)| ((d.x - x).powi(2) + (d.y - y).powi(2)).sqrt());
+            last = Some((d.x, d.y));
+            d.flow = travel_flow(d.flow, dist, d.r);
+        }
+    }
     out
+}
+
+/// What a dab adds when Flow is the coverage a stroke adds per brush radius `r` it travels: `1 − (1 − flow)^(dist / r)`
+/// for a dab `dist` past the previous one (as brush masks' `lightcraft_pipeline::masks::travel_flow`).
+fn travel_flow(flow: f32, dist: f64, r: f64) -> f32 {
+    if flow.is_nan() || flow <= 0.0 {
+        return 0.0;
+    }
+    if flow >= 1.0 {
+        return 1.0;
+    }
+    // (a degenerate radius or distance counts one radius; a long jump at most saturates)
+    let t = if r > 0.0 && dist.is_finite() { (dist / r).clamp(0.0, 64.0) } else { 1.0 };
+    1.0 - (1.0 - flow).powf(t as f32)
 }
 
 /// A dab's paint at distance `dd`: full inside its hard radius, smoothly to none at its radius.
@@ -284,7 +307,9 @@ fn dab_alpha(dd: f64, r: f64, hard: f64) -> f32 {
 }
 
 /// Stamp stroke `s` into `out`: its coverage builds within the stroke up to its strength, then raises `out` there
-/// (the larger of the two) or lowers it (`out × (1 − coverage)`).
+/// (the larger of the two) or lowers it (`out × (1 − coverage)`). A [`RefineStroke::by_stroke`] stroke keeps its Flow
+/// build-up apart from its edge (the highest dab falloff) and covers their product, so its edge falls off over the
+/// feather as one dab's does instead of the dabs' soft edges piling up.
 fn stamp(s: &RefineStroke, g: &Grid, out: &mut Plane, raise: bool) {
     let ds = dabs(s, g.shape);
     let Some(rmax) = ds.iter().map(|d| d.r).reduce(f64::max) else { return };
@@ -298,6 +323,8 @@ fn stamp(s: &RefineStroke, g: &Grid, out: &mut Plane, raise: bool) {
     let dens = (s.strength / 100.0).clamp(0.0, 1.0) as f32;
     let bw = x1 - x0;
     let mut cov = vec![0.0f32; bw * (y1 - y0)];
+    // (by stroke: `cov` holds the Flow build-up, `edge` the highest falloff; only the stroke's box)
+    let mut edge = if s.by_stroke { vec![0.0f32; cov.len()] } else { Vec::new() };
     for d in &ds {
         let (cx0, cx1) = g.cols(d.x - d.r, d.x + d.r);
         let (cy0, cy1) = g.rows(d.y - d.r, d.y + d.r);
@@ -309,12 +336,24 @@ fn stamp(s: &RefineStroke, g: &Grid, out: &mut Plane, raise: bool) {
                 if a <= 0.0 {
                     continue;
                 }
-                if let Some(v) = cov.get_mut((j - y0) * bw + (i - x0)) {
+                let k = (j - y0) * bw + (i - x0);
+                if let Some(e) = edge.get_mut(k) {
+                    if let (Some(v), true) = (cov.get_mut(k), d.flow > 0.0) {
+                        *v += d.flow * (1.0 - *v);
+                        *e = e.max(a);
+                    }
+                } else if let Some(v) = cov.get_mut(k) {
                     // flow builds within a stroke up to its strength (a full dab at full flow reaches it at once)
                     *v = if a * d.flow >= 1.0 { dens } else { (*v + a * d.flow * (1.0 - *v)).min(dens) };
                 }
             }
         }
+    }
+    if !edge.is_empty() {
+        for (v, e) in cov.iter_mut().zip(&edge) {
+            *v = (*v * e).min(dens);
+        }
+        drop(edge);
     }
     for j in y0..y1 {
         for i in x0..x1 {
@@ -344,6 +383,24 @@ mod tests {
         let (_, g) = grid(&s2, &|_| true, Kind::Cut, shape).unwrap();
         assert_eq!(g.sample(0.5, 0.5), 0.0);
         assert!(grid(&[stroke(RefineMode::Restore, &[(0.5, 0.5)])], &|_| true, Kind::Cut, shape).is_none(), "nothing to restore");
+    }
+
+    /// A straight stroke at Feather 100 falls off across its line as one dab does; strokes saved before
+    /// [`RefineStroke::by_stroke`] keep the dabs' soft edges piled up into a nearly hard one.
+    #[test]
+    fn a_soft_stroke_is_feathered_as_one_dab_is() {
+        let shape = Shape::from_aspect(1.0).unwrap();
+        let soft = |by_stroke| {
+            let s = RefineStroke { feather: 100.0, by_stroke, ..stroke(RefineMode::Reduce, &[(0.2, 0.5), (0.8, 0.5)]) };
+            grid(&[s], &|_| true, Kind::Cut, shape).unwrap().1
+        };
+        let (new, old) = (soft(true), soft(false));
+        for k in 0..10 {
+            let t = k as f64 / 10.0;
+            let (want, got) = (dab_alpha(t * 0.05, 0.05, 0.0), new.sample(0.5, 0.5 + t * 0.05));
+            assert!((got - want).abs() < 0.06, "{t} r off the line: {got}, one dab paints {want}");
+        }
+        assert!(old.sample(0.5, 0.525) > 0.85 && new.sample(0.5, 0.525) < 0.6, "old {} vs new {}", old.sample(0.5, 0.525), new.sample(0.5, 0.525));
     }
 
     #[test]

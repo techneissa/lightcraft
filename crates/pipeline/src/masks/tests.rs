@@ -997,12 +997,14 @@ fn a_dab_with_no_flow_shapes_nothing() {
     assert!((build - 0.6).abs() < 1e-6 && (edge - 0.6).abs() < 1e-6, "{build} {edge}");
 }
 
-/// An Auto Mask stroke keeps V9's accumulation on V10: its edge follows the photo, not the feather.
+/// Process V10: an Auto Mask stroke at Feather 100 on a flat area fades as one dab does, as Lightroom's Auto Mask
+/// brush keeps one soft edge where the colours match; V9 piles its dabs' soft edges up into a hard one.
 #[test]
-fn an_auto_mask_stroke_keeps_v9_accumulation() {
+fn an_auto_mask_stroke_on_a_flat_area_is_feathered_as_one_dab_is() {
     use lightcraft_develop::Process;
     let (w, h) = (400, 100);
-    let img = Rgb32f::new(w, h);
+    let img = Rgb32f::from_fn(w, h, |_, _| [0.18, 0.18, 0.18]);
+    let l = img.map(crate::local::log_lum);
     let paint = |p: Process| {
         let d = DevelopSettings { process: p.version(), ..Default::default() };
         let f = Frame::new(w, h, &d, true);
@@ -1013,8 +1015,13 @@ fn an_auto_mask_stroke_keeps_v9_accumulation() {
             auto_mask: true,
             ..Default::default()
         };
-        assert!(!brush_dabs(&s, &f, w, h).feather_by_stroke);
-        shape_alpha(&MaskShape::Brush { strokes: vec![s] }, &f, w, h, &img, &Plane::new(w, h), 0.0, None)
+        shape_alpha(&MaskShape::Brush { strokes: vec![s] }, &f, w, h, &img, &l, 0.0, None)
     };
-    assert_eq!(paint(Process::V10).data, paint(Process::V9).data);
+    let (new, old) = (paint(Process::V10), paint(Process::V9));
+    for row in 50..72 {
+        let want = dab_alpha(row as f64 + 0.5 - 50.0, 20.0, 0.0);
+        let got = new.get(200, row);
+        assert!((got - want).abs() < 0.03, "{} px off the line: {got}, one dab paints {want}", row as f64 + 0.5 - 50.0);
+    }
+    assert!(old.get(200, 60) > 0.85 && new.get(200, 60) < 0.6, "V9 {} vs V10 {}", old.get(200, 60), new.get(200, 60));
 }

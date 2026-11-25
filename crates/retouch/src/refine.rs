@@ -90,11 +90,25 @@ pub struct RefineStroke {
     /// Pen pressure (0…1) per point; empty is full pressure. It scales each dab's radius and flow.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub pressure: Vec<f32>,
+    /// Painted with the brush masks' stroke maths of process V10: Flow builds up per brush radius travelled and
+    /// the stroke's edge falls off over the feather as one dab's does. False for strokes saved before it (the field
+    /// is absent), which keep every dab adding its flow, so their soft edges pile up as they did.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub by_stroke: bool,
 }
 
 impl Default for RefineStroke {
     fn default() -> Self {
-        RefineStroke { mode: RefineMode::Reduce, points: Vec::new(), size: 0.04, feather: 50.0, flow: 100.0, strength: 100.0, pressure: Vec::new() }
+        RefineStroke {
+            mode: RefineMode::Reduce,
+            points: Vec::new(),
+            size: 0.04,
+            feather: 50.0,
+            flow: 100.0,
+            strength: 100.0,
+            pressure: Vec::new(),
+            by_stroke: true,
+        }
     }
 }
 
@@ -125,7 +139,7 @@ impl RefineStroke {
     }
 
     pub(crate) fn hash_into(&self, h: &mut Fnv) {
-        h.u64(self.mode as u64);
+        h.u64(self.mode as u64 | u64::from(self.by_stroke) << 8);
         for v in [self.size, self.feather, self.flow, self.strength] {
             h.u64(v.to_bits());
         }
