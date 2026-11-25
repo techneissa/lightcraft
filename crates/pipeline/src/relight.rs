@@ -125,6 +125,9 @@ pub(crate) struct Memo<T> {
     /// The keys a render is making now ([`Memo::claim`]), and the signal that one of them is done.
     making: Mutex<Vec<u64>>,
     made: Condvar,
+    /// Tests: how many times a claim has started waiting for another render's value.
+    #[cfg(test)]
+    waits: std::sync::atomic::AtomicUsize,
 }
 
 /// What [`Memo::claim`] found: the value kept, or the right to make it (the key is free again when this drops, made or not).
@@ -133,28 +136,46 @@ pub(crate) enum Claim<'a, T> {
     Make(Making<'a, T>),
 }
 
-/// The key a render makes ([`Claim::Make`]).
+/// The key a render makes ([`Claim::Make`]); `None` when it makes it without telling others (on a rayon worker).
 pub(crate) struct Making<'a, T> {
     memo: &'a Memo<T>,
-    key: u64,
+    key: Option<u64>,
 }
 
 impl<T> Drop for Making<'_, T> {
     fn drop(&mut self) {
-        self.memo.making.lock().unwrap_or_else(PoisonError::into_inner).retain(|k| *k != self.key);
+        let Some(key) = self.key else { return };
+        self.memo.making.lock().unwrap_or_else(PoisonError::into_inner).retain(|k| *k != key);
         self.memo.made.notify_all();
     }
 }
 
 impl<T> Memo<T> {
     pub(crate) const fn new(keep: usize) -> Self {
-        Memo { kept: Mutex::new(Vec::new()), keep, making: Mutex::new(Vec::new()), made: Condvar::new() }
+        Memo {
+            kept: Mutex::new(Vec::new()),
+            keep,
+            making: Mutex::new(Vec::new()),
+            made: Condvar::new(),
+            #[cfg(test)]
+            waits: std::sync::atomic::AtomicUsize::new(0),
+        }
     }
 
     /// The value of `key` ([`Memo::get`]), or, when no render is making it, the right to make it. While another render makes
     /// it, this waits for that one and takes what it kept (issue #374: the loupe and the open photo's filmstrip thumbnail, both
-    /// rendered after an edit, each made the same whole-field shading at once).
+    /// rendered after an edit, each made the same whole-field shading at once). Only a caller that keeps what it makes
+    /// ([`Memo::put`]) may claim: a waiter would otherwise find nothing and make it again after all.
+    ///
+    /// On a rayon worker it never waits (a `join` there asking for the same key would wait on itself): it makes the value
+    /// without telling other renders.
     pub(crate) fn claim(&self, key: u64) -> Claim<'_, T> {
+        if rayon::current_thread_index().is_some() {
+            return match self.get(key) {
+                Some(v) => Claim::Kept(v),
+                None => Claim::Make(Making { memo: self, key: None }),
+            };
+        }
         let mut making = self.making.lock().unwrap_or_else(PoisonError::into_inner);
         loop {
             if let Some(v) = self.get(key) {
@@ -162,8 +183,10 @@ impl<T> Memo<T> {
             }
             if !making.contains(&key) {
                 making.push(key);
-                return Claim::Make(Making { memo: self, key });
+                return Claim::Make(Making { memo: self, key: Some(key) });
             }
+            #[cfg(test)]
+            self.waits.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             making = self.made.wait(making).unwrap_or_else(PoisonError::into_inner);
         }
     }
@@ -714,8 +737,8 @@ fn beam_for(input: &Input, light: &Light, effects: &Effects, rig: &Rig, draft: b
     }
     let plane_key = |coarse: bool| hashed(|h| std::hash::Hash::hash(&(5u8, beam_key(input, light, effects, coarse)), h));
     // (the release's full beam: another render making it now is waited for, as for the shading; a render holds one such claim
-    // at a time, so two never wait on each other)
-    let _making = if draft {
+    // at a time, so two never wait on each other; a render that keeps nothing never claims, `Memo::claim`)
+    let _making = if draft || !keep {
         if let Some(l) = BEAM_LOBES.get(plane_key(false)) {
             return Some((l, false));
         }
@@ -980,9 +1003,17 @@ pub fn shading_for(input: &Input, scene: &Scene, ev: f64, draft: bool) -> (u64, 
 /// [`shading_for`], keeping what it makes when `keep`.
 fn shading_in(input: &Input, scene: &Scene, ev: f64, draft: bool, keep: bool) -> (u64, Arc<Shading>) {
     let key = shading_key(input, scene, ev, draft);
-    let _making = match MEMO.claim(key) {
-        Claim::Kept(sh) => return (key, sh),
-        Claim::Make(m) => m,
+    // (a render that keeps nothing, `Tier::Small`, never claims: one waiting for it would get nothing, `Memo::claim`)
+    let _making = if keep {
+        match MEMO.claim(key) {
+            Claim::Kept(sh) => return (key, sh),
+            Claim::Make(m) => Some(m),
+        }
+    } else {
+        if let Some(sh) = MEMO.get(key) {
+            return (key, sh);
+        }
+        None
     };
     let t = crate::profiling().then(std::time::Instant::now);
     let rigs: Vec<Rig> = scene.lights.iter().take(MAX_SCENE).map(|l| input.field.rig(l, scene.darken, ev)).collect();
@@ -1173,11 +1204,21 @@ mod tests {
     #[test]
     fn a_value_being_made_is_waited_for_and_a_dropped_claim_frees_its_key() {
         // issue #374: two renders asking for the same value make it once; one that keeps nothing lets the other make it
+        use std::sync::atomic::Ordering;
         let memo: Arc<Memo<u8>> = Arc::new(Memo::new(4));
-        let waiter = |memo: &Arc<Memo<u8>>| {
+        let hang_guard = std::time::Duration::from_secs(30);
+        // (until the second claim is waiting: polled, never timed; the guard only stops a hang)
+        let waiting = |memo: &Memo<u8>, n: usize| {
+            let start = std::time::Instant::now();
+            while memo.waits.load(Ordering::SeqCst) < n {
+                assert!(start.elapsed() < hang_guard, "the second claim never waited");
+                std::thread::yield_now();
+            }
+        };
+        let claim_on_a_thread = |memo: &Arc<Memo<u8>>, key: u64| {
             let (memo, (tx, rx)) = (memo.clone(), std::sync::mpsc::channel());
             std::thread::spawn(move || {
-                let got = match memo.claim(7) {
+                let got = match memo.claim(key) {
                     Claim::Kept(v) => Some(*v),
                     Claim::Make(_) => None,
                 };
@@ -1186,18 +1227,26 @@ mod tests {
             rx
         };
         let Claim::Make(making) = memo.claim(7) else { panic!("nothing is kept yet") };
-        let rx = waiter(&memo);
+        let rx = claim_on_a_thread(&memo, 7);
+        waiting(&memo, 1);
         memo.put(7, Arc::new(42));
         drop(making);
-        assert_eq!(rx.recv_timeout(std::time::Duration::from_secs(30)), Ok(Some(42)), "the second takes what the first made");
+        assert_eq!(rx.recv_timeout(hang_guard), Ok(Some(42)), "the second takes what the first made");
         let Claim::Make(making) = memo.claim(8) else { panic!("nothing is kept for 8") };
-        let (memo8, (tx, rx)) = (memo.clone(), std::sync::mpsc::channel());
+        let rx = claim_on_a_thread(&memo, 8);
+        waiting(&memo, 2);
+        drop(making);
+        assert_eq!(rx.recv_timeout(hang_guard), Ok(None), "a claim dropped without a value frees the key");
+        // (on a rayon worker a claim never waits: a `join` there asking for a key its own render is making would hang)
+        let Claim::Make(making) = memo.claim(9) else { panic!("nothing is kept for 9") };
+        let pool = rayon::ThreadPoolBuilder::new().num_threads(1).build().expect("a one-thread pool");
+        let (on_worker, (tx, rx)) = (memo.clone(), std::sync::mpsc::channel());
         std::thread::spawn(move || {
-            let made = matches!(memo8.claim(8), Claim::Make(_));
+            let made = pool.install(|| matches!(on_worker.claim(9), Claim::Make(_)));
             let _ = tx.send(made);
         });
+        assert_eq!(rx.recv_timeout(hang_guard), Ok(true), "a rayon worker makes it at once");
         drop(making);
-        assert_eq!(rx.recv_timeout(std::time::Duration::from_secs(30)), Ok(true), "a claim dropped without a value frees the key");
     }
 
     #[test]
