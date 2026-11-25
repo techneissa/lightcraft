@@ -15,6 +15,7 @@
 
 pub mod dates;
 mod delta;
+mod delta_strokes;
 pub mod exif_override;
 #[cfg(not(target_arch = "wasm32"))]
 #[doc(hidden)]
@@ -1535,6 +1536,8 @@ mod tests_album_loops;
 mod tests_album_order;
 #[cfg(test)]
 mod tests_background;
+#[cfg(test)]
+mod tests_delta_strokes;
 #[cfg(test)]
 mod tests_folder_records;
 #[cfg(test)]
