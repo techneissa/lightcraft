@@ -360,17 +360,10 @@ pub fn rect(w: &PixelWindow) -> Rect {
 
 /// Key of the spots' finished pixels at a scale: the whole frame and its size, what the image before the spots
 /// depends on (as `spots_keep::key` and [`crate::Plan::pre_retouch_key`] hold it) and the spots, never the window.
-/// `(draft, after_wb)`: a draft render, and the Classic spots drawn after the white balance ([`crate::Plan::spots_after_wb`]).
-pub fn key(
-    info: &SourceInfo,
-    s: &DevelopSettings,
-    frame: &Frame,
-    (w, h): (usize, usize),
-    ppl: f64,
-    longs: (usize, usize),
-    (draft, after_wb): (bool, bool),
-) -> u64 {
-    let learned = s.spots.iter().any(crate::spots_learned::is_learned);
+/// `after_wb`: the Classic spots drawn after the white balance ([`crate::Plan::spots_after_wb`]). A draft's spots are
+/// a full render's (issue #372): a draft whose LaMa spot had no fill keeps none of them
+/// ([`crate::spots_keep::lin_cpu_pre_retouch`]).
+pub fn key(info: &SourceInfo, s: &DevelopSettings, frame: &Frame, (w, h): (usize, usize), ppl: f64, longs: (usize, usize), after_wb: bool) -> u64 {
     crate::hash_of((
         format!("{frame:?}"),
         (w, h),
@@ -381,8 +374,6 @@ pub fn key(
         format!("{:?}", s.optics),
         crate::spots_keep::pre_spot_sections(s),
         format!("{:?}", s.spots),
-        // a draft may show a LaMa spot with the Classic fill; a full render must not take it
-        draft && learned,
     ))
 }
 

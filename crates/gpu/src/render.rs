@@ -62,6 +62,11 @@ struct Entry {
     /// device buffer), and the boxes the retouching of `lin` may have written (`None`: anywhere; empty without it).
     pre_retouch: Option<crate::pre_retouch::PreRetouch>,
     retouch_boxes: Option<Vec<lightcraft_pipeline::spots_keep::Rect>>,
+    /// Issue #372 (`draft_from`): the plan's `shape` and size, and whether `lin` is a full render's image (not one a
+    /// draft alone may take), so a draft at another size can be made from it.
+    shape: Option<u64>,
+    size: (usize, usize),
+    full: bool,
 }
 
 /// Spatial planes of one linear image (`key` = its `lin_key`), each tagged with its radius.
@@ -98,8 +103,10 @@ impl GpuStages {
             o.pre_retouch = None;
         }
         v.push(e);
+        // (a drag's drafts never push out the full render's image: issue #372)
         while v.len() > CAPACITY {
-            v.remove(0);
+            let at = draft_from::to_drop(&v);
+            v.remove(at);
         }
     }
 
@@ -852,7 +859,7 @@ pub fn render(
         }
         None => cx.flush(),
     };
-    let plan = lightcraft_pipeline::plan_kept(src, info, s, req, stages.map(|g| &g.spot_finals.0));
+    let mut plan = lightcraft_pipeline::plan_kept(src, info, s, req, stages.map(|g| &g.spot_finals.0));
     let (w, h) = (plan.w, plan.h);
     let Some(n) = w.checked_mul(h).filter(|n| n.checked_mul(12).is_some()) else {
         fail(FailKind::Limit, format!("{w}×{h} output is too large"));
@@ -869,8 +876,11 @@ pub fn render(
         );
         return None;
     }
-    let s = &*plan.settings;
     let cached = stages.and_then(|c| c.get(src, plan.geo));
+    // a drag's draft takes the linear image a full render kept, or one made from it (issue #372)
+    let larger = draft_from::adopt(stages, src, &mut plan, cached.as_ref());
+    let plan = plan;
+    let s = &*plan.settings;
     // the view's last render at this size, when this one differs from it only in its spots (issue #111)
     crate::dirty::note_frame(None);
     let rest = stages
@@ -913,7 +923,8 @@ pub fn render(
 
     // 2. white balance, defringe, spots, noise reduction
     let at = ViewAt { stages, src, cached: cached.as_ref(), start: start.as_ref() };
-    let Linear { lin, tiles: t_lin, post, colour_noise, pre_retouch, retouch_boxes } = linear_stage(&mut cx, &at, &sampled, info, &plan, &mut host);
+    let Linear { lin, tiles: t_lin, post, colour_noise, pre_retouch, retouch_boxes } =
+        linear_or_drafted(&mut cx, (&at, larger.as_ref()), &sampled, info, &plan, &mut host);
     lap("wb/nr", &mut t, &mut cx);
     // (a Portrait slider's ⌥-drag map retouches the image before the step again: the one kept on the device)
     let effect_pre = effect_pre(&mut cx, req.overlay, pre_retouch.as_ref(), &plan);
@@ -935,6 +946,9 @@ pub fn render(
             last: None,
             pre_retouch,
             retouch_boxes,
+            shape: plan.shape,
+            size: (w, h),
+            full: plan.lin_key == plan.full_keys.lin,
         });
     }
 
@@ -1217,6 +1231,26 @@ struct Linear {
     retouch_boxes: Option<Vec<lightcraft_pipeline::spots_keep::Rect>>,
 }
 
+/// [`linear_stage`], or for a draft made from a full render's image at a larger size (`larger`, `draft_from`), that
+/// image resampled: no spots kept with it, no noise model, no image before the retouching, and its retouching may have
+/// written anywhere.
+fn linear_or_drafted(
+    cx: &mut Cx<'_>,
+    (at, larger): (&ViewAt<'_>, Option<&draft_from::Larger>),
+    sampled: &Buf,
+    info: &SourceInfo,
+    plan: &Plan<'_>,
+    host: &mut Host,
+) -> Linear {
+    match larger {
+        Some(l) => {
+            let lin = draft_from::resample(cx, l, plan);
+            Linear { lin, tiles: None, post: std::sync::Weak::new(), colour_noise: None, pre_retouch: None, retouch_boxes: None }
+        }
+        None => linear_stage(cx, at, sampled, info, plan, host),
+    }
+}
+
 /// The white-balanced, retouched, denoised image and what goes with it ([`Linear`]).
 fn linear_stage(cx: &mut Cx<'_>, at: &ViewAt<'_>, sampled: &Buf, info: &SourceInfo, plan: &Plan<'_>, host: &mut Host) -> Linear {
     let (src, size) = (at.src, (plan.w, plan.h));
@@ -1230,6 +1264,7 @@ fn linear_stage(cx: &mut Cx<'_>, at: &ViewAt<'_>, sampled: &Buf, info: &SourceIn
         let pre_retouch = at.cached.and_then(|e| e.pre_retouch.clone());
         return Linear { lin: b, tiles: same, post: old_post, colour_noise, pre_retouch, retouch_boxes: old_retouch };
     }
+    draft_from::note_linear();
     if colour_noise.is_none() {
         colour_noise = lightcraft_pipeline::colour_noise(src, info, plan).map(|n| (plan.noise_key, n));
         if let (Some(g), Some(n)) = (at.stages, colour_noise) {
@@ -2019,6 +2054,10 @@ fn prepare(cx: &mut Cx<'_>, lin: &Buf, plan: &Plan<'_>, req: &RenderRequest, pla
 }
 
 // (fork, `fork/retouch-reshape.md`)
+#[path = "render/draft_from.rs"]
+mod draft_from;
+pub use draft_from::{drafts_resampled, linear_stages_made};
+
 #[cfg(test)]
 #[path = "render/tests_reshape.rs"]
 mod tests_reshape;
