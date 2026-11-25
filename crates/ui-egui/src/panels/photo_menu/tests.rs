@@ -102,7 +102,7 @@ fn rows_move_insert_and_are_removed() {
 }
 
 /// The official menu ([`crate::panels::grid::context_menu`]) and this one in its default
-/// arrangement show the same top-level rows in the same order, but for the two this one adds. A
+/// arrangement show the same top-level rows in the same order, but for the ones this one adds. A
 /// row the official menu gains in an update fails this test: add it to `items::BUILTINS` and
 /// `DEFAULT`. (Submenus are closed here: a change inside one is not seen.)
 #[test]
@@ -115,6 +115,8 @@ fn the_default_menu_is_the_official_one_plus_before_after_and_customize() {
         crate::i18n::tr("Before/After Split").to_string(),
         crate::i18n::tr("Customize Menu…").to_string(),
         crate::i18n::tr("Add to Book").to_string(),
+        crate::i18n::tr("Copy Masks").to_string(),
+        crate::i18n::tr("Paste Masks").to_string(),
     ];
     let ours: Vec<String> = ours.into_iter().filter(|t| !added.contains(t)).collect();
     assert_eq!(ours, official);

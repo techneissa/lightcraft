@@ -180,10 +180,9 @@ pub(crate) fn merge_settings_for_photo(
     Ok(out)
 }
 
-/// `v` as a list of numbers; `None` unless it is an array of nothing but numbers.
-/// The ops that merge `partial` into each of `ids`' settings (Paste, Paste from Previous, Sync), each AI mask part
+/// The ops that merge `partial` into each of `ids`' settings (Paste, Paste from Previous, Sync, Paste Masks), each AI mask part
 /// waiting to be found on that photo, unless it has the same part found already (fork, `fork/adaptive-masks.md`).
-fn pasted(s: &mut Session, ids: &[PhotoId], partial: &Value, label: &str) -> Vec<Op> {
+pub(super) fn pasted(s: &mut Session, ids: &[PhotoId], partial: &Value, label: &str) -> Vec<Op> {
     let mut ops = Vec::new();
     for &id in ids {
         let Some(d) = s.develop_of(id) else { continue };
@@ -200,6 +199,7 @@ fn queue_denoise_given(s: &mut Session, ids: &[PhotoId], partial: &Value) {
     }
 }
 
+/// `v` as a list of numbers; `None` unless it is an array of nothing but numbers.
 fn numbers(v: Option<&Value>) -> Option<Vec<f64>> {
     v?.as_array()?.iter().map(Value::as_f64).collect()
 }

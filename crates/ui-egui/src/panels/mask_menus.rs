@@ -4,6 +4,7 @@
 
 use egui::vec2;
 use lightcraft_develop::{Mask, MaskOp};
+use lightcraft_engine::cmd::mask_clipboard;
 use serde_json::{Value, json};
 
 use super::mask_parts::{add_part, op_name};
@@ -96,6 +97,9 @@ pub fn mask_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, id: u32, name: &str
     let can_paste = app.session.mask_effect_clipboard.is_some();
     run(app, ui, menu_label("Copy Mask Effect"), true, "mask.copyEffect", json!({"id": id}));
     run(app, ui, menu_label("Paste Mask Effect"), can_paste, "mask.pasteEffect", json!({"id": id}));
+    // (fork, issue #365: all of the photo's masks, to other photos)
+    run(app, ui, menu_label("Copy Masks"), mask_clipboard::can_copy(&app.session).is_ok(), "mask.copyAll", json!({}));
+    run(app, ui, menu_label("Paste Masks"), mask_clipboard::can_paste(&app.session).is_ok(), "mask.pasteAll", json!({}));
     // (fork, issue #329: the mask as a preset to add to other photos; the name is typed in the Mask Presets list)
     let b = ui.button(crate::i18n::tr("Save Mask as Preset…"));
     register(ui, "maskMenu:savePreset", b.rect);

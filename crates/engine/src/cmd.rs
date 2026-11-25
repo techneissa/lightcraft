@@ -46,6 +46,7 @@ pub mod lut_profiles;
 pub mod macos_colour;
 pub mod manage;
 mod map;
+pub mod mask_clipboard;
 pub mod mask_effect_files;
 pub mod mask_effects;
 mod mask_invert;
@@ -216,6 +217,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(macos_colour::specs());
         v.extend(dcp_profiles::specs());
         v.extend(mask_effects::specs());
+        v.extend(mask_clipboard::specs());
         v.extend(mask_multi::specs());
         v.extend(mask_recolor::specs());
         v.extend(cull::specs());

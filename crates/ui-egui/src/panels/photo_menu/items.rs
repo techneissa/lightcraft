@@ -3,6 +3,7 @@
 //! can be reordered, plus Before/After Split and Customize Menu….
 
 use lightcraft_catalog::PhotoId;
+use lightcraft_engine::cmd::mask_clipboard;
 use serde_json::json;
 
 use crate::LightcraftApp;
@@ -61,6 +62,8 @@ pub const BUILTINS: &[Builtin] = &[
     item("copySettings", "Copy Edit Settings"),
     item("pasteSettings", "Paste Edit Settings"),
     item("pasteSelected", "Paste Selected Settings…"),
+    item("copyMasks", "Copy Masks"),
+    item("pasteMasks", "Paste Masks"),
     item("resetEdits", "Reset Edits"),
     several_submenu("photoMerge", "Photo Merge"),
     item("rotateLeft", "Rotate Left"),
@@ -129,9 +132,8 @@ pub fn draw(app: &mut LightcraftApp, ui: &mut egui::Ui, b: &Builtin, id: PhotoId
             draw_meta_items(app, ui, b, id, &text)
         }
         "rename" | "moveToFolder" | "reload" | "virtualCopy" | "createVersion" | "stack" => draw_file_items(app, ui, b, id, &text),
-        "copySettings" | "pasteSettings" | "pasteSelected" | "resetEdits" | "photoMerge" | "rotateLeft" | "rotateRight" => {
-            draw_edit_items(app, ui, b, &text)
-        }
+        "copySettings" | "pasteSettings" | "pasteSelected" | "copyMasks" | "pasteMasks" | "resetEdits" | "photoMerge" | "rotateLeft"
+        | "rotateRight" => draw_edit_items(app, ui, b, &text),
         "locateMissing" | "showInFinder" | "showInFolders" | "export" | "exportWithPreset" | "exportAnimatedGif" | "delete" | "customize" => {
             draw_export_items(app, ui, b, id, &text)
         }
@@ -331,6 +333,17 @@ fn draw_edit_items(app: &mut LightcraftApp, ui: &mut egui::Ui, b: &Builtin, text
         "pasteSelected" => {
             if ui.add_enabled(app.session.clipboard.is_some(), egui::Button::new(text)).clicked() {
                 let _ = app.run("dialog.pasteSettings", json!({}));
+            }
+        }
+        // (fork, issue #365)
+        "copyMasks" => {
+            if ui.add_enabled(mask_clipboard::can_copy(&app.session).is_ok(), egui::Button::new(text)).clicked() {
+                let _ = app.run("mask.copyAll", json!({}));
+            }
+        }
+        "pasteMasks" => {
+            if ui.add_enabled(mask_clipboard::can_paste(&app.session).is_ok(), egui::Button::new(text)).clicked() {
+                let _ = app.run("mask.pasteAll", json!({}));
             }
         }
         "resetEdits" => {
