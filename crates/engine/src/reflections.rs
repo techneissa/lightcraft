@@ -17,11 +17,20 @@ mod shared_models;
 pub mod tiles;
 
 const MAGIC: &[u8; 8] = tiles::MAGIC_V1;
-type Mix = (Reflection, Weak<Rgb32f>, Arc<Rgb32f>);
+/// A corrected picture: the settings, the picture it corrects and the result, both held weakly.
+type Mix = (Reflection, Weak<Rgb32f>, Weak<Rgb32f>);
+/// Most corrected pictures [`Cache::mix`] remembers.
+const MIXES: usize = 8;
 #[derive(Default)]
 struct Cache {
     grids: HashMap<String, Arc<Vec<tiles::Tile>>>,
-    mix: Option<Mix>,
+    /// The corrected pictures still alive, one per source picture (the loupe's, a thumbnail's, a draft's): renders of
+    /// the same picture get the same image, so the view's kept stages, keyed by the image, stay valid. A thumbnail render
+    /// between two loupe renders used to replace the one remembered, and the loupe's next render corrected the photo
+    /// again and redid every GPU stage, the retouching included (issue #373).
+    mix: Vec<Mix>,
+    /// The last corrected picture, held so it outlives its render (as the single cached one always did).
+    last: Option<Arc<Rgb32f>>,
 }
 static CACHE: OnceLock<Mutex<Cache>> = OnceLock::new();
 
@@ -54,11 +63,13 @@ pub fn apply(
     {
         return Err("Invalid reflection protection area".into());
     }
-    if let Some((settings, input, output)) = &cache.mix
-        && settings == r
-        && input.upgrade().is_some_and(|x| Arc::ptr_eq(&x, src))
-    {
-        return Ok(output.clone());
+    let kept = cache
+        .mix
+        .iter()
+        .filter(|(settings, input, _)| settings == r && input.upgrade().is_some_and(|x| Arc::ptr_eq(&x, src)))
+        .find_map(|(_, _, output)| output.upgrade());
+    if let Some(output) = kept {
+        return Ok(output);
     }
     let grid = match cache.grids.get(&r.correction) {
         Some(g) => g.clone(),
@@ -102,7 +113,13 @@ pub fn apply(
         }
     }
     let image = Arc::new(image);
-    cache.mix = Some((r.clone(), Arc::downgrade(src), image.clone()));
+    // (a picture gone, or this one corrected with other settings, is dropped)
+    cache.mix.retain(|(_, input, output)| output.strong_count() > 0 && input.upgrade().is_some_and(|x| !Arc::ptr_eq(&x, src)));
+    if cache.mix.len() >= MIXES {
+        cache.mix.remove(0);
+    }
+    cache.mix.push((r.clone(), Arc::downgrade(src), Arc::downgrade(&image)));
+    cache.last = Some(image.clone());
     Ok(image)
 }
 
@@ -265,6 +282,28 @@ mod tests {
         assert!(apply(&src, &r, Some(Hash128(456)), None).is_err());
         r.amount = 0.0;
         assert!(Arc::ptr_eq(&src, &apply(&src, &r, key, None).unwrap()));
+        std::fs::remove_file(path).unwrap();
+    }
+    /// Issue #373: a thumbnail corrected between two loupe renders leaves the loupe's corrected picture as it was, so
+    /// the view's kept stages (keyed by that picture) still serve its next render.
+    #[test]
+    fn a_thumbnail_between_two_loupe_renders_keeps_the_loupes_corrected_picture() {
+        let path = std::env::temp_dir().join(format!("lc-reflection-mixes-{}", std::process::id()));
+        grid(&path, 0.2);
+        let key = Some(Hash128(321));
+        let mut r =
+            Reflection { enabled: true, correction: path.to_string_lossy().into(), source_key: identity(key), amount: 50.0, ..Default::default() };
+        let loupe = Arc::new(Rgb32f::filled(4, 4, [0.5, 0.5, 0.5]));
+        let thumb = Arc::new(Rgb32f::filled(2, 2, [0.5, 0.5, 0.5]));
+        let first = apply(&loupe, &r, key, None).unwrap();
+        let small = apply(&thumb, &r, key, None).unwrap();
+        assert_eq!(small.width, 2);
+        assert!(Arc::ptr_eq(&first, &apply(&loupe, &r, key, None).unwrap()), "the loupe's picture is the one corrected before");
+        // (other settings: corrected again, never the old picture)
+        r.amount = 100.0;
+        let stronger = apply(&loupe, &r, key, None).unwrap();
+        assert!(!Arc::ptr_eq(&first, &stronger));
+        assert!(stronger.data[0][0] < first.data[0][0]);
         std::fs::remove_file(path).unwrap();
     }
     #[test]
