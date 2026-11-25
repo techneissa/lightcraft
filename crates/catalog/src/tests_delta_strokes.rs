@@ -70,6 +70,12 @@ fn brush_edit_patches_are_the_whole_json_diff() {
     });
     push(&mut |d| strokes(d, 0)[5].pressure = vec![0.5f32; 40].into());
     push(&mut |d| strokes(d, 0)[6].size = 0.07);
+    // each other field changes on a stroke that keeps its points (as a pasted copy with Erase flipped does)
+    push(&mut |d| strokes(d, 0)[7].erase = !strokes(d, 0)[7].erase);
+    push(&mut |d| strokes(d, 0)[7].auto_mask = !strokes(d, 0)[7].auto_mask);
+    push(&mut |d| strokes(d, 0)[7].feather = 12.0);
+    push(&mut |d| strokes(d, 0)[7].flow = 33.0);
+    push(&mut |d| strokes(d, 0)[7].density = 44.0);
     // Lens Blur's brushes; a mask's brush replaced by a gradient; a mask removed
     push(&mut |d| d.lens_blur.focus_strokes.push(stroke(70)));
     push(&mut |d| d.lens_blur.blur_strokes = vec![stroke(71), stroke(72)]);
