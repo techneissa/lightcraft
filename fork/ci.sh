@@ -14,6 +14,7 @@
 #   fork/ci.sh --part 1/10        group 1 of ten: the one-off steps and its share of the tests (the default)
 #   fork/ci.sh --part 2/10        the second group
 #   fork/ci.sh --part 1/10 --print print the commands without running them
+#   python3 -I fork/coverage.py    does this checkout test the same as mine/custom, each thing once? (no build)
 #   FORK_CI_FULL=1 fork/ci.sh --part 1/10    the whole workspace on a pull request too
 #   FORK_CI_FULL=0 GITHUB_EVENT_NAME=pull_request GITHUB_BASE_REF=custom fork/ci.sh --part 1/10 --print   a pull request
 set -eu
@@ -44,6 +45,11 @@ eval "$(printf '%s\n' "$changed" | python3 -I fork/affected.py $full --sh --part
 echo "=== fork ci: part $part, scope: $SCOPE${SHARD:+, shards: $SHARD}"
 # which shards of a split crate's tests this group runs (read by fork/skip-known-failures.sh)
 export FORK_TEST_SHARD="$SHARD"
+# The runner notes each binary it split here. No note means every shard group ran the whole suite, as it did from
+# Rust 1.100 on (#386): the build folder had moved and nothing failed.
+FORK_SHARD_MARK="$(mktemp)"
+export FORK_SHARD_MARK
+trap 'rm -f "$FORK_SHARD_MARK"' EXIT
 
 export RUST_TEST_THREADS="${RUST_TEST_THREADS:-4}"
 started=$(date +%s)
@@ -81,6 +87,7 @@ fi
 # shellcheck disable=SC2086
 if [ -n "$PACKAGES" ]; then
   step test cargo test $PACKAGES $FEATURES --lib --bins --tests
+  if [ -n "$SHARD" ]; then step sharded test -s "$FORK_SHARD_MARK"; fi
 fi
 # shellcheck disable=SC2086
 if [ -n "$DOC_PACKAGES" ]; then
