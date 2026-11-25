@@ -162,7 +162,7 @@ fn remap(m: &mut Mask, fwd: &dyn Fn(Point) -> Point, back: &dyn Fn(Point) -> Poi
             MaskShape::Linear { .. } | MaskShape::Radial { .. } => {}
             MaskShape::Brush { strokes } => {
                 for s in strokes {
-                    s.points.iter_mut().for_each(|p| *p = fwd(*p));
+                    s.points = s.points.iter().map(|p| fwd(*p)).collect();
                 }
             }
             MaskShape::Object { hint, exclude, seg, detail, .. } => {
@@ -308,7 +308,7 @@ mod tests {
     fn a_quarter_turn_turns_every_place_a_mask_keeps() {
         let p = Point::new(0.2, 0.3);
         let mut m = mask(MaskShape::Radial { center: p, rx: 0.1, ry: 0.05, angle: 10.0, feather: 50.0, invert: false });
-        m.components.push(comp(MaskShape::Brush { strokes: vec![BrushStroke { points: vec![p], ..Default::default() }] }));
+        m.components.push(comp(MaskShape::Brush { strokes: vec![BrushStroke { points: vec![p].into(), ..Default::default() }] }));
         m.components.push(comp(object_at(p)));
         turn(&mut m, Orientation::Rotate90);
         // a quarter turn clockwise: (x, y) → (1 − y, x)

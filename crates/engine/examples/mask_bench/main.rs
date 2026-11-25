@@ -88,7 +88,7 @@ fn stroke(rng: &mut Rng, kind: Kind, erase: bool) -> BrushStroke {
     }
     let pressure =
         if kind == Kind::Pressure { (0..points).map(|i| 0.25 + 0.75 * ((i as f32 * 0.6).sin() * 0.5 + 0.5)).collect() } else { Vec::new() };
-    BrushStroke { points: path, size, erase, auto_mask: kind == Kind::Auto, pressure, ..BrushStroke::default() }
+    BrushStroke { points: path.into(), size, erase, auto_mask: kind == Kind::Auto, pressure: pressure.into(), ..BrushStroke::default() }
 }
 
 fn strokes(rng: &mut Rng, kind: Kind, n: usize) -> Vec<BrushStroke> {
@@ -331,7 +331,7 @@ fn overlapping_masks(count: usize, small: bool, brush: bool) -> DevelopSettings 
             (false, false) => MaskShape::Radial { center: Point::new(0.5 + shift, 0.33), rx: 2.0, ry: 2.0, angle: 0.0, feather: 50.0, invert: false },
             (true, true) => {
                 let blob = BrushStroke {
-                    points: vec![Point::new(0.49 + shift, 0.33), Point::new(0.52 + shift, 0.34)],
+                    points: vec![Point::new(0.49 + shift, 0.33), Point::new(0.52 + shift, 0.34)].into(),
                     size: 0.02,
                     ..BrushStroke::default()
                 };

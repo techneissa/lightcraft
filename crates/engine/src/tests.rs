@@ -93,6 +93,7 @@ mod retouch_background;
 mod saved_locations;
 mod segment;
 mod settings_files;
+mod shared_strokes;
 mod shelved_folder;
 mod sidecar_queue;
 mod slide;
@@ -533,7 +534,7 @@ fn connected_brush_strokes_start_where_the_last_one_ended() {
     assert_eq!(r["connected"], true);
     let line = strokes(&s);
     assert_eq!(line.len(), 2);
-    assert_eq!(line[1].points, vec![Point::new(0.2, 0.5), Point::new(0.6, 0.5)]);
+    assert_eq!(line[1].points, vec![Point::new(0.2, 0.5), Point::new(0.6, 0.5)].into());
     // a bigger, softer brush: the segment tapers from the last stroke's values to the new ones
     let r = s.execute("mask.brushStroke", &json!({"points": [[0.6, 0.9]], "size": 0.04, "feather": 80, "connect": true})).unwrap();
     assert_eq!(r["connected"], true);
@@ -567,7 +568,7 @@ fn brush_strokes_keep_pen_pressure_and_refuse_bad_lists() {
     s.execute("mask.add", &json!({"kind": "brush"})).unwrap();
     s.execute("mask.brushStroke", &json!({"points": [[0.2, 0.2], [0.3, 0.3]], "pressure": [0.25, 7.0]})).unwrap();
     let lightcraft_develop::MaskShape::Brush { strokes } = &active_dev(&s).masks[0].components[0].shape else { panic!("a brush") };
-    assert_eq!(strokes[0].pressure, vec![0.25, 1.0], "kept, clamped to 0..1");
+    assert_eq!(strokes[0].pressure, vec![0.25, 1.0].into(), "kept, clamped to 0..1");
     for bad in [json!([0.5, 0.5, 0.5]), json!("hard"), json!([0.5, "x"])] {
         assert!(s.execute("mask.brushStroke", &json!({"points": [[0.2, 0.2], [0.3, 0.3]], "pressure": bad})).is_err(), "{bad}");
     }
@@ -592,7 +593,7 @@ fn connected_brush_strokes_carry_pen_pressure() {
     };
     s.execute("mask.brushStroke", &json!({"points": [[0.2, 0.5]], "size": 0.02, "pressure": [0.4]})).unwrap();
     s.execute("mask.brushStroke", &json!({"points": [[0.6, 0.5]], "size": 0.02, "pressure": [1.0], "connect": true})).unwrap();
-    assert_eq!(strokes(&s)[1].pressure, vec![0.4, 1.0]);
+    assert_eq!(strokes(&s)[1].pressure, vec![0.4, 1.0].into());
     s.execute("mask.brushStroke", &json!({"points": [[0.6, 0.9]], "size": 0.04, "pressure": [0.2], "connect": true})).unwrap();
     let taper = &strokes(&s)[2..];
     assert!(taper.iter().all(|t| t.pressure.len() == 2));

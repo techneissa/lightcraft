@@ -86,10 +86,11 @@ pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<HistoryStep>, 
     // the step before as JSON, as written
     let mut prev: Option<Value> = None;
     for (i, s) in steps.into_iter().enumerate() {
+        let earlier = out.last().map(|l| &l.settings);
         let settings = match (s.settings, s.patch) {
-            (None, Some(Patch::Same)) if prev.is_some() => out.last().map(|l| l.settings.clone()),
-            (Some(v), _) => typed(v, &mut prev).ok(),
-            (None, Some(patch)) => prev.take().and_then(|mut v| delta::apply(&mut v, &patch).ok().and_then(|()| typed(v, &mut prev).ok())),
+            (None, Some(Patch::Same)) if prev.is_some() => earlier.cloned(),
+            (Some(v), _) => typed(v, &mut prev, earlier).ok(),
+            (None, Some(patch)) => prev.take().and_then(|mut v| delta::apply(&mut v, &patch).ok().and_then(|()| typed(v, &mut prev, earlier).ok())),
             (None, None) => None,
         };
         let Some(settings) = settings else {
@@ -102,11 +103,16 @@ pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<HistoryStep>, 
     Ok(out)
 }
 
-/// The settings `v` holds; `v` becomes the step before.
-fn typed(v: Value, prev: &mut Option<Value>) -> Result<Arc<DevelopSettings>, serde_json::Error> {
-    let s = Arc::new(DevelopSettings::deserialize(&v)?);
+/// The settings `v` holds, its brush strokes sharing the points of the same strokes in the step before (`earlier`):
+/// a History of a photo painted with many strokes holds each stroke once, as it does while painting (issue #370).
+/// `v` becomes the step before.
+fn typed(v: Value, prev: &mut Option<Value>, earlier: Option<&Arc<DevelopSettings>>) -> Result<Arc<DevelopSettings>, serde_json::Error> {
+    let mut s = DevelopSettings::deserialize(&v)?;
+    if let Some(e) = earlier {
+        s.share_strokes_with(e);
+    }
     *prev = Some(v);
-    Ok(s)
+    Ok(Arc::new(s))
 }
 
 #[cfg(test)]
@@ -136,6 +142,39 @@ mod tests {
         let back: Photo = serde_json::from_str(&text).unwrap();
         assert_eq!(back, p);
         assert!(Arc::ptr_eq(&back.history[0].settings, &back.history[1].settings), "an unchanged step shares its settings");
+    }
+
+    /// A painted History saved and read again is the same History, and its steps share the strokes they have in
+    /// common, as they did before it was saved (issue #370).
+    #[test]
+    fn a_painted_history_round_trips_and_shares_its_strokes() {
+        use lightcraft_develop::{BrushStroke, Mask, MaskComponent, MaskShape};
+        use lightcraft_geom::Point;
+        let mut strokes = Vec::new();
+        let mut steps = Vec::new();
+        for k in 0..4 {
+            let y = 0.1 * f64::from(k);
+            strokes.push(BrushStroke {
+                points: vec![Point::new(0.1, y), Point::new(0.9, -y)].into(),
+                pressure: vec![0.5, 1.0].into(),
+                ..Default::default()
+            });
+            let part = MaskComponent { name: None, op: Default::default(), invert: false, shape: MaskShape::Brush { strokes: strokes.clone() } };
+            let d = DevelopSettings { masks: vec![Mask { id: 1, components: vec![part], ..Default::default() }], ..Default::default() };
+            steps.push(HistoryStep { label: "Brush".into(), settings: Arc::new(d) });
+        }
+        let p = photo(steps);
+        let back: Photo = serde_json::from_str(&serde_json::to_string(&p).unwrap()).unwrap();
+        assert_eq!(back, p);
+        let first = |s: &HistoryStep| match &s.settings.masks[0].components[0].shape {
+            MaskShape::Brush { strokes } => Some((strokes[0].points.clone(), strokes[0].pressure.clone())),
+            _ => None,
+        };
+        let (points, pressure) = first(&back.history[0]).unwrap();
+        for step in &back.history[1..] {
+            let (p2, q2) = first(step).unwrap();
+            assert!(Arc::ptr_eq(&points, &p2) && Arc::ptr_eq(&pressure, &q2), "the first stroke is held once");
+        }
     }
 
     #[test]

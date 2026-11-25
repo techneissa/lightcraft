@@ -95,7 +95,7 @@ impl Hasher for Words {
 /// Hash stroke `s` into `h`: every field, point and pressure sample.
 pub(super) fn stroke(h: &mut Words, s: &BrushStroke) {
     h.word(s.points.len() as u64);
-    for p in &s.points {
+    for p in s.points.iter() {
         h.point(p);
     }
     [s.size, s.feather, s.flow, s.density].iter().for_each(|v| h.f(*v));

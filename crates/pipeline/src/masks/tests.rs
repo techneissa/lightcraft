@@ -238,7 +238,7 @@ fn a_stroke_is_built_only_as_far_as_the_caller_will_look() {
     // Twenty long sweeps across the output: tens of thousands of dabs between them.
     let points: Vec<Point> =
         (0..20).map(|i| if i % 2 == 0 { Point::new(0.02, 0.02 + i as f64 * 0.04) } else { Point::new(0.98, 0.02 + i as f64 * 0.04) }).collect();
-    let s = BrushStroke { points, size: 0.002, feather: 50.0, flow: 100.0, density: 100.0, ..Default::default() };
+    let s = BrushStroke { points: points.into(), size: 0.002, feather: 50.0, flow: 100.0, density: 100.0, ..Default::default() };
 
     let whole = brush_dabs(&s, &f, 4000, 4000);
     assert!(whole.dabs.len() > 20_000, "the stroke really is large: {}", whole.dabs.len());
@@ -295,11 +295,11 @@ fn a_long_segment_gets_dabs_at_most_the_spacing_apart() {
     // the committed stroke places the same dabs (in output pixels; this frame maps 1:1 scaled)
     let (w, h) = (1000, 500);
     let f = frame(w, h);
-    let stroke = BrushStroke { points: pts.map(|p| Point::new(p.x / w as f64, p.y / h as f64)).to_vec(), ..Default::default() };
+    let stroke = BrushStroke { points: (pts.map(|p| Point::new(p.x / w as f64, p.y / h as f64)).to_vec()).into(), ..Default::default() };
     let committed = brush_dabs(&stroke, &f, w, h);
     let mut again = Vec::new();
     let mut prev = None;
-    for p in &stroke.points {
+    for p in stroke.points.iter() {
         let q = f.norm_to_out(w, h).apply(*p);
         if push_dabs(&mut again, prev, q, committed.r) {
             prev = Some(q);
@@ -382,7 +382,7 @@ fn pen_pressure_scales_dab_size_and_flow() {
     let l = Plane::new(w, h);
     let line = vec![Point::new(0.1, 0.5), Point::new(0.9, 0.5)];
     let alpha = |pressure: Vec<f32>| {
-        let s = BrushStroke { points: line.clone(), size: 0.05, feather: 0.0, flow: 100.0, pressure, ..Default::default() };
+        let s = BrushStroke { points: line.clone().into(), size: 0.05, feather: 0.0, flow: 100.0, pressure: pressure.into(), ..Default::default() };
         shape_alpha(&MaskShape::Brush { strokes: vec![s] }, &f, w, h, &img, &l, 0.0, None)
     };
     let full = alpha(vec![]);
@@ -410,8 +410,8 @@ fn brush_and_subtract() {
     let f = frame(200, 100);
     let img = Rgb32f::new(200, 100);
     let l = Plane::new(200, 100);
-    let stroke = BrushStroke { points: vec![Point::new(0.1, 0.5), Point::new(0.9, 0.5)], size: 0.05, ..Default::default() };
-    let erase = BrushStroke { points: vec![Point::new(0.5, 0.5)], size: 0.05, erase: true, feather: 0.0, ..Default::default() };
+    let stroke = BrushStroke { points: vec![Point::new(0.1, 0.5), Point::new(0.9, 0.5)].into(), size: 0.05, ..Default::default() };
+    let erase = BrushStroke { points: vec![Point::new(0.5, 0.5)].into(), size: 0.05, erase: true, feather: 0.0, ..Default::default() };
     let m = Mask {
         components: vec![MaskComponent { name: None, op: MaskOp::Add, invert: false, shape: MaskShape::Brush { strokes: vec![stroke, erase] } }],
         ..Default::default()
@@ -453,7 +453,7 @@ fn holding_the_brush_still_adds_no_coverage() {
     let l = Plane::new(w, h);
     let p = Point::new(0.5, 0.5);
     let spot = |samples: usize, flow: f64| {
-        let s = BrushStroke { points: vec![p; samples], size: 0.1, feather: 80.0, flow, ..Default::default() };
+        let s = BrushStroke { points: vec![p; samples].into(), size: 0.1, feather: 80.0, flow, ..Default::default() };
         shape_alpha(&MaskShape::Brush { strokes: vec![s] }, &f, w, h, &img, &l, 0.0, None)
     };
     for flow in [100.0, 40.0] {
@@ -466,12 +466,12 @@ fn holding_the_brush_still_adds_no_coverage() {
             assert!(held.data == press.data, "flow {flow}: {n} stationary samples hardened the edge {edge} → {}", held.get(100 + 14, 50));
         }
     }
-    let s = BrushStroke { points: vec![p; 60], size: 0.1, ..Default::default() };
+    let s = BrushStroke { points: vec![p; 60].into(), size: 0.1, ..Default::default() };
     assert_eq!(brush_dabs(&s, &f, w, h).dabs.len(), 1, "one dab for the press");
     // a stroke that pauses partway lays the same dabs as one that doesn't
     let (a, b) = (Point::new(0.2, 0.5), Point::new(0.8, 0.5));
-    let paused = BrushStroke { points: vec![a, p, p, p, p, b], flow: 30.0, ..Default::default() };
-    let smooth = BrushStroke { points: vec![a, p, b], flow: 30.0, ..Default::default() };
+    let paused = BrushStroke { points: vec![a, p, p, p, p, b].into(), flow: 30.0, ..Default::default() };
+    let smooth = BrushStroke { points: vec![a, p, b].into(), flow: 30.0, ..Default::default() };
     assert_eq!(brush_dabs(&paused, &f, w, h).dabs, brush_dabs(&smooth, &f, w, h).dabs);
 }
 
@@ -550,7 +550,7 @@ fn a_second_pass_builds_up_with_low_flow() {
     let l = Plane::new(w, h);
     let (a, b) = (Point::new(0.2, 0.5), Point::new(0.8, 0.5));
     let paint = |points: Vec<Point>| {
-        let s = BrushStroke { points, size: 0.05, feather: 50.0, flow: 20.0, ..Default::default() };
+        let s = BrushStroke { points: points.into(), size: 0.05, feather: 50.0, flow: 20.0, ..Default::default() };
         shape_alpha(&MaskShape::Brush { strokes: vec![s] }, &f, w, h, &img, &l, 0.0, None)
     };
     let once = paint(vec![a, b]);
@@ -569,7 +569,7 @@ fn auto_mask_stops_at_edges() {
     let img = Rgb32f::from_fn(w, h, |x, _| if x < 100 { [0.03; 3] } else { [0.6, 0.5, 0.4] });
     let l = img.map(crate::local::log_lum);
     let stroke = |auto_mask| BrushStroke {
-        points: vec![Point::new(0.47, 0.2), Point::new(0.47, 0.8)],
+        points: vec![Point::new(0.47, 0.2), Point::new(0.47, 0.8)].into(),
         size: 0.08,
         feather: 0.0,
         auto_mask,
@@ -721,7 +721,7 @@ fn people_and_subject_use_person_mattes() {
 #[test]
 fn many_far_flung_strokes_share_one_dab_budget() {
     let (w, h) = (64, 64);
-    let s = BrushStroke { points: vec![Point::new(-4000.0, 0.5), Point::new(4000.0, 0.5)], size: 0.05, ..Default::default() };
+    let s = BrushStroke { points: vec![Point::new(-4000.0, 0.5), Point::new(4000.0, 0.5)].into(), size: 0.05, ..Default::default() };
     assert!(brush_dabs(&s, &frame(w, h), w, h).dabs.len() > 500_000, "each stroke alone is large");
     let strokes = vec![s; 1000];
     // (a stroke's count of dabs is what is bounded; no wall-clock assertion)
@@ -733,8 +733,8 @@ fn many_far_flung_strokes_share_one_dab_budget() {
 #[test]
 fn an_over_budget_brush_mask_is_reported() {
     let (w, h) = (64, 64);
-    let far = BrushStroke { points: vec![Point::new(-4000.0, 0.5), Point::new(4000.0, 0.5)], size: 0.05, ..Default::default() };
-    let near = BrushStroke { points: vec![Point::new(0.1, 0.1), Point::new(0.9, 0.9)], size: 0.05, ..Default::default() };
+    let far = BrushStroke { points: vec![Point::new(-4000.0, 0.5), Point::new(4000.0, 0.5)].into(), size: 0.05, ..Default::default() };
+    let near = BrushStroke { points: vec![Point::new(0.1, 0.1), Point::new(0.9, 0.9)].into(), size: 0.05, ..Default::default() };
     assert!(!brush_over_budget(std::slice::from_ref(&near), &frame(w, h), w, h));
     assert!(brush_over_budget(&vec![far; 10], &frame(w, h), w, h));
 }
@@ -743,7 +743,7 @@ fn an_over_budget_brush_mask_is_reported() {
 #[test]
 fn a_brush_mask_that_exactly_fills_the_budget_is_not_over_it() {
     let (w, h) = (64, 64);
-    let stroke = |x: f64| BrushStroke { points: vec![Point::new(0.0, 0.5), Point::new(x, 0.5)], size: 0.05, ..Default::default() };
+    let stroke = |x: f64| BrushStroke { points: vec![Point::new(0.0, 0.5), Point::new(x, 0.5)].into(), size: 0.05, ..Default::default() };
     // a stroke whose dab count divides the budget evenly
     let (s, m) = (0..14_000)
         .map(|i| stroke(6.0 + f64::from(i) * 0.001))

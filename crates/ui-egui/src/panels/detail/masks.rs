@@ -318,7 +318,7 @@ fn moved_shape(shape: &MaskShape, handle: u8, dn: Point, at: Point, map: &Canvas
         },
         MaskShape::Brush { mut strokes } => {
             for st in &mut strokes {
-                st.points.iter_mut().for_each(|p| *p = mv(*p));
+                st.points = st.points.iter().map(|p| mv(*p)).collect();
             }
             MaskShape::Brush { strokes }
         }

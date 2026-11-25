@@ -710,8 +710,12 @@ mod tests {
         let frame = Frame::new(4000, 3000, &DevelopSettings::default(), true);
         let ppl = frame.px_per_long(4000);
         let win = PixelWindow { x: 1000, y: 1000, w: 400, h: 300 };
-        let stroke =
-            |auto| BrushStroke { points: vec![Point::new(0.30, 0.38), Point::new(0.5, 0.38)], size: 0.01, auto_mask: auto, ..Default::default() };
+        let stroke = |auto| BrushStroke {
+            points: vec![Point::new(0.30, 0.38), Point::new(0.5, 0.38)].into(),
+            size: 0.01,
+            auto_mask: auto,
+            ..Default::default()
+        };
         let mask = |auto| Mask {
             components: vec![MaskComponent { name: None, op: MaskOp::Add, invert: false, shape: MaskShape::Brush { strokes: vec![stroke(auto)] } }],
             ..Default::default()

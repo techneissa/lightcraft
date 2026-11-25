@@ -57,7 +57,7 @@ fn shapes() -> Vec<(&'static str, MaskShape)> {
             "brush",
             MaskShape::Brush {
                 strokes: vec![BrushStroke {
-                    points: vec![Point::new(MARK.0 - 0.005, MARK.1), Point::new(MARK.0 + 0.005, MARK.1)],
+                    points: vec![Point::new(MARK.0 - 0.005, MARK.1), Point::new(MARK.0 + 0.005, MARK.1)].into(),
                     size: 8.0 / l,
                     ..Default::default()
                 }],

@@ -243,7 +243,7 @@ fn connected_strokes(from: Point, last: &BrushStroke, to: BrushStroke) -> Vec<Br
         points.push(from);
         points.extend(to.points.iter().copied());
         let pressure = if pressured { std::iter::once(p_from).chain((0..to.points.len()).map(|i| to.pressure_at(i))).collect() } else { Vec::new() };
-        return vec![BrushStroke { points, pressure, ..to }];
+        return vec![BrushStroke { points: points.into(), pressure: pressure.into(), ..to }];
     }
     // about 5% of size, or 2 points of feather or flow, per piece
     let ratio = if last.size > 0.0 && to.size > 0.0 { (to.size / last.size).ln().abs() / 1.05f64.ln() } else { 0.0 };
@@ -259,11 +259,11 @@ fn connected_strokes(from: Point, last: &BrushStroke, to: BrushStroke) -> Vec<Br
             let (t0, t1) = (i as f64 / steps as f64, (i + 1) as f64 / steps as f64);
             let p = |t: f64| (f64::from(p_from) + (f64::from(p_to) - f64::from(p_from)) * t) as f32;
             BrushStroke {
-                points: vec![at(t0), at(t1)],
+                points: vec![at(t0), at(t1)].into(),
                 size: lerp(last.size, to.size, t1),
                 feather: lerp(last.feather, to.feather, t1),
                 flow: lerp(last.flow, to.flow, t1),
-                pressure: if pressured { vec![p(t0), p(t1)] } else { Vec::new() },
+                pressure: if pressured { vec![p(t0), p(t1)].into() } else { std::sync::Arc::default() },
                 ..to.clone()
             }
         })
@@ -404,14 +404,14 @@ pub fn specs() -> Vec<CommandSpec> {
                 let pts_len = pts.len();
                 let d = BrushStroke::default();
                 let stroke = BrushStroke {
-                    points: pts,
+                    points: pts.into(),
                     size: f64_or(p, "size", d.size),
                     feather: f64_or(p, "feather", d.feather),
                     flow: f64_or(p, "flow", d.flow),
                     density: f64_or(p, "density", d.density),
                     erase: bool_or(p, "erase", false),
                     auto_mask: bool_or(p, "autoMask", false),
-                    pressure: pressure_list(p.get("pressure"), pts_len)?,
+                    pressure: pressure_list(p.get("pressure"), pts_len)?.into(),
                 };
                 let connect = bool_or(p, "connect", false);
                 let mut connected = false;
@@ -439,12 +439,16 @@ pub fn specs() -> Vec<CommandSpec> {
                             Some((
                                 *l.points.last()?,
                                 BrushStroke {
-                                    points: Vec::new(),
+                                    points: std::sync::Arc::default(),
                                     size: l.size,
                                     feather: l.feather,
                                     flow: l.flow,
                                     // the pressure the last dab was painted with, when the stroke recorded any
-                                    pressure: if l.pressure.is_empty() { Vec::new() } else { vec![l.pressure_at(l.points.len().saturating_sub(1))] },
+                                    pressure: if l.pressure.is_empty() {
+                                        std::sync::Arc::default()
+                                    } else {
+                                        vec![l.pressure_at(l.points.len().saturating_sub(1))].into()
+                                    },
                                     ..BrushStroke::default()
                                 },
                             ))

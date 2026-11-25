@@ -20,6 +20,7 @@ pub mod residual_look;
 pub mod retouch;
 pub mod segmask;
 pub mod settings;
+mod shared_strokes;
 pub mod spot_area;
 pub mod spot_circle;
 
