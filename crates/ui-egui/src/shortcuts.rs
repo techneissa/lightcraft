@@ -910,7 +910,12 @@ fn delete_key(app: &mut LightcraftApp, ctx: &egui::Context) -> bool {
             return true;
         }
         R::Remove => {
-            if app.session.active_spot.is_some() {
+            // fork (fork/glare-highlights.md): the selected glare box
+            if let Some(i) = app.reflection_glare.selected.filter(|_| app.ui.view == crate::state::ViewMode::Detail) {
+                if let Err(e) = app.run("reflection.box", json!({"remove": i})) {
+                    app.toast(ctx, e);
+                }
+            } else if app.session.active_spot.is_some() {
                 let _ = app.run("spot.delete", json!({}));
             }
             return true;

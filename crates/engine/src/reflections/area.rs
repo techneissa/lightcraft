@@ -3,7 +3,7 @@
 //! The model gets the area (a box, or a Masks-panel mask's bounding box) and a margin of context around it, at the
 //! panel's Quality, instead of the whole photo shrunk to that size: a small reflection keeps its detail. Its result is
 //! kept inside the area with a soft edge (a box fades in over its border, a mask uses its own alpha) and stored as one
-//! tile ([`super::tiles`]), so nothing outside the area changes.
+//! tile ([`super::tiles`]), so nothing outside the area changes. Several boxes run one after another, a tile each.
 //!
 //! Areas are fractions of the original photo before crop or rotation, so the result stays on the same content when the
 //! crop changes. A mask is evaluated on the photo as shot (user orientation, before lens corrections), then turned
@@ -215,42 +215,60 @@ pub fn to_srgb8(img: &Rgb32f) -> Vec<u8> {
     img.data.iter().flat_map(|p| matrix.apply_f32(*p).map(lightcraft_color::transfer::encode_srgb8)).collect()
 }
 
-/// Run reflection `model` on `region` of `src` (the full source) at `edge`, and save the result. A run whose `cancel`
-/// is set returns "Stopped" and saves nothing.
+/// Run reflection `model` on each of `regions` of `src` (the full source) at `edge`, and save the result with `areas`.
+/// A run whose `cancel` is set returns "Stopped" and saves nothing.
 pub fn make(
     src: &Rgb32f,
     key: Option<Hash128>,
     edge: u32,
     model: &str,
-    region: &Region,
-    area: ReflectionArea,
+    regions: &[Region],
+    areas: Vec<ReflectionArea>,
     cancel: &std::sync::atomic::AtomicBool,
 ) -> Result<Reflection, String> {
-    let stopped = || cancel.load(std::sync::atomic::Ordering::Relaxed);
-    if stopped() {
-        return Err("Stopped".into());
-    }
-    let tile = run_model(src, edge, model, region)?;
-    if stopped() {
-        return Err("Stopped".into());
-    }
+    let tiles = run_model(src, edge, model, regions, cancel)?;
     let base = Reflection {
         amount: 100.0,
         quality: edge,
         model: model.into(),
         protect_sky: false,
         detail_protection: 0.0,
-        area: Some(area),
+        area: areas,
         ..Default::default()
     };
-    save(&[tile], key, base)
+    save(&tiles, key, base)
 }
 
-/// The tile [`make`] saves: the model's change over the area's crop, kept inside the area with its soft edge.
-pub fn run_model(src: &Rgb32f, edge: u32, model: &str, region: &Region) -> Result<Tile, String> {
+/// The tiles [`make`] saves, one per region: the model's change over the region's crop, kept inside it with its soft
+/// edge. Where regions overlap, a later one only adds what the earlier ones left, so nothing is taken off twice. A
+/// region too small to hold a pixel is left out.
+pub fn run_model(src: &Rgb32f, edge: u32, model: &str, regions: &[Region], cancel: &std::sync::atomic::AtomicBool) -> Result<Vec<Tile>, String> {
     if !matches!(edge, 384 | 768 | 1024) || !super::valid_model(model) {
         return Err("Invalid reflection model or quality".into());
     }
+    let stopped = || cancel.load(std::sync::atomic::Ordering::Relaxed);
+    if stopped() {
+        return Err("Stopped".into());
+    }
+    let dir = super::models_dir().ok_or("No reflection model directory")?.join(model);
+    let net = lightcraft_reflections::Runner::load(&dir, model, false)?;
+    let mut tiles = Vec::with_capacity(regions.len());
+    for (i, region) in regions.iter().enumerate() {
+        if region.pixel_box(src.width, src.height).is_none() {
+            continue;
+        }
+        tiles.push(run_region(src, edge, &net, region, regions.get(..i).unwrap_or_default())?);
+        if stopped() {
+            return Err("Stopped".into());
+        }
+    }
+    if tiles.is_empty() {
+        return Err("The area is empty".into());
+    }
+    Ok(tiles)
+}
+
+fn run_region(src: &Rgb32f, edge: u32, net: &lightcraft_reflections::Runner, region: &Region, done: &[Region]) -> Result<Tile, String> {
     let (w, h) = (src.width, src.height);
     let outer = context_box(region, w, h).ok_or("The area is empty")?;
     let crop = src.crop(outer[0], outer[1], outer[2] - outer[0], outer[3] - outer[1]);
@@ -259,8 +277,6 @@ pub fn run_model(src: &Rgb32f, edge: u32, model: &str, region: &Region) -> Resul
         return Err("The area is too thin. Draw a larger box.".into());
     }
     let small = resize(&crop, mw, mh, Filter::Lanczos3);
-    let dir = super::models_dir().ok_or("No reflection model directory")?.join(model);
-    let net = lightcraft_reflections::Runner::load(&dir, model, false)?;
     let bytes = to_srgb8(&small);
     let clean = net.infer(&bytes, mw, mh)?;
     if clean.len() != mw * mh {
@@ -269,7 +285,9 @@ pub fn run_model(src: &Rgb32f, edge: u32, model: &str, region: &Region) -> Resul
     let to_working = lightcraft_color::SRGB.to_space(&lightcraft_color::REC2020);
     let mut grid = Rgb32f::new(mw, mh);
     for (k, ((a, b), out)) in bytes.as_chunks::<3>().0.iter().zip(&clean).zip(grid.data.iter_mut()).enumerate() {
-        let keep = keep(region, outer, (w, h), (mw, mh), (k % mw, k / mw));
+        let at = (k % mw, k / mw);
+        let left: f32 = done.iter().map(|r| 1.0 - self::keep(r, outer, (w, h), (mw, mh), at)).product();
+        let keep = self::keep(region, outer, (w, h), (mw, mh), at) * left;
         if keep <= 0.0 {
             continue;
         }

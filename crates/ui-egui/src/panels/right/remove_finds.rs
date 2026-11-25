@@ -26,7 +26,12 @@ pub(super) fn section(app: &mut LightcraftApp, ui: &mut egui::Ui, spots: usize) 
     }
     egui::Frame::NONE.inner_margin(super::remove_compact::margin()).show(ui, |ui| {
         let busy = |kind| view.running.contains(&kind);
-        match super::remove_compact::find(ui, [false, busy(Kind::Person), busy(Kind::Wire)], spots) {
+        let search = super::remove_compact::find(ui, [false, busy(Kind::Person), busy(Kind::Wire)], spots);
+        // fork (issue #364): the Reflections tool on the photo gives way to what is used here
+        if search.is_some() {
+            crate::reflections_glare::put_down(app);
+        }
+        match search {
             Some(0) => find_dust(app, ui),
             Some(i) => {
                 let command = if i == 1 { "spot.findPeople" } else { "spot.findWires" };
@@ -51,17 +56,21 @@ pub(super) fn section(app: &mut LightcraftApp, ui: &mut egui::Ui, spots: usize) 
                     .on_hover_text(crate::i18n::tr("Remove Selected Finds"))
                     .on_disabled_hover_text(crate::i18n::tr("Select Finds to Remove"))
                     .clicked()
-                    && let Err(e) = app.run("spot.removeCandidates", super::with_fill(app, "fill", json!({})))
                 {
-                    app.toast(ui.ctx(), e);
+                    crate::reflections_glare::put_down(app);
+                    if let Err(e) = app.run("spot.removeCandidates", super::with_fill(app, "fill", json!({}))) {
+                        app.toast(ui.ctx(), e);
+                    }
                 }
             });
-            if text_button(ui, "findRemoveAll", "Remove All", false).on_hover_text(crate::i18n::tr("Remove All Finds")).clicked()
-                && let Err(e) = app.run("spot.removeCandidates", super::with_fill(app, "fill", json!({"all": true})))
-            {
-                app.toast(ui.ctx(), e);
+            if text_button(ui, "findRemoveAll", "Remove All", false).on_hover_text(crate::i18n::tr("Remove All Finds")).clicked() {
+                crate::reflections_glare::put_down(app);
+                if let Err(e) = app.run("spot.removeCandidates", super::with_fill(app, "fill", json!({"all": true}))) {
+                    app.toast(ui.ctx(), e);
+                }
             }
             if text_button(ui, "findClear", "Clear", false).on_hover_text(crate::i18n::tr("Clear Finds")).clicked() {
+                crate::reflections_glare::put_down(app);
                 let _ = app.run("spot.clearCandidates", json!({}));
             }
         });

@@ -53,7 +53,7 @@ fn widest_line(ui: &egui::Ui, labels: &[&str], size: f32) -> f32 {
 
 /// One row of equal tiles filling the width: an icon centred above the label, the same label size on every tile.
 /// `items`: (id, label, hover text, active, enabled). Returns the clicked index.
-fn tile_row(ui: &mut egui::Ui, items: &[(&str, &str, &str, bool, bool)], icons: &[Icon]) -> Option<usize> {
+pub(crate) fn tile_row(ui: &mut egui::Ui, items: &[(&str, &str, &str, bool, bool)], icons: &[Icon]) -> Option<usize> {
     let t = Tokens::get(ui.ctx());
     let n = items.len().max(1) as f32;
     let each = ((ui.available_width() - GAP * (n - 1.0)) / n).floor().max(1.0);
@@ -125,6 +125,8 @@ pub(super) fn tools(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         && let Some((tool, ..)) = tools.get(i)
     {
         app.ui.tool = (*tool).into();
+        // the Reflections section's tool on the photo gives way to the one clicked
+        crate::reflections_glare::put_down(app);
     }
 }
 

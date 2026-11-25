@@ -65,6 +65,7 @@ mod parse_ahead;
 pub mod pick;
 pub mod recheck;
 pub mod reflections;
+pub mod reflections_boxes;
 pub mod reflections_glare;
 pub mod region;
 pub mod reload;

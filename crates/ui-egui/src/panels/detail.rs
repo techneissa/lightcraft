@@ -968,7 +968,7 @@ fn tool_interaction(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Res
     match tv.right {
         RightPanel::Crop => crop_overlay(app, ui, resp, map, tv.frame, d, tv.id),
         RightPanel::Masking => mask_overlay(app, ui, resp, map, d),
-        // fork feature (fork/glare-highlights.md): the Reflections section's box and glare brush come first
+        // fork feature (fork/glare-highlights.md): the Reflections section's boxes and glare brush come first
         RightPanel::Remove => {
             if !crate::reflections_glare::overlay(app, ui, resp, map, d) {
                 remove_overlay(app, ui, resp, map, d)

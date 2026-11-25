@@ -1,8 +1,9 @@
 //! Fork feature (`fork/glare-highlights.md`): what Remove ▸ Reflections works on, and its Highlights mode.
 //!
-//! [`ReflectionArea`] is the part of the photo a reflection model or the glare finder runs on: a box, or a mask of the
-//! Masks panel (run on the mask's bounding box, kept inside the mask). Coordinates are percent of the original photo
-//! before crop or rotation, like Limit to Area, so the area stays on the same content when the crop changes.
+//! [`ReflectionArea`] is a part of the photo a reflection model or the glare finder runs on: a box, or a mask of the
+//! Masks panel (run on the mask's bounding box, kept inside the mask). A result holds a list of them: any number of
+//! boxes, or one mask; none is the whole photo. Coordinates are percent of the original photo before crop or rotation,
+//! like Limit to Area, so an area stays on the same content when the crop changes.
 //!
 //! [`Glare`] holds the Highlights mode's settings: how strict the finder is, how far it grows what it found, the fill,
 //! and the strokes the user painted to add to or take from the found glare.
@@ -18,6 +19,8 @@ use crate::SpotFill;
 pub const MAX_GLARE_STROKES: usize = 256;
 /// Most points one stroke keeps.
 pub const MAX_STROKE_POINTS: usize = 4096;
+/// Most areas (boxes) one result keeps.
+pub const MAX_AREAS: usize = 32;
 
 /// What the Reflections section removes.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -88,6 +91,40 @@ impl ReflectionArea {
     /// The box as fractions of the photo: `(left, top, right, bottom)`.
     pub fn fractions(&self) -> (f64, f64, f64, f64) {
         (self.left / 100.0, self.top / 100.0, self.right / 100.0, self.bottom / 100.0)
+    }
+}
+
+/// The file form of a result's areas (`#[serde(with = ...)]`): one area is written as it always was, so files with a
+/// single box or mask read the same in older versions; several are written as a list. Both forms read.
+pub mod areas {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    use super::{MAX_AREAS, ReflectionArea};
+
+    pub fn serialize<S: Serializer>(areas: &[ReflectionArea], s: S) -> Result<S::Ok, S::Error> {
+        match areas {
+            [one] => one.serialize(s),
+            many => many.serialize(s),
+        }
+    }
+
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum File {
+        Many(Vec<ReflectionArea>),
+        One(ReflectionArea),
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<ReflectionArea>, D::Error> {
+        let mut areas = match Option::<File>::deserialize(d)? {
+            None => Vec::new(),
+            Some(File::One(a)) => vec![a],
+            Some(File::Many(v)) => v,
+        };
+        // a damaged file loads clean: a box with no inside or off the photo is dropped
+        areas.retain(|a| a.mask.is_some() || a.is_valid());
+        areas.truncate(MAX_AREAS);
+        Ok(areas)
     }
 }
 
@@ -181,15 +218,28 @@ mod tests {
         }
         let old: Reflection = serde_json::from_value(serde_json::json!({"enabled": true, "amount": 35.0})).unwrap();
         assert_eq!(old.mode, ReflectionMode::Reflections);
-        assert_eq!(old.area, None);
+        assert!(old.area.is_empty());
         assert_eq!(old.glare, Glare::default());
+    }
+
+    #[test]
+    fn an_old_file_with_one_area_reads_as_a_list_of_one_box() {
+        let one = serde_json::json!({"left": 10.0, "top": 20.0, "right": 30.0, "bottom": 40.0});
+        let old: Reflection = serde_json::from_value(serde_json::json!({"mode": "highlights", "area": one})).unwrap();
+        assert_eq!(old.area, vec![ReflectionArea::boxed(10.0, 20.0, 30.0, 40.0).unwrap()]);
+        // one box is written as before, several as a list that reads back
+        assert_eq!(serde_json::to_value(&old).unwrap()["area"], one);
+        let mut two = old.clone();
+        two.area.push(ReflectionArea::boxed(50.0, 50.0, 60.0, 60.0).unwrap());
+        let back: Reflection = serde_json::from_value(serde_json::to_value(&two).unwrap()).unwrap();
+        assert_eq!(back, two);
     }
 
     #[test]
     fn highlights_area_and_paint_survive_a_round_trip() {
         let r = Reflection {
             mode: ReflectionMode::Highlights,
-            area: Some(ReflectionArea { left: 10.0, top: 20.0, right: 30.0, bottom: 40.0, mask: Some(7) }),
+            area: vec![ReflectionArea { left: 10.0, top: 20.0, right: 30.0, bottom: 40.0, mask: Some(7) }],
             glare: Glare {
                 threshold: 70.0,
                 expand: 10.0,

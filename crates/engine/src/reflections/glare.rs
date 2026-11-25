@@ -27,8 +27,8 @@ pub struct Params {
     /// Whether the user chose where to look (a box or a mask): the glare then only has to be the area's brightest,
     /// not near white (a reflection on dark sunglasses), as the user has said where it is.
     pub chosen: bool,
-    /// The picture is a box the user drew: a spot that runs into its edge goes on outside it (a white wall, the
-    /// sky), so it is not glare.
+    /// The area searched is made of boxes the user drew (the picture is one box, or `region` is the boxes): a spot
+    /// that runs into their edge goes on outside them (a white wall, the sky), so it is not glare.
     pub boxed: bool,
 }
 
@@ -127,8 +127,10 @@ pub fn find_until(img: &Rgb32f, region: Option<&Plane>, p: &Params, strokes: &[S
     let min_px = ((min_side * min_side) as usize).max(4);
     let max_spot = if p.max_spot.is_finite() { p.max_spot.clamp(0.0, 1.0) } else { 0.25 };
     let max_px = ((max_spot * area as f64) as usize).max(min_px);
-    let ring = Ring { luma: &y, contrast, max_width: ((0.02 * long) as usize).max(2), drop_at_edge: p.boxed && region.is_none() };
+    let outside = |i: usize| !inside(i);
+    let ring = Ring { luma: &y, contrast, max_width: ((0.02 * long) as usize).max(2), edge: p.boxed.then_some(&outside) };
     keep_spots(&mut mask, w, h, min_px, max_px, &ring);
+    soft_edges(&mut mask, &y, &bg, (w, h), ((0.02 * long) as usize).max(8), &inside);
     // Expand: a near-circular growth (chamfer distance), then a feathered edge as wide as half of it
     let grow = 1.0 + unit(p.expand, 0.3) as f32 * (0.008 * long) as f32;
     let feather = (grow * 0.5).max(1.0);
@@ -206,8 +208,8 @@ struct Ring<'a> {
     contrast: f32,
     /// Widest ring, pixels.
     max_width: usize,
-    /// Drop spots that touch the picture's edge.
-    drop_at_edge: bool,
+    /// Drop spots that touch the picture's edge, or a pixel this says is outside the boxes.
+    edge: Option<&'a dyn Fn(usize) -> bool>,
 }
 
 impl Ring<'_> {
@@ -267,7 +269,9 @@ fn keep_spots(mask: &mut [bool], w: usize, h: usize, min: usize, max: usize, rin
             }
         }
         id = id.wrapping_add(1).max(1);
-        let at_edge = ring.drop_at_edge && spot.iter().any(|&i| i % w == 0 || i / w == 0 || i % w + 1 == w || i / w + 1 == h);
+        let at_edge = ring.edge.is_some_and(|outside| {
+            spot.iter().any(|&i| i % w == 0 || i / w == 0 || i % w + 1 == w || i / w + 1 == h || neighbours(i, w, h).any(outside))
+        });
         if at_edge || spot.len() < min || spot.len() > max || !ring.stands_out(&spot, mask, &mut stamp, id, (w, h)) {
             drop.extend_from_slice(&spot);
         }
@@ -277,8 +281,47 @@ fn keep_spots(mask: &mut [bool], w: usize, h: usize, min: usize, max: usize, rin
     }
 }
 
+/// How much brighter than the surface around it a pixel of a spot's soft edge still is.
+const SOFT_EDGE: f32 = 1.08;
+
+/// Grow `mask` over each spot's soft light. Glare's edge and bloom fade into the surface around it, and what of them is
+/// left outside the fill stays as a light outline (issue #362). From the spots outward, a pixel joins while the light
+/// is still brighter than the surface around and still falling fast: glare's light over that surface is gone within
+/// about `reach` pixels, while a broad glow (a bright sky, a lamp's) falls far more slowly, and the mask stops there.
+/// At most `reach` pixels away. `bg` stands in for the surface where everything near is within `reach` of a spot.
+fn soft_edges(mask: &mut [bool], y: &[f32], bg: &[f32], (w, h): (usize, usize), reach: usize, inside: &dyn Fn(usize) -> bool) {
+    let mut front: Vec<usize> = (0..w * h).filter(|&i| mask[i]).collect();
+    if front.is_empty() {
+        return;
+    }
+    // the surface around the spots: a wide mean of the pixels farther than `reach` from every spot
+    let far: Vec<f32> = distance(mask, w, h, reach as f32 + 1.0).iter().map(|d| if *d > reach as f32 { 1.0 } else { 0.0 }).collect();
+    let light: Vec<f32> = y.iter().zip(&far).map(|(v, f)| v * f).collect();
+    let (sum, share) = (box_mean(&light, w, h, 2 * reach), box_mean(&far, w, h, 2 * reach));
+    let surface: Vec<f32> = (0..w * h).map(|i| if share[i] > 0.02 { sum[i] / share[i] } else { bg[i] }).collect();
+    // lightly smoothed, so grain does not end the edge early
+    let s = box_mean(y, w, h, 1);
+    let over = |i: usize| s[i] - surface[i];
+    let steep = 1.0 / reach.max(1) as f32;
+    for _ in 0..reach {
+        let mut next = Vec::new();
+        for &i in &front {
+            for j in neighbours(i, w, h) {
+                if !mask[j] && inside(j) && s[j] < s[i] && s[j] > SOFT_EDGE * surface[j] + 0.002 && over(i) - over(j) >= steep * over(j) {
+                    mask[j] = true;
+                    next.push(j);
+                }
+            }
+        }
+        if next.is_empty() {
+            return;
+        }
+        front = next;
+    }
+}
+
 /// Distance of every pixel to the nearest set pixel of `mask` (3-4 chamfer, in pixels), at most `cap`.
-fn distance(mask: &[bool], w: usize, h: usize, cap: f32) -> Vec<f32> {
+pub(super) fn distance(mask: &[bool], w: usize, h: usize, cap: f32) -> Vec<f32> {
     let big = cap.max(1.0) * 3.0 + 4.0;
     let mut d: Vec<f32> = mask.iter().map(|m| if *m { 0.0 } else { big }).collect();
     let at = |d: &[f32], x: isize, y: isize| -> f32 {
@@ -396,6 +439,18 @@ mod tests {
         assert!(a.get(200, 150) > 0.99);
         assert_eq!(a.get(20, 20), 0.0);
         assert_eq!(a.get(200, 180), 0.0);
+    }
+
+    #[test]
+    fn the_soft_edge_does_not_spread_into_a_broad_glow() {
+        // a glare spot in the middle of a lamp's wide glow, which falls off far more slowly than glare's own edge
+        let img = Rgb32f::from_fn(600, 400, |x, y| {
+            let d = (x as f32 + 0.5 - 300.0).hypot(y as f32 + 0.5 - 200.0);
+            [if d <= 8.0 { 1.0 } else { 0.05 + 0.35 * (-d / 100.0).exp() }; 3]
+        });
+        let a = find(&img, None, &Params { photo_long: 600.0, expand: 30.0, ..params() }, &[]);
+        assert!(a.get(300, 200) > 0.99);
+        assert_eq!(a.get(318, 200), 0.0, "the mask stays near the spot");
     }
 
     #[test]

@@ -280,6 +280,8 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     // {clear}, {tool}
     ("reflection.mode", "Reflection Mode", None, ""),
     ("reflection.area", "Reflection Area", None, ""),
+    ("reflection.box", "Reflection Boxes", None, ""),
+    ("reflection.boxTool", "Reflection Box Tool", Some("Shift+B"), ""),
     ("reflection.glare", "Glare Settings", None, ""),
     ("reflection.paint", "Paint Glare", None, ""),
     ("reflection.tool", "Reflection Tool", None, ""),
