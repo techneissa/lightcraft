@@ -86,6 +86,8 @@ pub const DEFAULT: &[&str] = &[
     "copySettings",
     "pasteSettings",
     "pasteSelected",
+    "copyMasks",
+    "pasteMasks",
     "resetEdits",
     "photoMerge",
     SEPARATOR,

@@ -69,6 +69,7 @@ mod journal_growth;
 #[cfg(target_os = "macos")]
 mod macos_colour;
 mod macos_wb;
+mod mask_clipboard;
 mod mask_effects;
 mod mask_geometry;
 mod match_look;

@@ -1,0 +1,3 @@
+# Copy Masks and Paste Masks (issue #365)
+cargo test -p lightcraft-engine --lib -- mask_clipboard
+cargo test -p lightcraft-ui-egui --lib -- photo_menu
