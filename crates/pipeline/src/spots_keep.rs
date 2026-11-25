@@ -550,11 +550,8 @@ pub fn lin_cpu_pre_retouch(img: &mut Rgb32f, info: &SourceInfo, p: &Plan<'_>, ke
         }
         true
     });
-    // (a window keeps the spots it drew exactly, for the next window of its scale: a LaMa spot counts once its fill came;
-    // a draft keeps none while one has no fill, as a later spot may read its Classic fill, issue #372)
-    let unfilled =
-        |(i, sp): (usize, &Spot)| crate::spots_learned::footprint(sp, &p.frame, w, h, ppl).is_some() && !done.get(i).copied().unwrap_or(false);
-    if p.spots_at.store.is_some() && !(p.draft && s.spots.iter().enumerate().any(unfilled)) {
+    // (a window keeps the spots it drew exactly, for the next window of its scale: a LaMa spot counts once its fill came)
+    if p.spots_at.store.is_some() {
         let drawn: Vec<bool> =
             s.spots.iter().enumerate().map(|(i, sp)| !crate::spots_learned::is_learned(sp) || done.get(i).copied().unwrap_or(false)).collect();
         crate::spots_scale::capture(&p.spots_at, img, &drawn);

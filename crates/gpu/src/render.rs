@@ -933,6 +933,11 @@ pub fn render(
     let (planes, prep, t_out) = planes_stage(&mut cx, &at, (&lin, t_lin.as_ref()), &plan, req);
     lap("planes", &mut t, &mut cx);
     let edge_boxes = retouch_boxes.clone();
+    // (a full render's image: a draft's never is, unless it took the full render's own; a draft drawn afresh at its size
+    // runs no LaMa fill, and later drafts are made only from a full render's)
+    let full = plan.lin_key == plan.full_keys.lin
+        && (!plan.draft
+            || cached.as_ref().is_some_and(|e| e.full && e.lin.as_ref().is_some_and(|(k, b)| *k == plan.lin_key && Arc::ptr_eq(b, &lin))));
     if let Some(c) = stages {
         let lin = Some((plan.lin_key, lin.clone()));
         c.put(Entry {
@@ -948,7 +953,7 @@ pub fn render(
             retouch_boxes,
             shape: plan.shape,
             size: (w, h),
-            full: plan.lin_key == plan.full_keys.lin,
+            full,
         });
     }
 
