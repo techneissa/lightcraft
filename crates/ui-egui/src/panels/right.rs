@@ -19,6 +19,7 @@ mod info;
 pub(crate) use info::smart_line;
 mod keywords;
 mod remove_compact;
+pub(crate) use remove_compact::tile_row;
 mod remove_fill;
 mod remove_finds;
 pub(crate) mod remove_object;

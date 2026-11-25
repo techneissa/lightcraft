@@ -943,6 +943,8 @@ fn tool_interaction(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Res
     let (map, d) = (tv.map, tv.d);
     // fork (issue #294): a drag of Relight's handle ends when the handle stops showing
     relight::release_if_hidden(app, ui, d);
+    // fork (issue #364): the Reflections tool is put down once it is no longer what the user works with
+    crate::reflections_glare::release_if_hidden(app);
     if let Some(target) = super::mask_recolor::pick_target(&app.ui.tool) {
         // Recolor's eyedroppers (Masking): a click sets the selected mask's colour, or its Colour to Replace, from
         // that point (kept on the photo)
@@ -968,7 +970,7 @@ fn tool_interaction(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Res
     match tv.right {
         RightPanel::Crop => crop_overlay(app, ui, resp, map, tv.frame, d, tv.id),
         RightPanel::Masking => mask_overlay(app, ui, resp, map, d),
-        // fork feature (fork/glare-highlights.md): the Reflections section's box and glare brush come first
+        // fork feature (fork/glare-highlights.md): the Reflections section's boxes and glare brush come first
         RightPanel::Remove => {
             if !crate::reflections_glare::overlay(app, ui, resp, map, d) {
                 remove_overlay(app, ui, resp, map, d)

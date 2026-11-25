@@ -106,7 +106,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         None
     };
     let start = Instant::now();
-    let made = highlights::make(&src, &g, &region, learned, &Arc::new(AtomicBool::new(false)))?;
+    let made = highlights::make(&src, &g, &[region], learned, &Arc::new(AtomicBool::new(false)))?;
     eprintln!(
         "{} tile(s), {:.2} % of the area changed, fill {:?}, {:.1} s",
         made.tiles.len(),
@@ -148,8 +148,8 @@ fn area_make(
     dir: &std::path::Path,
     path: &mut Option<String>,
 ) -> Result<lightcraft_develop::Reflection, String> {
-    let made = area::run_model(src, edge, model, region)?;
-    let r = area::save_in(dir, &[made], key, lightcraft_develop::Reflection { amount: 100.0, ..Default::default() })?;
+    let made = area::run_model(src, edge, model, std::slice::from_ref(region), &AtomicBool::new(false))?;
+    let r = area::save_in(dir, &made, key, lightcraft_develop::Reflection { amount: 100.0, ..Default::default() })?;
     *path = Some(r.correction.clone());
     Ok(r)
 }

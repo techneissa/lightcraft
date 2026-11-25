@@ -1357,6 +1357,18 @@ fn ui_commands_10(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Va
         "app.checkForUpdates" => crate::updates_ui::check(app),
         "photo.editInPhotoCraft" => edit_in(app, ctx, p, true),
         "photo.editInExternal" => edit_in(app, ctx, p, false),
+        // only while the Reflections section is on screen (fork/glare-highlights.md): Shift+B elsewhere does nothing
+        "reflection.boxTool" => {
+            if app.ui.right == RightPanel::Remove && app.reflection_open && app.ui.view == ViewMode::Detail && let Some(photo) = app.session.active() {
+                crate::reflections_glare::sync(app, photo);
+                if app.reflection_glare.tool == Some(crate::reflections_glare::Tool::Box) {
+                    crate::reflections_glare::put_down(app);
+                } else {
+                    crate::reflections_glare::hold(app, crate::reflections_glare::Tool::Box);
+                }
+            }
+            Ok(crate::reflections_glare::status(app))
+        }
         "photo.removeReflections"
         | "reflection.apply"
         | "reflection.reset"
@@ -1370,6 +1382,7 @@ fn ui_commands_10(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Va
         // fork feature (fork/glare-highlights.md)
         | "reflection.mode"
         | "reflection.area"
+        | "reflection.box"
         | "reflection.glare"
         | "reflection.paint"
         | "reflection.tool" => {
@@ -1604,6 +1617,8 @@ fn view_back_command(app: &mut LightcraftApp, ctx: &egui::Context) -> Result<Val
         crate::panels::slideshow::end(app);
     } else if crate::panels::mask_parts::collapse_selection(app) {
         // several selected submasks go back to the last clicked one first
+    } else if app.ui.right == RightPanel::Remove && app.ui.view == ViewMode::Detail && crate::reflections_glare::put_down(app) {
+        // Esc puts the Reflections tool down first (fork/glare-highlights.md)
     } else if !app.ui.tool.is_empty() {
         app.ui.tool.clear();
     } else if crate::panels::mask_parts::leave_part(app) {

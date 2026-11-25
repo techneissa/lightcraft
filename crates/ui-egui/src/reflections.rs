@@ -341,6 +341,8 @@ pub fn panel(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         }
         crate::reflections_glare::mode_row(app, ui, busy);
         crate::reflections_glare::area_row(app, ui, &d, busy);
+        crate::reflections_boxes::tool_row(app, ui);
+        crate::reflections_boxes::list(app, ui);
         if highlights {
             crate::reflections_glare::highlights_rows(app, ui, busy);
         }
