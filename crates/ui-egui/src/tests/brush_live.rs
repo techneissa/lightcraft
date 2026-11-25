@@ -213,3 +213,33 @@ fn a_virtual_copy_gets_its_own_full_coverage_render() {
     let rect = h.app.image_rect.expect("the photo on screen");
     assert!(crate::panels::detail::brush_preview::images(&h.app, id, rect).is_some(), "the copy's first stroke blends its adjustment");
 }
+
+/// Painting stroke after stroke rewrites the same two live-preview textures. A new pair per stroke piled up on the GPU while
+/// the window was covered, where new textures are made but freed ones are held back (issue #379).
+#[test]
+fn strokes_reuse_the_live_preview_textures() {
+    let mut h = brush_ready();
+    h.app.ui.mask_overlay = true;
+    let live = |h: &Headless| {
+        let textures = h.view.ctx.tex_manager();
+        let textures = textures.read();
+        let mut found: Vec<_> = textures.allocated().filter(|(_, m)| m.name.starts_with("brush-live")).map(|(id, m)| (m.name.clone(), *id)).collect();
+        found.sort();
+        found
+    };
+    let mut first = Vec::new();
+    for k in 0..3 {
+        let y = 0.3 + 0.1 * f64::from(k);
+        pointer(&mut h, json!([{"kind": "down", "x": 0.3, "y": y}, {"kind": "drag", "x": 0.5, "y": y}, {"kind": "drag", "x": 0.7, "y": y}]));
+        h.step();
+        let now = live(&h);
+        if k == 0 {
+            assert_eq!(now.len(), 2, "the stroke's coverage and its blend: {now:?}");
+            first = now;
+        } else {
+            assert_eq!(now, first, "stroke {k} made new textures");
+        }
+        pointer(&mut h, json!([{"kind": "up", "x": 0.7, "y": y}]));
+        settle_previews(&mut h);
+    }
+}

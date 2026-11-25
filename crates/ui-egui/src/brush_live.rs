@@ -5,7 +5,8 @@
 //! feather, flow accumulating up to density. The live stroke places and paints its dabs with the
 //! same functions, at screen resolution, so letting go of the button doesn't change what's
 //! covered. It's incremental: each frame stamps only the dabs of the samples added since the last
-//! one and uploads only the rectangle they touched.
+//! one and uploads only the rectangle they touched. Its two textures (the coverage and the blend)
+//! are kept from one stroke to the next ([`kept_texture`]).
 
 pub mod auto;
 pub mod composite;
@@ -117,6 +118,25 @@ pub struct LiveStroke {
 
 /// The longest a released stroke's blend stays on screen waiting for the committed render.
 pub const HOLD_SECS: f64 = 3.0;
+
+/// The texture called `name`, now showing `image`. The egui context keeps it from stroke to stroke and an image of its size
+/// is written into it: textures made per stroke piled up on the GPU while the window was covered, where egui-wgpu makes new
+/// ones but holds back the freed ones (issue #379). Another size replaces its contents under the same id, freeing nothing.
+fn kept_texture(ctx: &egui::Context, name: &'static str, image: impl Into<egui::ImageData>) -> TextureHandle {
+    let image = image.into();
+    let id = egui::Id::unique(name);
+    let Some(mut texture) = ctx.data(|d| d.get_temp::<TextureHandle>(id)) else {
+        let texture = ctx.load_texture(name, image, TextureOptions::LINEAR);
+        ctx.data_mut(|d| d.insert_temp(id, texture.clone()));
+        return texture;
+    };
+    if texture.size() == image.size() {
+        texture.set_partial([0, 0], image, TextureOptions::LINEAR);
+    } else {
+        texture.set(image, TextureOptions::LINEAR);
+    }
+    texture
+}
 
 fn grow(d: &mut Option<PxRect>, r: PxRect) {
     *d = Some(match *d {
@@ -284,7 +304,7 @@ impl LiveStroke {
         match (&mut self.texture, self.dirty.take()) {
             (None, _) => {
                 let image = self.region((0, 0, self.w, self.h));
-                self.texture = Some(ctx.load_texture("brush-live-stroke", image, TextureOptions::LINEAR));
+                self.texture = Some(kept_texture(ctx, "brush-live-stroke", image));
             }
             (Some(_), Some(rect)) => {
                 let image = self.region(rect);
@@ -385,7 +405,7 @@ impl LiveStroke {
         match (&mut bt.texture, bt.dirty.take()) {
             (None, _) => {
                 // (it starts as the photo: no copy, the pixels the loupe was made from are shared)
-                let mut tex = ctx.load_texture("brush-live-blend", images.base.clone(), TextureOptions::LINEAR);
+                let mut tex = kept_texture(ctx, "brush-live-blend", images.base.clone());
                 // …with what is painted so far mixed in
                 if let Some(rect) = self.painted.map(|p| map.picture_rect(p)) {
                     let rect = (rect.0, rect.1, rect.2.min(size[0]), rect.3.min(size[1]));
