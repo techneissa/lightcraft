@@ -491,7 +491,7 @@ fn cases() -> Vec<(&'static str, Edit)> {
         ("masks (brush, process V9: flow per radius travelled)", |s| {
             s.process = lightcraft_develop::Process::V9.version();
             let stroke = BrushStroke {
-                points: vec![Point::new(0.1, 0.3), Point::new(0.5, 0.4), Point::new(0.8, 0.35)],
+                points: vec![Point::new(0.1, 0.3), Point::new(0.5, 0.4), Point::new(0.8, 0.35)].into(),
                 size: 0.04,
                 flow: 25.0,
                 ..Default::default()
@@ -505,7 +505,7 @@ fn cases() -> Vec<(&'static str, Edit)> {
         ("masks (brush, process V10: a soft stroke feathered as one dab)", |s| {
             s.process = lightcraft_develop::Process::V10.version();
             let stroke = |flow: f64, erase: bool, y: f64| BrushStroke {
-                points: vec![Point::new(0.1, y), Point::new(0.5, y + 0.1), Point::new(0.8, y + 0.05)],
+                points: vec![Point::new(0.1, y), Point::new(0.5, y + 0.1), Point::new(0.8, y + 0.05)].into(),
                 size: 0.06,
                 feather: 100.0,
                 flow,
@@ -526,7 +526,7 @@ fn cases() -> Vec<(&'static str, Edit)> {
         ("masks (brush, process V10: an Auto Mask stroke, one soft edge where colours match)", |s| {
             s.process = lightcraft_develop::Process::V10.version();
             let stroke = BrushStroke {
-                points: vec![Point::new(0.1, 0.3), Point::new(0.5, 0.45), Point::new(0.85, 0.4)],
+                points: vec![Point::new(0.1, 0.3), Point::new(0.5, 0.45), Point::new(0.85, 0.4)].into(),
                 size: 0.06,
                 feather: 100.0,
                 flow: 40.0,
@@ -542,7 +542,7 @@ fn cases() -> Vec<(&'static str, Edit)> {
         ("masks (brush, process V9: a soft stroke's dabs accumulated)", |s| {
             s.process = lightcraft_develop::Process::V9.version();
             let stroke = BrushStroke {
-                points: vec![Point::new(0.1, 0.3), Point::new(0.5, 0.4), Point::new(0.8, 0.35)],
+                points: vec![Point::new(0.1, 0.3), Point::new(0.5, 0.4), Point::new(0.8, 0.35)].into(),
                 size: 0.06,
                 feather: 100.0,
                 flow: 100.0,
@@ -557,7 +557,7 @@ fn cases() -> Vec<(&'static str, Edit)> {
         ("masks (brush, process V8: flow per dab)", |s| {
             s.process = lightcraft_develop::Process::V8.version();
             let stroke = BrushStroke {
-                points: vec![Point::new(0.1, 0.3), Point::new(0.5, 0.4), Point::new(0.8, 0.35)],
+                points: vec![Point::new(0.1, 0.3), Point::new(0.5, 0.4), Point::new(0.8, 0.35)].into(),
                 size: 0.04,
                 flow: 25.0,
                 ..Default::default()

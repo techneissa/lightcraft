@@ -480,7 +480,7 @@ fn straight_stroke(process: lightcraft_develop::Process, flow: f64, points: Vec<
     let (w, h) = (400, 100);
     let d = DevelopSettings { process: process.version(), ..Default::default() };
     let f = Frame::new(w, h, &d, true);
-    let s = BrushStroke { points, size: 0.05, feather: 0.0, flow, ..Default::default() };
+    let s = BrushStroke { points: points.into(), size: 0.05, feather: 0.0, flow, ..Default::default() };
     shape_alpha(&MaskShape::Brush { strokes: vec![s] }, &f, w, h, &Rgb32f::new(w, h), &Plane::new(w, h), 0.0, None)
 }
 
@@ -925,7 +925,7 @@ fn feathered_stroke(process: lightcraft_develop::Process, flow: f64, feather: f6
     let (w, h) = (400, 100);
     let d = DevelopSettings { process: process.version(), ..Default::default() };
     let f = Frame::new(w, h, &d, true);
-    let s = BrushStroke { points: vec![Point::new(0.1, 0.5), Point::new(0.9, 0.5)], size: 0.05, feather, flow, ..Default::default() };
+    let s = BrushStroke { points: vec![Point::new(0.1, 0.5), Point::new(0.9, 0.5)].into(), size: 0.05, feather, flow, ..Default::default() };
     shape_alpha(&MaskShape::Brush { strokes: vec![s] }, &f, w, h, &Rgb32f::new(w, h), &Plane::new(w, h), 0.0, None)
 }
 
@@ -1009,7 +1009,7 @@ fn an_auto_mask_stroke_on_a_flat_area_is_feathered_as_one_dab_is() {
         let d = DevelopSettings { process: p.version(), ..Default::default() };
         let f = Frame::new(w, h, &d, true);
         let s = BrushStroke {
-            points: vec![Point::new(0.1, 0.5), Point::new(0.9, 0.5)],
+            points: vec![Point::new(0.1, 0.5), Point::new(0.9, 0.5)].into(),
             size: 0.05,
             feather: 100.0,
             auto_mask: true,
