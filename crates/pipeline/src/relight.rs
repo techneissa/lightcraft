@@ -9,7 +9,7 @@
 //! The planes take mask ids beyond what a photo's masks use ([`IDS`]) and come after them; nothing else of the
 //! masks (their overlays, Amount, edges) sees them.
 
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
 
 use lightcraft_develop::relight::KindSettings;
 use lightcraft_develop::{DevelopSettings, LocalAdjustments};
@@ -19,6 +19,7 @@ use lightcraft_relight::{
     Beam, Effects, Field, Fill, Light, LightKind, Lobe, MAX_LIGHTS, Part, Pattern, Rig, Rim, Shading, Shafts, Softbox, Spot, Sun, Visibility, Water,
     WaterPlanes,
 };
+use rayon::prelude::*;
 
 use crate::masks::{Evaluated, MaskAlpha};
 use crate::{Plan, SourceInfo};
@@ -121,11 +122,73 @@ pub struct Lobes {
 pub(crate) struct Memo<T> {
     kept: Mutex<Vec<(u64, Arc<T>)>>,
     keep: usize,
+    /// The keys a render is making now ([`Memo::claim`]), and the signal that one of them is done.
+    making: Mutex<Vec<u64>>,
+    made: Condvar,
+    /// Tests: how many times a claim has started waiting for another render's value.
+    #[cfg(test)]
+    waits: std::sync::atomic::AtomicUsize,
+}
+
+/// What [`Memo::claim`] found: the value kept, or the right to make it (the key is free again when this drops, made or not).
+pub(crate) enum Claim<'a, T> {
+    Kept(Arc<T>),
+    Make(Making<'a, T>),
+}
+
+/// The key a render makes ([`Claim::Make`]); `None` when it makes it without telling others (on a rayon worker).
+pub(crate) struct Making<'a, T> {
+    memo: &'a Memo<T>,
+    key: Option<u64>,
+}
+
+impl<T> Drop for Making<'_, T> {
+    fn drop(&mut self) {
+        let Some(key) = self.key else { return };
+        self.memo.making.lock().unwrap_or_else(PoisonError::into_inner).retain(|k| *k != key);
+        self.memo.made.notify_all();
+    }
 }
 
 impl<T> Memo<T> {
     pub(crate) const fn new(keep: usize) -> Self {
-        Memo { kept: Mutex::new(Vec::new()), keep }
+        Memo {
+            kept: Mutex::new(Vec::new()),
+            keep,
+            making: Mutex::new(Vec::new()),
+            made: Condvar::new(),
+            #[cfg(test)]
+            waits: std::sync::atomic::AtomicUsize::new(0),
+        }
+    }
+
+    /// The value of `key` ([`Memo::get`]), or, when no render is making it, the right to make it. While another render makes
+    /// it, this waits for that one and takes what it kept (issue #374: the loupe and the open photo's filmstrip thumbnail, both
+    /// rendered after an edit, each made the same whole-field shading at once). Only a caller that keeps what it makes
+    /// ([`Memo::put`]) may claim: a waiter would otherwise find nothing and make it again after all.
+    ///
+    /// On a rayon worker it never waits (a `join` there asking for the same key would wait on itself): it makes the value
+    /// without telling other renders.
+    pub(crate) fn claim(&self, key: u64) -> Claim<'_, T> {
+        if rayon::current_thread_index().is_some() {
+            return match self.get(key) {
+                Some(v) => Claim::Kept(v),
+                None => Claim::Make(Making { memo: self, key: None }),
+            };
+        }
+        let mut making = self.making.lock().unwrap_or_else(PoisonError::into_inner);
+        loop {
+            if let Some(v) = self.get(key) {
+                return Claim::Kept(v);
+            }
+            if !making.contains(&key) {
+                making.push(key);
+                return Claim::Make(Making { memo: self, key: Some(key) });
+            }
+            #[cfg(test)]
+            self.waits.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            making = self.made.wait(making).unwrap_or_else(PoisonError::into_inner);
+        }
     }
 
     /// The value of `key`, which becomes the most recently used (so what is asked for every step of a drag stays).
@@ -673,9 +736,19 @@ fn beam_for(input: &Input, light: &Light, effects: &Effects, rig: &Rig, draft: b
         return None;
     }
     let plane_key = |coarse: bool| hashed(|h| std::hash::Hash::hash(&(5u8, beam_key(input, light, effects, coarse)), h));
-    if let Some(l) = BEAM_LOBES.get(plane_key(false)) {
-        return Some((l, false));
-    }
+    // (the release's full beam: another render making it now is waited for, as for the shading; a render holds one such claim
+    // at a time, so two never wait on each other; a render that keeps nothing never claims, `Memo::claim`)
+    let _making = if draft || !keep {
+        if let Some(l) = BEAM_LOBES.get(plane_key(false)) {
+            return Some((l, false));
+        }
+        None
+    } else {
+        match BEAM_LOBES.claim(plane_key(false)) {
+            Claim::Kept(l) => return Some((l, false)),
+            Claim::Make(m) => Some(m),
+        }
+    };
     let t = crate::profiling().then(std::time::Instant::now);
     // (the full rays when kept, also for a drag: a drag of the Haze slider weighs them again and marches nothing)
     let full = SHAFTS.get(shafts_key(input, light, effects, false));
@@ -930,9 +1003,18 @@ pub fn shading_for(input: &Input, scene: &Scene, ev: f64, draft: bool) -> (u64, 
 /// [`shading_for`], keeping what it makes when `keep`.
 fn shading_in(input: &Input, scene: &Scene, ev: f64, draft: bool, keep: bool) -> (u64, Arc<Shading>) {
     let key = shading_key(input, scene, ev, draft);
-    if let Some(sh) = MEMO.get(key) {
-        return (key, sh);
-    }
+    // (a render that keeps nothing, `Tier::Small`, never claims: one waiting for it would get nothing, `Memo::claim`)
+    let _making = if keep {
+        match MEMO.claim(key) {
+            Claim::Kept(sh) => return (key, sh),
+            Claim::Make(m) => Some(m),
+        }
+    } else {
+        if let Some(sh) = MEMO.get(key) {
+            return (key, sh);
+        }
+        None
+    };
     let t = crate::profiling().then(std::time::Instant::now);
     let rigs: Vec<Rig> = scene.lights.iter().take(MAX_SCENE).map(|l| input.field.rig(l, scene.darken, ev)).collect();
     let none = Effects::default();
@@ -1009,13 +1091,13 @@ pub fn masks(plan: &Plan<'_>) -> Vec<Evaluated> {
             let q = map.apply(Point::new(x, y));
             (q.x, q.y)
         });
-        let top = plane.iter().copied().fold(0f32, f32::max);
+        let top = plane.par_iter().copied().reduce(|| 0f32, f32::max);
         if top <= 1e-6 || !top.is_finite() {
             continue;
         }
         // (in place: a second full-size plane per beam is 96 MB more at 24 MP; the mask keeps only the non-zero part of it, so a
         // source's small glow stays small)
-        plane.iter_mut().for_each(|v| *v = (*v / top).clamp(0.0, 1.0));
+        plane.par_iter_mut().for_each(|v| *v = (*v / top).clamp(0.0, 1.0));
         let alpha = plane;
         let added = b.colour.map(|c| f64::from(c * top));
         let id = if b.shafts { SHAFT_ID } else { BEAM_IDS - b.slot };
@@ -1028,13 +1110,13 @@ pub fn masks(plan: &Plan<'_>) -> Vec<Evaluated> {
             let q = map.apply(Point::new(x, y));
             (q.x, q.y)
         });
-        let top = tau.iter().copied().fold(0f32, f32::max);
+        let top = tau.par_iter().copied().reduce(|| 0f32, f32::max);
         if top <= 1e-6 || !top.is_finite() {
             continue;
         }
-        let dim = tau.iter().map(|v| (v / top).clamp(0.0, 1.0)).collect();
+        let dim = tau.par_iter().map(|v| (v / top).clamp(0.0, 1.0)).collect();
         let glow_top = 1.0 - (-top).exp();
-        let glow = tau.iter().map(|v| ((1.0 - (-v.max(0.0)).exp()) / glow_top).clamp(0.0, 1.0)).collect();
+        let glow = tau.par_iter().map(|v| ((1.0 - (-v.max(0.0)).exp()) / glow_top).clamp(0.0, 1.0)).collect();
         let id = FADE_IDS - 2 * k as u32;
         out.push(evaluated(id, w, h, dim, LocalAdjustments { exposure: -f64::from(top) / std::f64::consts::LN_2, ..LocalAdjustments::default() }));
         let added = f.colour.map(|c| f64::from(c * glow_top));
@@ -1061,11 +1143,12 @@ pub fn masks(plan: &Plan<'_>) -> Vec<Evaluated> {
 /// A plane's values over the render's pixels as the planes of the finish stage's terms: the strongest value `top` (of the sign
 /// asked for) is the term, the plane is each pixel's share of it. `None` while the plane holds no such value.
 fn share(values: &[f32], sign: f32) -> Option<(Vec<f32>, f64)> {
-    let top = values.iter().map(|v| v * sign).filter(|v| v.is_finite()).fold(0f32, f32::max);
+    // (on every core: the water's eight planes are each a full-size render plane, issue #374)
+    let top = values.par_iter().map(|v| v * sign).filter(|v| v.is_finite()).reduce(|| 0f32, f32::max);
     if top <= 1e-6 {
         return None;
     }
-    Some((values.iter().map(|v| (v * sign / top).clamp(0.0, 1.0)).collect(), f64::from(top)))
+    Some((values.par_iter().map(|v| (v * sign / top).clamp(0.0, 1.0)).collect(), f64::from(top)))
 }
 
 /// The water's planes (issue #333) as masks: the exposure and the temperature and tint (the finish stage's own, which together
@@ -1116,6 +1199,54 @@ mod tests {
         }
         memo.clear();
         assert!(memo.get(1).is_none());
+    }
+
+    #[test]
+    fn a_value_being_made_is_waited_for_and_a_dropped_claim_frees_its_key() {
+        // issue #374: two renders asking for the same value make it once; one that keeps nothing lets the other make it
+        use std::sync::atomic::Ordering;
+        let memo: Arc<Memo<u8>> = Arc::new(Memo::new(4));
+        let hang_guard = std::time::Duration::from_secs(30);
+        // (until the second claim is waiting: polled, never timed; the guard only stops a hang)
+        let waiting = |memo: &Memo<u8>, n: usize| {
+            let start = std::time::Instant::now();
+            while memo.waits.load(Ordering::SeqCst) < n {
+                assert!(start.elapsed() < hang_guard, "the second claim never waited");
+                std::thread::yield_now();
+            }
+        };
+        let claim_on_a_thread = |memo: &Arc<Memo<u8>>, key: u64| {
+            let (memo, (tx, rx)) = (memo.clone(), std::sync::mpsc::channel());
+            std::thread::spawn(move || {
+                let got = match memo.claim(key) {
+                    Claim::Kept(v) => Some(*v),
+                    Claim::Make(_) => None,
+                };
+                let _ = tx.send(got);
+            });
+            rx
+        };
+        let Claim::Make(making) = memo.claim(7) else { panic!("nothing is kept yet") };
+        let rx = claim_on_a_thread(&memo, 7);
+        waiting(&memo, 1);
+        memo.put(7, Arc::new(42));
+        drop(making);
+        assert_eq!(rx.recv_timeout(hang_guard), Ok(Some(42)), "the second takes what the first made");
+        let Claim::Make(making) = memo.claim(8) else { panic!("nothing is kept for 8") };
+        let rx = claim_on_a_thread(&memo, 8);
+        waiting(&memo, 2);
+        drop(making);
+        assert_eq!(rx.recv_timeout(hang_guard), Ok(None), "a claim dropped without a value frees the key");
+        // (on a rayon worker a claim never waits: a `join` there asking for a key its own render is making would hang)
+        let Claim::Make(making) = memo.claim(9) else { panic!("nothing is kept for 9") };
+        let pool = rayon::ThreadPoolBuilder::new().num_threads(1).build().expect("a one-thread pool");
+        let (on_worker, (tx, rx)) = (memo.clone(), std::sync::mpsc::channel());
+        std::thread::spawn(move || {
+            let made = pool.install(|| matches!(on_worker.claim(9), Claim::Make(_)));
+            let _ = tx.send(made);
+        });
+        assert_eq!(rx.recv_timeout(hang_guard), Ok(true), "a rayon worker makes it at once");
+        drop(making);
     }
 
     #[test]

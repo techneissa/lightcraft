@@ -8,6 +8,8 @@
 
 use std::sync::Arc;
 
+use rayon::prelude::*;
+
 use lightcraft_develop::LocalAdjustments;
 use lightcraft_develop::relight_effects::LightEffects;
 use lightcraft_relight::sun_rays::{MAX_BRIGHT, MAX_DARK};
@@ -262,8 +264,8 @@ pub(crate) fn masks(
         let id = RAY_IDS - 2 * k as u32;
         let peak = |lobe: &Lobe| {
             let plane = field.plane_at(lobe, w, h, at);
-            let top = plane.iter().copied().fold(0f32, f32::max);
-            (top > 1e-6 && top.is_finite()).then(|| (plane.iter().map(|v| (v / top).clamp(0.0, 1.0)).collect::<Vec<f32>>(), top))
+            let top = plane.par_iter().copied().reduce(|| 0f32, f32::max);
+            (top > 1e-6 && top.is_finite()).then(|| (plane.par_iter().map(|v| (v / top).clamp(0.0, 1.0)).collect::<Vec<f32>>(), top))
         };
         if r.colour.iter().any(|c| *c > 0.0)
             && let Some((alpha, top)) = peak(&r.planes.light)

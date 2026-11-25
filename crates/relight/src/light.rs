@@ -497,25 +497,25 @@ fn soft_blur(p: &mut [f32], w: usize, h: usize, r: usize) {
             *out = sum / (b - a).max(1) as f32;
         }
     };
+    // (the transposes run on every core too: one thread's two transposes per pass were most of the blur, issue #374)
+    let mut t = vec![0f32; w * h];
     for _ in 0..3 {
         p.par_chunks_mut(w).for_each_init(Vec::new, |s, row| pass(row, s));
-        let mut t = vec![0f32; w * h];
-        for (y, row) in p.chunks(w).enumerate() {
-            for (x, v) in row.iter().enumerate() {
-                if let Some(c) = t.get_mut(x * h + y) {
-                    *c = *v;
-                }
-            }
-        }
+        transpose(p, &mut t, w, h);
         t.par_chunks_mut(h).for_each_init(Vec::new, |s, col| pass(col, s));
-        for (x, col) in t.chunks(h).enumerate() {
-            for (y, v) in col.iter().enumerate() {
-                if let Some(c) = p.get_mut(y * w + x) {
-                    *c = *v;
-                }
+        transpose(&t, p, h, w);
+    }
+}
+
+/// `src` (`w × h`, row by row) written into `dst` column by column (`h × w`), in parallel over `dst`'s rows.
+fn transpose(src: &[f32], dst: &mut [f32], w: usize, h: usize) {
+    dst.par_chunks_mut(h).enumerate().for_each(|(x, col)| {
+        for (y, c) in col.iter_mut().enumerate() {
+            if let Some(v) = src.get(y * w + x) {
+                *c = *v;
             }
         }
-    }
+    });
 }
 
 impl Field {
@@ -538,10 +538,9 @@ impl Field {
             })
             .collect();
         let mut deep: Vec<f32> =
-            lit.iter().enumerate().map(|(i, l)| l * self.ln_z.get(i).copied().filter(|v| v.is_finite()).unwrap_or(0.0)).collect();
+            lit.par_iter().enumerate().map(|(i, l)| l * self.ln_z.get(i).copied().filter(|v| v.is_finite()).unwrap_or(0.0)).collect();
         let r = ((SPILL_REACH * w.max(h) as f32) as usize).max(1);
-        soft_blur(&mut lit, w, h, r);
-        soft_blur(&mut deep, w, h, r);
+        rayon::join(|| soft_blur(&mut lit, w, h, r), || soft_blur(&mut deep, w, h, r));
         // (the spill is the blurred lit share over the frame's own low level, against its most: a small lit subject's blur is thin,
         // and its spill was too faint to see; a fill that lights the whole frame is that low level, and spills nothing)
         let most = lit.iter().copied().filter(|v| v.is_finite()).fold(0f32, f32::max);
