@@ -1359,7 +1359,7 @@ fn ui_commands_10(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Va
         "photo.editInExternal" => edit_in(app, ctx, p, false),
         // only while the Reflections section is on screen (fork/glare-highlights.md): Shift+B elsewhere does nothing
         "reflection.boxTool" => {
-            if app.ui.right == RightPanel::Remove && app.reflection_open && app.ui.view == ViewMode::Detail && let Some(photo) = app.session.active() {
+            if !cfg!(target_arch = "wasm32") && app.ui.right == RightPanel::Remove && app.reflection_open && app.ui.view == ViewMode::Detail && let Some(photo) = app.session.active() {
                 crate::reflections_glare::sync(app, photo);
                 if app.reflection_glare.tool == Some(crate::reflections_glare::Tool::Box) {
                     crate::reflections_glare::put_down(app);

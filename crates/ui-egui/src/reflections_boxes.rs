@@ -1,8 +1,8 @@
 //! Fork feature (`fork/glare-highlights.md`, issues #363 and #364): the Reflections section's boxes.
 //!
 //! The tool row (Box, Paint Glare, Erase Glare), the list of boxes, and the boxes on the photo, which are drawn only
-//! while the Box tool is in hand: a drag on empty photo draws one more, a click selects, a drag of a box moves it, a
-//! drag of a handle resizes it. Boxes are percent of the original photo before crop or rotation, so everything here
+//! while the Box tool is in hand: a click selects, a drag of the selected box moves it, a drag of its handle resizes
+//! it, and a drag anywhere else draws one more. Boxes are percent of the original photo before crop or rotation, so everything here
 //! edits them there and only draws them on the screen. Command: `reflection.box`.
 
 use egui::{Color32, CursorIcon, Key, Modifiers, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
@@ -52,7 +52,10 @@ enum Grab {
 pub fn command(app: &mut LightcraftApp, id: PhotoId, p: &Value) -> Result<Value, String> {
     let mut boxes = app.reflection_glare.area.boxes().to_vec();
     let index = |v: &Value| {
-        v.as_u64().and_then(|i| usize::try_from(i).ok()).filter(|i| *i < boxes.len()).ok_or_else(|| format!("No box {v}: indexes start at 0"))
+        v.as_u64()
+            .and_then(|i| usize::try_from(i).ok())
+            .filter(|i| *i < boxes.len())
+            .ok_or_else(|| tr_format!("No box {n}: indexes start at 0", n = v))
     };
     if let Some(v) = p.get("select") {
         let selected = if v.is_null() { None } else { Some(index(v)?) };
@@ -65,14 +68,14 @@ pub fn command(app: &mut LightcraftApp, id: PhotoId, p: &Value) -> Result<Value,
     let mut selected = app.reflection_glare.selected;
     if let Some(v) = p.get("add") {
         if boxes.len() >= MAX_AREAS {
-            return Err("Too many boxes".into());
+            return Err(tr("Too many boxes").into());
         }
         boxes.push(glare::parse_box(v)?);
         selected = Some(boxes.len() - 1);
         glare::hold(app, Tool::Box);
     } else if let Some(v) = p.get("update") {
         let i = index(v)?;
-        let Some(old) = boxes.get(i).cloned() else { return Err("No such box".into()) };
+        let Some(old) = boxes.get(i).cloned() else { return Err(tr("No such box").into()) };
         let mut side = serde_json::to_value(&old).map_err(|e| e.to_string())?;
         for key in ["left", "top", "right", "bottom"] {
             if let Some(v) = p.get(key) {
@@ -129,10 +132,12 @@ pub fn tool_row(app: &mut LightcraftApp, ui: &mut Ui) {
     let highlights = app.reflection_glare.mode == ReflectionMode::Highlights;
     let on = |t: Tool| app.reflection_glare.tool == Some(t);
     let tools = [(Tool::Box, "box"), (Tool::Paint, "paint"), (Tool::Erase, "erase")];
+    // (the web build runs none of them: the section says so)
+    let here = !cfg!(target_arch = "wasm32");
     let items = [
-        ("reflection:tool:box", "Box", "Draw boxes on the photo (Shift+B)", on(Tool::Box), true),
-        ("reflection:tool:paint", "Paint Glare", "Paint where there is glare", on(Tool::Paint), highlights),
-        ("reflection:tool:erase", "Erase Glare", "Paint where there is no glare", on(Tool::Erase), highlights),
+        ("reflection:tool:box", "Box", "Draw boxes on the photo (Shift+B)", on(Tool::Box), here),
+        ("reflection:tool:paint", "Paint Glare", "Paint where there is glare", on(Tool::Paint), highlights && here),
+        ("reflection:tool:erase", "Erase Glare", "Paint where there is no glare", on(Tool::Erase), highlights && here),
     ];
     let clicked = crate::panels::right::tile_row(ui, &items, &[Icon::GridSquare, Icon::Brush, Icon::Eraser]);
     if let Some((tool, name)) = clicked.and_then(|i| tools.get(i).copied()) {
@@ -199,7 +204,7 @@ fn row(app: &mut LightcraftApp, ui: &mut Ui, i: usize, n: usize) {
     }
     paint(ui.painter(), br.shrink(5.0), Icon::Close, t.text);
 
-    // the focused row keeps ↑ ↓ and Delete: they select and remove boxes, not photos
+    // a focused row holds the keyboard (the app's shortcuts wait): ↑ ↓ and Delete select and remove boxes here
     let (mut go, mut delete) = (None, false);
     if resp.has_focus() {
         let keys = egui::EventFilter { vertical_arrows: true, ..Default::default() };
@@ -216,14 +221,20 @@ fn row(app: &mut LightcraftApp, ui: &mut Ui, i: usize, n: usize) {
     }
     if remove.clicked() || delete {
         run(app, ui.ctx(), json!({"remove": i}));
+        // the focus moves to a neighbouring row, which is selected with it
         if delete && n > 1 {
-            ui.memory_mut(|m| m.request_focus(row_id(i.min(n - 2))));
+            let next = i.min(n - 2);
+            ui.memory_mut(|m| m.request_focus(row_id(next)));
+            run(app, ui.ctx(), json!({"select": next}));
         }
     } else if let Some(k) = go {
         ui.memory_mut(|m| m.request_focus(row_id(k)));
         run(app, ui.ctx(), json!({"select": k}));
     } else if resp.clicked() {
         resp.request_focus();
+        run(app, ui.ctx(), json!({"select": i}));
+    } else if resp.gained_focus() && !selected {
+        // reached with Tab
         run(app, ui.ctx(), json!({"select": i}));
     }
 }
@@ -303,18 +314,24 @@ pub fn overlay(app: &mut LightcraftApp, ui: &mut Ui, resp: &egui::Response, map:
     let boxes = app.reflection_glare.area.boxes().to_vec();
     let selected = app.reflection_glare.selected.filter(|i| *i < boxes.len());
     let at = |a: &ReflectionArea, h: (i8, i8)| glare::to_screen(map, d, handle_point(a, h));
-    let grab = |q: Pos2| {
+    // what lies under the pointer: a handle of the selected box, or a box (the selected one first)
+    let under = |q: Pos2| {
         if let Some((i, a)) = selected.and_then(|i| boxes.get(i).map(|a| (i, a)))
             && let Some(h) = HANDLES.into_iter().find(|h| at(a, *h).distance(q) <= HANDLE_REACH)
         {
-            return Grab::Resize(i, h);
+            return Some(Grab::Resize(i, h));
         }
         let n = glare::to_source(map, d, q);
         let inside = |a: &ReflectionArea| {
             let (l, t, r, b) = a.fractions();
             (l..=r).contains(&n.x) && (t..=b).contains(&n.y)
         };
-        selected.filter(|i| boxes.get(*i).is_some_and(inside)).or_else(|| boxes.iter().rposition(inside)).map_or(Grab::New, Grab::Move)
+        selected.filter(|i| boxes.get(*i).is_some_and(inside)).or_else(|| boxes.iter().rposition(inside)).map(Grab::Move)
+    };
+    // what a drag from there does: only the selected box is moved, anywhere else draws one more
+    let grab = |q: Pos2| match under(q) {
+        Some(Grab::Move(i)) if selected != Some(i) => Grab::New,
+        other => other.unwrap_or(Grab::New),
     };
     if let Some(what) = app.reflection_glare.box_drag.map(|drag| drag.what).or_else(|| resp.hover_pos().map(grab)) {
         ui.ctx().set_cursor_icon(match what {
@@ -327,11 +344,7 @@ pub fn overlay(app: &mut LightcraftApp, ui: &mut Ui, resp: &egui::Response, map:
     if resp.drag_started()
         && let Some(q) = press
     {
-        let what = grab(q);
-        if let Grab::Move(i) = what {
-            run(app, ui.ctx(), json!({"select": i}));
-        }
-        app.reflection_glare.box_drag = Some(Drag { from: q, what });
+        app.reflection_glare.box_drag = Some(Drag { from: q, what: grab(q) });
     }
     let drag = app.reflection_glare.box_drag;
     let change = drag.zip(resp.interact_pointer_pos()).and_then(|(drag, now)| edited(drag, &boxes, map, d, now));
@@ -377,9 +390,9 @@ pub fn overlay(app: &mut LightcraftApp, ui: &mut Ui, resp: &egui::Response, map:
     } else if resp.clicked()
         && let Some(q) = resp.interact_pointer_pos()
     {
-        match grab(q) {
-            Grab::Move(i) | Grab::Resize(i, _) => run(app, ui.ctx(), json!({"select": i})),
-            Grab::New => run(app, ui.ctx(), json!({"select": null})),
+        match under(q) {
+            Some(Grab::Move(i) | Grab::Resize(i, _)) => run(app, ui.ctx(), json!({"select": i})),
+            _ => run(app, ui.ctx(), json!({"select": null})),
         }
     } else if drag.is_none()
         && let Some((i, a)) = selected.and_then(|i| boxes.get(i).map(|a| (i, a)))
@@ -401,5 +414,49 @@ fn keyboard(app: &mut LightcraftApp, ui: &mut Ui, map: &CanvasMap, d: &DevelopSe
         if let Some(b) = new {
             run(app, ui.ctx(), json!({"update": i, "left": b.left, "top": b.top, "right": b.right, "bottom": b.bottom}));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::headless::Headless;
+    use std::time::Duration;
+
+    fn request(h: &mut Headless, method: &str, params: Value) {
+        let r = h.request(method, params, Duration::from_secs(20));
+        assert_eq!(r["ok"], true, "{method}: {r}");
+        h.step();
+        h.step();
+    }
+
+    #[test]
+    fn a_focused_box_row_is_the_selected_box_and_delete_removes_it_alone() {
+        let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Default::default());
+        app.ui.settings.gpu = false;
+        let mut h = Headless::new(app, [1200.0, 2000.0], 1.0);
+        request(&mut h, "ui.set", json!({"view": "detail", "right": "edit"}));
+        request(&mut h, "engine.execute", json!({"command": "panel.remove"}));
+        let add = |h: &mut Headless, left: u32| {
+            // Reflections mode: a changed box runs no model
+            h.app.run("reflection.box", json!({"add": {"left": left, "top": 10, "right": left + 20, "bottom": 30}})).unwrap();
+            h.step();
+        };
+        for left in [10, 40, 70] {
+            add(&mut h, left);
+        }
+        let boxes = |h: &Headless| h.app.reflection_glare.area.boxes().iter().map(|a| a.left).collect::<Vec<_>>();
+        let selected = |h: &Headless| h.app.reflection_glare.selected;
+        request(&mut h, "ui.clickWidget", json!({"id": "reflection:box:1"}));
+        request(&mut h, "ui.key", json!({"key": "Delete"}));
+        assert_eq!((boxes(&h), selected(&h)), (vec![10.0, 70.0], Some(1)), "the neighbouring row is selected");
+        request(&mut h, "ui.key", json!({"key": "Delete"}));
+        assert_eq!((boxes(&h), selected(&h)), (vec![10.0], Some(0)));
+        // focus that arrives without a click selects too: from row 0 past its ✕ to row 1
+        add(&mut h, 40);
+        add(&mut h, 70);
+        request(&mut h, "ui.key", json!({"key": "Tab"}));
+        request(&mut h, "ui.key", json!({"key": "Tab"}));
+        assert_eq!(selected(&h), Some(1));
     }
 }

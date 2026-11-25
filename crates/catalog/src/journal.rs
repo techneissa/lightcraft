@@ -91,6 +91,7 @@
 //! | fork 22 | Relight's underwater look (#333, `fork/relight.md`) | `DevelopSettings.fork_relight` may hold a `water` object (`amount`, `clarity`, `tint`, `shafts`, `caustics`, each left out at its default 0, 50, 0, 0, 0) beside `lights` and `darken`; an older build refuses the library |
 //! | fork 23 | Relight's sun past an edge (#332, `fork/relight.md`) | each light in `DevelopSettings.fork_relight.lights` may hold `edgeGlow` (Edge Glow, 0..100) and `sunburst` (0..100), left out at their default 0; an older build refuses the library |
 //! | fork 24 | Relight's rays in the sky (#330, `fork/relight.md`) | each light in `DevelopSettings.fork_relight.lights` may hold `skyRays` and `oppositeRays` (0..100), the rays' shape `rayCount` (3..60), `rayLength`, `rayWidth`, `rayVariation`, `rayDirection` (−180..180), `raySpread` (10..360), `raySoftness` and `rayBlocking`, `raysPlaced` (0 or 1), `raysX` and `raysY` (the rays' centre), each left out at its default (0, 0, 7, 60, 80, 80, 0, 360, 85, 60, 0, 0.5 and 0.1); an older build refuses the library |
+//! | fork 25 | several Reflections boxes (#363) | develop settings `reflection.area` is a list when it holds two or more boxes (up to 32); one box or a mask is written as before; an older build refuses the library |
 //!
 //! Versions 1–14 are `"format":"lightcraft-catalog"` (13 means the official Lens Blur or the fork's camera
 //! profiles; their fields differ, so either reads exactly); the fork writes `"format":"lightcraft-catalog-fork"` from

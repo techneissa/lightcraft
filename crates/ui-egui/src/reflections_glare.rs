@@ -102,6 +102,8 @@ pub struct GlarePanel {
     pub saved: (Vec<ReflectionArea>, Vec<GlareStroke>),
     /// The Remove tool chosen when the tool on the photo was picked up: choosing another one puts it down.
     held_with: String,
+    /// The panels of photos left while an edit of theirs still waited for its run.
+    waiting: Vec<GlarePanel>,
 }
 
 /// Take the panel's choices back from a photo's saved result.
@@ -109,6 +111,8 @@ pub fn load(app: &mut LightcraftApp, r: &Reflection) {
     put_down(app);
     let p = &mut app.reflection_glare;
     p.drag.clear();
+    // a box change still waiting for its run belonged to the photo left
+    p.boxes_changed = false;
     p.mode = r.mode;
     p.area = Area::of(&r.area);
     p.glare = r.glare.clone().sanitized();
@@ -126,8 +130,8 @@ pub fn hold(app: &mut LightcraftApp, tool: Tool) {
     p.box_drag = None;
     if tool != Tool::Box {
         p.selected = None;
-    } else if !matches!(p.area, Area::Boxes(_)) {
-        // back to boxes: those of the saved result, if it has any
+    } else if p.area == Area::Whole {
+        // (a mask stays until the first box is drawn)
         p.area = Area::Boxes(Area::of(&p.saved.0).boxes().to_vec());
     }
 }
@@ -143,12 +147,13 @@ pub fn put_down(app: &mut LightcraftApp) -> bool {
     had
 }
 
-/// Put the tool down once it is no longer what the user works with: another panel, the section closed, another Remove
-/// tool or a spot picked.
+/// Put the tool down once it is no longer what the user works with: another view or panel, the section closed, another
+/// Remove tool or a spot picked.
 pub fn release_if_hidden(app: &mut LightcraftApp) {
     let p = &app.reflection_glare;
     if p.tool.is_some()
-        && (app.ui.right != crate::state::RightPanel::Remove
+        && (app.ui.view != crate::state::ViewMode::Detail
+            || app.ui.right != crate::state::RightPanel::Remove
             || !app.reflection_open
             || app.ui.tool != p.held_with
             || app.session.active_spot.is_some())
@@ -162,13 +167,31 @@ pub fn release_if_hidden(app: &mut LightcraftApp) {
 pub fn sync(app: &mut LightcraftApp, id: PhotoId) {
     let r = app.session.develop_of(id).map(|d| d.reflection.clone()).unwrap_or_default();
     if app.reflection_glare.photo != Some(id) {
-        load(app, &r);
-        app.reflection_glare.photo = Some(id);
+        let p = &mut app.reflection_glare;
+        // an edit of the photo left that still waits for its run keeps its panel
+        if p.rerun.is_some() && p.rerun == p.photo {
+            p.rerun = None;
+            let old = GlarePanel { waiting: Vec::new(), ..p.clone() };
+            p.waiting.push(old);
+        }
+        if let Some(i) = p.waiting.iter().position(|w| w.photo == Some(id)) {
+            let back = p.waiting.remove(i);
+            let waiting = std::mem::take(&mut p.waiting);
+            *p = GlarePanel { waiting, rerun: Some(id), ..back };
+            put_down(app);
+        } else {
+            load(app, &r);
+            app.reflection_glare.photo = Some(id);
+        }
         return;
     }
     let p = &mut app.reflection_glare;
     if p.saved.0 == r.area && p.saved.1 == r.glare.paint {
         return;
+    }
+    // the boxes may be others now: the selection (and with it the arrows) lets go
+    if p.saved.0 != r.area {
+        p.selected = None;
     }
     p.saved = (r.area.clone(), r.glare.paint.clone());
     p.glare.paint = r.glare.clone().sanitized().paint;
@@ -177,8 +200,19 @@ pub fn sync(app: &mut LightcraftApp, id: PhotoId) {
         (Area::Boxes(_), Area::Whole) => Area::Boxes(Vec::new()),
         (_, area) => area,
     };
-    p.selected = p.selected.filter(|i| *i < p.area.boxes().len());
     p.box_drag = None;
+}
+
+/// What this app saves is not an outside change: the panel of `id`, shown or waiting, keeps its newer choices.
+fn mark_saved(app: &mut LightcraftApp, id: PhotoId, r: &Reflection) {
+    let seen = (r.area.clone(), r.glare.paint.clone());
+    let p = &mut app.reflection_glare;
+    for waiting in p.waiting.iter_mut().filter(|w| w.photo == Some(id)) {
+        waiting.saved = seen.clone();
+    }
+    if p.photo == Some(id) {
+        p.saved = seen;
+    }
 }
 
 fn area_json(a: &Area) -> Value {
@@ -202,13 +236,18 @@ pub(crate) fn parse_box(v: &Value) -> Result<ReflectionArea, String> {
     a.ok_or_else(|| "area: each side 0–100, left below right and top below bottom".into())
 }
 
-/// An area from a command's `area` value: `"whole"` or null, `"boxes"`, one box or a list of them, or `{mask: id}`.
-fn parse_area(v: &Value, current: &Area, d: &DevelopSettings) -> Result<Area, String> {
+/// An area from a command's `area` value: `"whole"` or null, `"boxes"` (the ones in the panel, else the saved
+/// result's), one box or a list of them, or `{mask: id}`.
+fn parse_area(v: &Value, current: &Area, saved: &[ReflectionArea], d: &DevelopSettings) -> Result<Area, String> {
     if v.is_null() || v.as_str() == Some("whole") || v.get("whole").and_then(Value::as_bool) == Some(true) {
         return Ok(Area::Whole);
     }
     if v.as_str() == Some("boxes") {
-        return Ok(Area::Boxes(current.boxes().to_vec()));
+        let boxes = match current {
+            Area::Boxes(boxes) => boxes.clone(),
+            _ => Area::of(saved).boxes().to_vec(),
+        };
+        return Ok(Area::Boxes(boxes));
     }
     if let Some(id) = v.get("mask") {
         let id = id.as_u64().and_then(|i| u32::try_from(i).ok()).ok_or("mask must be a mask id")?;
@@ -233,7 +272,7 @@ pub fn take_params(app: &mut LightcraftApp, id: PhotoId, p: &Value) -> Result<()
     }
     if let Some(a) = p.get("area") {
         let d = app.session.develop_of(id).ok_or("Photo missing")?;
-        let area = parse_area(a, &app.reflection_glare.area, &d)?;
+        let area = parse_area(a, &app.reflection_glare.area, &app.reflection_glare.saved.0, &d)?;
         if area != app.reflection_glare.area {
             app.reflection_glare.selected = None;
             app.reflection_glare.area = area;
@@ -332,57 +371,105 @@ fn paint(app: &mut LightcraftApp, id: PhotoId, p: &Value) -> Result<Value, Strin
 }
 
 /// After the boxes changed: find and fill the glare again in Highlights mode (a reflection model runs only when asked),
-/// or take the fill away when no box is left.
+/// or, when no box is left, take away what the boxes' result changed.
 pub fn boxes_changed(app: &mut LightcraftApp, id: PhotoId) -> Result<(), String> {
-    if app.reflection_glare.mode != ReflectionMode::Highlights {
+    // the web build runs neither: the panel says so once
+    if cfg!(target_arch = "wasm32") {
+        return Ok(());
+    }
+    if app.reflection_glare.mode != ReflectionMode::Highlights && app.reflection_glare.area != Area::Boxes(Vec::new()) {
+        // nothing waits to run for a box that only the model uses
+        app.reflection_glare.rerun = app.reflection_glare.rerun.filter(|waiting| *waiting != id);
         return Ok(());
     }
     app.reflection_glare.boxes_changed = true;
     if app.tasks.is_running(crate::reflections::TASK) {
         app.reflection_glare.rerun = Some(id);
         Ok(())
+    } else if app.reflection_glare.area == Area::Boxes(Vec::new()) {
+        let glare = app.reflection_glare.glare.clone();
+        clear_boxes(app, id, glare)
     } else {
-        run_again(app, id)
+        crate::reflections::run(app, id, &json!({})).map(|_| ())
     }
 }
 
-fn run_again(app: &mut LightcraftApp, id: PhotoId) -> Result<(), String> {
-    if app.reflection_glare.area == Area::Boxes(Vec::new()) {
-        return clear_boxes(app, id);
-    }
-    crate::reflections::run(app, id, &json!({})).map(|_| ())
-}
-
-/// No box left: the glare the boxes' result filled comes back, as one undo step.
-fn clear_boxes(app: &mut LightcraftApp, id: PhotoId) -> Result<(), String> {
+/// No box left: what the boxes' result changed comes back, as one undo step. The rest of its choices stay.
+fn clear_boxes(app: &mut LightcraftApp, id: PhotoId, glare: Glare) -> Result<(), String> {
     app.reflection_glare.boxes_changed = false;
     let mut d = (*app.session.develop_of(id).ok_or("Photo missing")?).clone();
     // only a result made with boxes: a whole-photo or mask result stays
-    if d.reflection.mode != ReflectionMode::Highlights || Area::of(&d.reflection.area).boxes().is_empty() {
+    if Area::of(&d.reflection.area).boxes().is_empty() {
         return Ok(());
     }
-    let amount = if d.reflection.correction.is_empty() { 100.0 } else { d.reflection.amount };
-    d.reflection = Reflection { mode: ReflectionMode::Highlights, glare: app.reflection_glare.glare.clone(), amount, ..Default::default() };
-    app.reflection_glare.saved = (Vec::new(), d.reflection.glare.paint.clone());
+    let r = &mut d.reflection;
+    r.area.clear();
+    r.correction.clear();
+    r.source_key.clear();
+    r.enabled = false;
+    if r.mode == ReflectionMode::Highlights {
+        r.glare = glare;
+    }
+    if r.amount == 0.0 {
+        r.amount = 100.0;
+    }
+    mark_saved(app, id, &d.reflection);
     app.session.set_develop(id, d, "Remove Glare Box").map_err(|e| e.to_string())
 }
 
-/// After a run: start the one a stroke or a box asked for while it went, if its photo is still the one shown (the
-/// choices stay in the panel either way).
+/// After a run: start the one a stroke or a box asked for while it went, for the photo it was asked on, shown or not.
 pub fn after_run(app: &mut LightcraftApp) {
-    if let Some(id) = app.reflection_glare.rerun.take()
-        && app.session.active() == Some(id)
-        && let Err(e) = run_again(app, id)
-    {
-        log::warn!("reflection rerun: {e}");
+    loop {
+        let p = &mut app.reflection_glare;
+        let next = match p.rerun.take() {
+            Some(id) if p.photo == Some(id) => {
+                let panel = GlarePanel { waiting: Vec::new(), ..p.clone() };
+                p.boxes_changed = false;
+                Some(panel)
+            }
+            _ => p.waiting.pop(),
+        };
+        let Some(panel) = next else { return };
+        match run_waiting(app, panel) {
+            // one run at a time: the others wait for this one
+            Ok(true) => return,
+            Ok(false) => {}
+            Err(e) => log::warn!("reflection rerun: {e}"),
+        }
     }
+}
+
+/// Run what `panel` waited for, on its own photo; whether a run started.
+fn run_waiting(app: &mut LightcraftApp, panel: GlarePanel) -> Result<bool, String> {
+    let Some(id) = panel.photo else { return Ok(false) };
+    if panel.area == Area::Boxes(Vec::new()) {
+        return clear_boxes(app, id, panel.glare).map(|()| false);
+    }
+    // a reflection model runs only when asked
+    if panel.mode != ReflectionMode::Highlights {
+        return Ok(false);
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let (edge, model) = (app.reflection_quality, app.reflection_model.clone());
+        start_job(app, id, edge, model, panel).map(|_| true)
+    }
+    #[cfg(target_arch = "wasm32")]
+    Ok(false)
+}
+
+/// Another library was opened: what waited belonged to the old one's photos.
+pub fn forget_waiting(app: &mut LightcraftApp) {
+    app.reflection_glare.rerun = None;
+    app.reflection_glare.waiting.clear();
 }
 
 /// What a recalculation keeps of the photo's earlier result `old`: Amount, Protect Sky and Detail Protection when it
 /// is of the same kind, and Limit to Area only for a whole-photo result (an area is its own limit, and an old limit
 /// would keep part of the new area unchanged).
 pub fn keep_choices(old: &Reflection, made: &mut Reflection) {
-    if old.correction.is_empty() || old.mode != made.mode {
+    // (a result whose boxes were all removed has no correction, but its choices)
+    if (old.correction.is_empty() && old.amount == 0.0) || old.mode != made.mode {
         return;
     }
     made.amount = old.amount;
@@ -409,6 +496,7 @@ pub fn start(app: &mut LightcraftApp, id: PhotoId, edge: u32, model: &str) -> Op
     if panel.area == Area::Boxes(Vec::new()) {
         return Some(Err(tr("Draw a box on the photo first").into()));
     }
+    app.reflection_glare.boxes_changed = false;
     Some(start_job(app, id, edge, model.to_string(), panel))
 }
 
@@ -426,7 +514,7 @@ fn start_job(app: &mut LightcraftApp, id: PhotoId, edge: u32, model: String, pan
     let cancel = std::sync::Arc::new(AtomicBool::new(false));
     let flag = cancel.clone();
     let highlights = panel.mode == ReflectionMode::Highlights;
-    let boxes_changed = std::mem::take(&mut app.reflection_glare.boxes_changed);
+    let boxes_changed = panel.boxes_changed;
     crate::tasks::spawn_tracked(
         app,
         crate::reflections::TASK,
@@ -471,8 +559,10 @@ fn start_job(app: &mut LightcraftApp, id: PhotoId, edge: u32, model: String, pan
         move |app, ctx, result| {
             if generation == app.session.library_generation() {
                 finish(app, ctx, id, &identity, result);
+                after_run(app);
+            } else {
+                forget_waiting(app);
             }
-            after_run(app);
             ctx.request_repaint();
         },
     )?;
@@ -496,10 +586,8 @@ fn finish(app: &mut LightcraftApp, ctx: &egui::Context, id: PhotoId, identity: &
             let mut d = (*d).clone();
             keep_choices(&d.reflection, &mut made);
             let label = if made.mode == ReflectionMode::Highlights { "Remove Glare" } else { "Remove Reflections" };
-            // what this run saves is not an outside change: a box drawn while it ran stays in the panel
-            if app.reflection_glare.photo == Some(id) {
-                app.reflection_glare.saved = (made.area.clone(), made.glare.paint.clone());
-            }
+            // a box drawn while this ran stays in the panel
+            mark_saved(app, id, &made);
             d.reflection = made;
             match app.session.set_develop(id, d, label) {
                 Ok(()) => app.toast(ctx, note.unwrap_or_else(|| tr("Reflections calculated; adjust Amount on the right").into())),
@@ -536,7 +624,8 @@ pub fn mode_row(app: &mut LightcraftApp, ui: &mut egui::Ui, busy: bool) {
         let label = |m: ReflectionMode| if m == ReflectionMode::Highlights { tr("Highlights") } else { tr("Reflections") };
         let r = crate::widgets::combo_box("reflection-mode").selected_text(label(mode)).show_ui(ui, |ui| {
             for m in [ReflectionMode::Reflections, ReflectionMode::Highlights] {
-                let r = ui.add_enabled(!busy, egui::Button::selectable(mode == m, label(m)));
+                let here = m == ReflectionMode::Reflections || !cfg!(target_arch = "wasm32");
+                let r = ui.add_enabled(!busy && here, egui::Button::selectable(mode == m, label(m)));
                 if r.clicked() {
                     mode = m;
                 }
@@ -570,7 +659,8 @@ pub fn area_row(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings,
             if r.clicked() {
                 pick = Some(json!("whole"));
             }
-            let r = ui.add_enabled(!busy, egui::Button::selectable(matches!(area, Area::Boxes(_)), tr("Boxes")));
+            let here = !busy && !cfg!(target_arch = "wasm32");
+            let r = ui.add_enabled(here, egui::Button::selectable(matches!(area, Area::Boxes(_)), tr("Boxes")));
             register(ui, "reflection:area:box", r.rect);
             if r.clicked() {
                 draw = true;
@@ -593,7 +683,7 @@ pub fn area_row(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings,
             put_down(app);
             app.run("reflection.area", json!({"area": area})).map(|_| ())
         } else if draw {
-            app.run("reflection.tool", json!({"tool": "box"})).map(|_| ())
+            app.run("reflection.area", json!({"area": "boxes"})).and_then(|_| app.run("reflection.tool", json!({"tool": "box"}))).map(|_| ())
         } else {
             Ok(())
         };
@@ -819,17 +909,23 @@ mod tests {
     }
 
     #[test]
-    fn a_waiting_rerun_never_runs_on_another_photo() {
+    fn a_waiting_rerun_runs_on_its_own_photo_never_another() {
         scratch_cache();
         let mut app = app();
+        let a = app.session.active().unwrap();
         app.run("reflection.paint", json!({"points": [[50, 50]], "size": 2})).unwrap();
         app.run("reflection.paint", json!({"points": [[20, 20]], "size": 2})).unwrap();
         assert!(app.reflection_glare.rerun.is_some());
         let b = other_photo(&app);
         app.session.selection.active = Some(b);
+        // the panel turns to photo B while photo A's second stroke still waits
+        app.run("reflection.status", json!({})).unwrap();
         join(&mut app);
-        assert!(!app.tasks.is_running(crate::reflections::TASK), "photo A's strokes started a run on photo B");
-        assert_eq!(app.reflection_glare.rerun, None);
+        join(&mut app);
+        let strokes = |app: &LightcraftApp, id| app.session.develop_of(id).unwrap().reflection.glare.paint.len();
+        assert_eq!(strokes(&app, a), 2, "photo A's waiting stroke was lost");
+        assert_eq!(strokes(&app, b), 0, "photo A's strokes reached photo B");
+        assert!(app.reflection_glare.glare.paint.is_empty());
     }
 
     #[test]

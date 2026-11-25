@@ -47,19 +47,29 @@ as one tile. Amount works for both modes; Protect Sky, Detail Protection and Lim
 New whole-photo reflection results start at Amount 100 % (was 35 %): with Detail Protection 60 % only about a fifth of
 the model's change showed, which read as "does nothing" (measured on shop-window-day with DSRNet-S and DIRS-MuGI).
 
-Several boxes (#363): the area is any number of boxes (at most 32) or one mask. Boxes that overlap are searched as
-one, others each at full detail; a reflection model runs once per box. The Reflections section has a Box / Paint Glare /
+Several boxes (#363): the area is up to 32 boxes or one mask. Boxes that overlap, touch or lie within 1 % of the long
+edge of each other are searched as one, with the gap between them (the soft edge is at their outside, not where they
+meet), others each at full detail; a reflection model runs once per box. The Reflections section has a Box / Paint Glare /
 Erase Glare tool row and a list of the boxes (a click or the arrows select, ✕ or Delete removes, Clear All). With the
-Box tool in hand (Shift+B; B is the Masking brush) a drag on empty photo draws one more box, a click selects, a drag
-moves, a handle resizes, Delete removes, Esc puts the tool down. In Highlights mode each finished change finds and fills
-the glare again; when no box is left the filled glare comes back, and boxes with no glare in them fill nothing.
+Box tool in hand (Shift+B; B is the Masking brush) a click selects a box, a drag of the selected box moves it, its
+handles resize, a drag anywhere else draws one more box (with a mask area, the first box takes its place), Delete removes, Esc puts the tool down. In Highlights mode each finished change finds and fills
+the glare again; when no box is left what the boxes' result changed comes back (in either mode, its other choices
+kept), and boxes with no glare in them fill nothing. The
+panel's boxes and strokes follow the saved result: undo and redo bring boxes back (and drop the selection), Reset
+clears them. An edit made while a run goes still runs after you move to another photo. The web build greys all of this
+out. A file's boxes with no inside or off the photo are dropped on reading.
 
-Boxes are drawn only while the Box tool is in hand (#364); another panel or Remove tool, the closed section or a picked
-spot puts it down.
+Boxes are drawn only while the Box tool is in hand (#364); another view, panel or Remove tool, the Find or Object section,
+the closed section or a picked spot puts it down.
 
 No light outline (#362): glare's soft edge and bloom reach farther than Expand, and what was left outside the fill read
 as a thin light ring. The finder now grows each spot outward while the light still falls and is still brighter than the
-surface around it (at most 2 % of the long edge). Results made before this keep their ring until Recalculate.
+surface around it, falling fast (at most 2 % of the long edge; a broad glow is left alone). Results made before this keep their ring until Recalculate. Checked
+on a synthetic plate only; the reported car photo is still to be checked.
+
+Older builds: the library format is fork 25 (`fork/catalog-format.md`), so a build from before this refuses the whole
+library and leaves it untouched. A sidecar (`lc:settings`) with two or more boxes loses its whole LightCraft edit in
+an older build, not only the reflection: such a build reads only the interoperable `crs:` fields.
 
 Commands (UI): `reflection.mode {mode: reflections | highlights}`, `reflection.area {area: "whole" | "boxes" | {left,
 top, right, bottom} | [boxes] | {mask: id}}` (percent of the original photo before crop or rotation),
@@ -67,7 +77,9 @@ top, right, bottom} | [boxes] | {mask: id}}` (percent of the original photo befo
 {clear: true} | {select: index | null}`, `reflection.glare {threshold?, expand?, fill?: lama | classic}`,
 `reflection.paint {points: [[x, y], …], size?, erase?} | {clear: true}` (percent; size is the radius in percent of the
 long edge), `reflection.tool {tool: box | paint | erase | none}`, `reflection.boxTool` (Shift+B); `reflection.apply`
-takes `mode`, `area`, `threshold`, `expand` and `fill` too, and `reflection.status` reports them under `panel`. The
+takes `mode`, `area`, `threshold`, `expand` and `fill` too. `reflection.status` reports them under `panel`:
+`panel.area` is `"whole"`, `{mask: id}` or the list of boxes (empty while none is drawn), and `panel.selected` the
+selected box's index or null. The
 settings saved with the photo (`reflection.mode`, `.area`, `.glare`) are left out of the file while default; one box is
 written as before, several as a list.
 
@@ -102,8 +114,10 @@ encoder inside; personal use only in this fork.
   and `menus.rs` (seven commands), `shortcuts.rs` (Delete removes the selected box), `panels/right.rs` and
   `panels/right/remove_compact.rs` (`tile_row` is shared; a Remove tool click puts the Reflections tool down),
   `panels/detail.rs` (`geometry` is `pub(crate)`), `panels/detail/geometry.rs` (`CanvasMap::rect` is `pub(crate)`),
-  and in `panels/detail.rs` `tool_interaction` calls `reflections_glare::release_if_hidden`, and its Remove arm asks
-  `reflections_glare::overlay` first.
+  `app/frame.rs` calls `reflections_glare::release_if_hidden` each frame, and in `panels/detail.rs` the Remove arm of
+  `tool_interaction` asks `reflections_glare::overlay` first.
+- `panels/right/remove_finds.rs` and `panels/right/remove_object.rs` (using them puts the Reflections tool down).
+- `crates/catalog/src/fork_format.rs` (`VERSION` 25), `journal.rs` (the format table), `tests_format_version.rs`.
 - `crates/pipeline/src/learned_fill.rs` (`FillRun::with_stop`, so the run's ✕ stops LaMa too; a fork file from
   `fork/lama-fill.md`).
 - `docs/ai-reflections.md` (the default Amount).

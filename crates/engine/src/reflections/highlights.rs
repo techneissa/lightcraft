@@ -29,6 +29,8 @@ const MAX_SPOT_AREA: f64 = 0.35;
 const MAX_SPOT_WHOLE: f64 = 0.08;
 /// The alpha above which a pixel is part of the hole handed to the fill.
 const HOLE: f32 = 0.02;
+/// Boxes nearer than this share of the photo's long edge are searched as one, the gap between them with them.
+const NEAR: f64 = 0.01;
 /// What [`make`] says when the areas hold no glare.
 pub const NO_GLARE: &str = "No glare found in the area. Lower Threshold, or paint the glare.";
 
@@ -52,12 +54,14 @@ struct Found {
     searched: usize,
 }
 
-/// Regions to search together: boxes that overlap or touch (so glare across their shared edge is found once), every
-/// other region alone.
-fn groups(regions: &[Region]) -> Vec<Vec<&Region>> {
+/// Regions to search together: boxes that overlap, touch or lie [`NEAR`] each other on a `w × h` photo (so glare
+/// across them is found once), every other region alone.
+fn groups(regions: &[Region], (w, h): (usize, usize)) -> Vec<Vec<&Region>> {
+    let long = w.max(h) as f64;
+    let (mx, my) = (NEAR * long / w.max(1) as f64, NEAR * long / h.max(1) as f64);
     let touch = |a: &Region, b: &Region| {
         let (a, b) = (a.rect, b.rect);
-        a[0] <= b[2] && b[0] <= a[2] && a[1] <= b[3] && b[1] <= a[3]
+        a[0] <= b[2] + mx && b[0] <= a[2] + mx && a[1] <= b[3] + my && b[1] <= a[3] + my
     };
     let mut out: Vec<Vec<&Region>> = Vec::new();
     for r in regions {
@@ -74,6 +78,19 @@ fn groups(regions: &[Region]) -> Vec<Vec<&Region>> {
         out.push(group);
     }
     out
+}
+
+/// `area` (0 or 1) with the gaps up to twice `r` pixels wide filled: its shape grown by `r`, then shrunk back.
+fn bridged(area: &Plane, r: usize) -> Plane {
+    let (w, h) = (area.width, area.height);
+    let r = r as f32;
+    let inside: Vec<bool> = area.data.iter().map(|v| *v > 0.5).collect();
+    let beyond: Vec<bool> = glare::distance(&inside, w, h, r + 1.0).iter().map(|d| *d > r).collect();
+    let back = glare::distance(&beyond, w, h, r + 1.0);
+    Plane::from_fn(w, h, |x, y| {
+        let i = y * w + x;
+        if inside.get(i) == Some(&true) || back.get(i).is_some_and(|d| *d > r) { 1.0 } else { 0.0 }
+    })
 }
 
 /// The glare of `src` within `group`; `None` when the group is empty.
@@ -95,6 +112,8 @@ fn search(src: &Rgb32f, glare: &Glare, group: &[&Region], cancel: &AtomicBool) -
         })
     });
     let long = w.max(h) as f64;
+    // boxes a little apart: the gap between them is searched too
+    let region_alpha = region_alpha.map(|a| if group.len() > 1 { bridged(&a, (NEAR * long * k / 2.0).ceil() as usize + 1) } else { a });
     let strokes: Vec<Stroke> = glare
         .paint
         .iter()
@@ -120,19 +139,17 @@ fn search(src: &Rgb32f, glare: &Glare, group: &[&Region], cancel: &AtomicBool) -
     };
     let mut mask = glare::find_until(&small, region_alpha.as_ref(), &params, &strokes, cancel);
     if params.boxed {
-        // a box's border fades in, as a reflection model's result does, so a stroke across it leaves no edge
-        let rects: Vec<[f32; 4]> = boxes.iter().map(|b| [0, 1, 2, 3].map(|i| ((b[i] - search[i % 2]) as f64 * k) as f32)).collect();
-        for (i, v) in mask.data.iter_mut().enumerate() {
+        // a box's border fades in, as a reflection model's result does, so a stroke across it leaves no edge. Measured
+        // to the outside of all the boxes together: an edge two boxes share stays filled
+        let narrowest = boxes.iter().map(|b| (b[2] - b[0]).min(b[3] - b[1])).min().unwrap_or(0);
+        let feather = (narrowest as f64 * k * super::area::BOX_FEATHER).max(1.0) as f32;
+        let outside: Vec<bool> = region_alpha.as_ref().map_or_else(|| vec![false; fw * fh], |r| r.data.iter().map(|v| *v <= 0.5).collect());
+        let gap = glare::distance(&outside, fw, fh, feather + 1.0);
+        for (i, (v, d)) in mask.data.iter_mut().zip(&gap).enumerate() {
             let (x, y) = ((i % fw) as f32 + 0.5, (i / fw) as f32 + 0.5);
-            let fade = rects.iter().map(|r| {
-                // (one box: its edges are the search picture's own)
-                let [l, t, right, bottom] = if rects.len() == 1 { [0.0, 0.0, fw as f32, fh as f32] } else { *r };
-                let feather = ((right - l).min(bottom - t) * super::area::BOX_FEATHER as f32).max(1.0);
-                let edge = (x - l).min(y - t).min(right - x).min(bottom - y);
-                let t = (edge / feather).clamp(0.0, 1.0);
-                t * t * (3.0 - 2.0 * t)
-            });
-            *v *= fade.fold(0.0, f32::max);
+            let edge = x.min(y).min(fw as f32 - x).min(fh as f32 - y).min(d - 0.5);
+            let t = (edge / feather).clamp(0.0, 1.0);
+            *v *= t * t * (3.0 - 2.0 * t);
         }
     }
     let searched = region_alpha.as_ref().map_or(fw * fh, |r| r.data.iter().filter(|v| **v > 0.5).count());
@@ -152,7 +169,7 @@ pub fn make(
     let glare = glare.clone().sanitized();
     let (w, h) = (src.width, src.height);
     let mut found = Vec::new();
-    for group in groups(regions) {
+    for group in groups(regions, (w, h)) {
         found.extend(search(src, &glare, &group, cancel));
         if cancel.load(Ordering::Relaxed) {
             return Err("Stopped".into());
@@ -617,6 +634,26 @@ mod tests {
                 .map(|(x, y)| luma(out.get(x, y)))
                 .fold(0.0f32, f32::max);
             assert!(ring < 1.3 * luma(plate), "a light outline stays around {spot:?}: {ring} on a plate of {}", luma(plate));
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn glare_across_the_edge_two_boxes_share_is_filled() {
+        // a bright streak over x = 300, where the two boxes touch, or lie 4 pixels apart
+        let plate = [0.01f32, 0.03, 0.12];
+        let src = Rgb32f::from_fn(600, 400, |x, y| if (270..330).contains(&x) && (194..206).contains(&y) { [0.95; 3] } else { plate });
+        let dir = std::env::temp_dir().join(format!("lc-glare-seam-{}", std::process::id()));
+        let luma = |p: [f32; 3]| 0.2627 * p[0] + 0.678 * p[1] + 0.0593 * p[2];
+        for half_gap in [0.0, 2.0 / 600.0] {
+            let boxes =
+                [Region { rect: [0.2, 0.3, 0.5 - half_gap, 0.7], alpha: None }, Region { rect: [0.5 + half_gap, 0.3, 0.8, 0.7], alpha: None }];
+            let made = make(&src, &Glare::default(), &boxes, None, &Arc::new(AtomicBool::new(false))).unwrap();
+            let r = super::super::area::save_in(&dir, &made.tiles, Some(Hash128(8)), made.reflection).unwrap();
+            let out = super::super::apply(&Arc::new(src.clone()), &r, Some(Hash128(8)), None).unwrap();
+            for x in 296..304 {
+                assert!(luma(out.get(x, 200)) < 1.3 * luma(plate), "light stays at {x} (gap {half_gap}): {:?}", out.get(x, 200));
+            }
         }
         let _ = std::fs::remove_dir_all(dir);
     }

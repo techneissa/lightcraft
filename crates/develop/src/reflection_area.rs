@@ -121,6 +121,8 @@ pub mod areas {
             Some(File::One(a)) => vec![a],
             Some(File::Many(v)) => v,
         };
+        // a damaged file loads clean: a box with no inside or off the photo is dropped
+        areas.retain(|a| a.mask.is_some() || a.is_valid());
         areas.truncate(MAX_AREAS);
         Ok(areas)
     }

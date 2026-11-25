@@ -253,6 +253,7 @@ fn start(app: &mut LightcraftApp, id: PhotoId, p: &Value) -> Result<Value, Strin
         move || lightcraft_engine::reflections::make(job.source, key, edge as u32, &model),
         move |app, ctx, result| {
             if generation != app.session.library_generation() {
+                crate::reflections_glare::forget_waiting(app);
                 return;
             }
             match result {
@@ -330,6 +331,9 @@ pub fn panel(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let pad = egui::Margin { left: 24, right: 22, top: 4, bottom: 8 };
     egui::Frame::NONE.inner_margin(pad).show(ui, |ui| {
         ui.spacing_mut().item_spacing.y = 8.0;
+        if cfg!(target_arch = "wasm32") {
+            ui.add(egui::Label::new(tr("Reflection removal requires the desktop app")).wrap());
+        }
         let mut on = d.reflection.enabled;
         let r = ui.add_enabled(!busy && (available || on), egui::Checkbox::new(&mut on, tr("Apply")));
         register(ui, "reflection:enabled", r.rect);
@@ -410,7 +414,7 @@ pub fn panel(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         }
         if ready || highlights {
             let label = if ready { "Recalculate" } else { "Find Glare" };
-            let r = ui.add_enabled(!busy && available, egui::Button::new(tr(label)));
+            let r = ui.add_enabled(!busy && available && !cfg!(target_arch = "wasm32"), egui::Button::new(tr(label)));
             register(ui, "reflection:recompute", r.rect);
             if r.clicked()
                 && let Err(e) = app.run("reflection.apply", json!({"quality":app.reflection_quality,"model":app.reflection_model}))

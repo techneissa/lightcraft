@@ -286,8 +286,9 @@ const SOFT_EDGE: f32 = 1.08;
 
 /// Grow `mask` over each spot's soft light. Glare's edge and bloom fade into the surface around it, and what of them is
 /// left outside the fill stays as a light outline (issue #362). From the spots outward, a pixel joins while the light
-/// is still falling and still brighter than the surface around, at most `reach` pixels away. `bg` stands in for that
-/// surface where everything near is within `reach` of a spot.
+/// is still brighter than the surface around and still falling fast: glare's light over that surface is gone within
+/// about `reach` pixels, while a broad glow (a bright sky, a lamp's) falls far more slowly, and the mask stops there.
+/// At most `reach` pixels away. `bg` stands in for the surface where everything near is within `reach` of a spot.
 fn soft_edges(mask: &mut [bool], y: &[f32], bg: &[f32], (w, h): (usize, usize), reach: usize, inside: &dyn Fn(usize) -> bool) {
     let mut front: Vec<usize> = (0..w * h).filter(|&i| mask[i]).collect();
     if front.is_empty() {
@@ -300,11 +301,13 @@ fn soft_edges(mask: &mut [bool], y: &[f32], bg: &[f32], (w, h): (usize, usize), 
     let surface: Vec<f32> = (0..w * h).map(|i| if share[i] > 0.02 { sum[i] / share[i] } else { bg[i] }).collect();
     // lightly smoothed, so grain does not end the edge early
     let s = box_mean(y, w, h, 1);
+    let over = |i: usize| s[i] - surface[i];
+    let steep = 1.0 / reach.max(1) as f32;
     for _ in 0..reach {
         let mut next = Vec::new();
         for &i in &front {
             for j in neighbours(i, w, h) {
-                if !mask[j] && inside(j) && s[j] < s[i] && s[j] > SOFT_EDGE * surface[j] + 0.002 {
+                if !mask[j] && inside(j) && s[j] < s[i] && s[j] > SOFT_EDGE * surface[j] + 0.002 && over(i) - over(j) >= steep * over(j) {
                     mask[j] = true;
                     next.push(j);
                 }
@@ -318,7 +321,7 @@ fn soft_edges(mask: &mut [bool], y: &[f32], bg: &[f32], (w, h): (usize, usize), 
 }
 
 /// Distance of every pixel to the nearest set pixel of `mask` (3-4 chamfer, in pixels), at most `cap`.
-fn distance(mask: &[bool], w: usize, h: usize, cap: f32) -> Vec<f32> {
+pub(super) fn distance(mask: &[bool], w: usize, h: usize, cap: f32) -> Vec<f32> {
     let big = cap.max(1.0) * 3.0 + 4.0;
     let mut d: Vec<f32> = mask.iter().map(|m| if *m { 0.0 } else { big }).collect();
     let at = |d: &[f32], x: isize, y: isize| -> f32 {
@@ -436,6 +439,18 @@ mod tests {
         assert!(a.get(200, 150) > 0.99);
         assert_eq!(a.get(20, 20), 0.0);
         assert_eq!(a.get(200, 180), 0.0);
+    }
+
+    #[test]
+    fn the_soft_edge_does_not_spread_into_a_broad_glow() {
+        // a glare spot in the middle of a lamp's wide glow, which falls off far more slowly than glare's own edge
+        let img = Rgb32f::from_fn(600, 400, |x, y| {
+            let d = (x as f32 + 0.5 - 300.0).hypot(y as f32 + 0.5 - 200.0);
+            [if d <= 8.0 { 1.0 } else { 0.05 + 0.35 * (-d / 100.0).exp() }; 3]
+        });
+        let a = find(&img, None, &Params { photo_long: 600.0, expand: 30.0, ..params() }, &[]);
+        assert!(a.get(300, 200) > 0.99);
+        assert_eq!(a.get(318, 200), 0.0, "the mask stays near the spot");
     }
 
     #[test]

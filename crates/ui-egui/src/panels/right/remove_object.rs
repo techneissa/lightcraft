@@ -77,6 +77,8 @@ pub(super) fn section(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 register(ui, id, r.rect);
                 if r.clicked() {
                     app.ui.remove_object = object;
+                    // fork (issue #364): the Reflections tool on the photo gives way to what is used here
+                    crate::reflections_glare::put_down(app);
                 }
             }
         });
@@ -86,12 +88,16 @@ pub(super) fn section(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         padded(ui, |ui| {
             let r = ui.checkbox(&mut app.ui.remove_lasso, crate::i18n::tr("Fill Closed Loops"));
             register(ui, "removeLasso", r.rect);
+            if r.changed() {
+                crate::reflections_glare::put_down(app);
+            }
         });
         return;
     }
     if !app.session.segmenter.has_model() {
         padded(ui, |ui| {
             if text_button(ui, "removeObjectDownload", crate::i18n::tr("Download SAM 3 to Select Objects…"), false).clicked() {
+                crate::reflections_glare::put_down(app);
                 app.offer_sam_download(None);
             }
         });
@@ -105,6 +111,7 @@ pub(super) fn section(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     if !selected_shaped {
         let out = slider(ui, &expand_spec("Expand"), f64::from(app.ui.remove_expand) * 1000.0, true, None);
         if let Some(v) = out.value {
+            crate::reflections_glare::put_down(app);
             app.ui.remove_expand = (v / 1000.0) as f32;
         }
     }

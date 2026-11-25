@@ -240,7 +240,8 @@ pub fn make(
 }
 
 /// The tiles [`make`] saves, one per region: the model's change over the region's crop, kept inside it with its soft
-/// edge. Where regions overlap, a later one only adds what the earlier ones left, so nothing is taken off twice.
+/// edge. Where regions overlap, a later one only adds what the earlier ones left, so nothing is taken off twice. A
+/// region too small to hold a pixel is left out.
 pub fn run_model(src: &Rgb32f, edge: u32, model: &str, regions: &[Region], cancel: &std::sync::atomic::AtomicBool) -> Result<Vec<Tile>, String> {
     if !matches!(edge, 384 | 768 | 1024) || !super::valid_model(model) {
         return Err("Invalid reflection model or quality".into());
@@ -253,10 +254,16 @@ pub fn run_model(src: &Rgb32f, edge: u32, model: &str, regions: &[Region], cance
     let net = lightcraft_reflections::Runner::load(&dir, model, false)?;
     let mut tiles = Vec::with_capacity(regions.len());
     for (i, region) in regions.iter().enumerate() {
+        if region.pixel_box(src.width, src.height).is_none() {
+            continue;
+        }
         tiles.push(run_region(src, edge, &net, region, regions.get(..i).unwrap_or_default())?);
         if stopped() {
             return Err("Stopped".into());
         }
+    }
+    if tiles.is_empty() {
+        return Err("The area is empty".into());
     }
     Ok(tiles)
 }
@@ -279,8 +286,8 @@ fn run_region(src: &Rgb32f, edge: u32, net: &lightcraft_reflections::Runner, reg
     let mut grid = Rgb32f::new(mw, mh);
     for (k, ((a, b), out)) in bytes.as_chunks::<3>().0.iter().zip(&clean).zip(grid.data.iter_mut()).enumerate() {
         let at = (k % mw, k / mw);
-        let covered = done.iter().map(|r| self::keep(r, outer, (w, h), (mw, mh), at)).fold(0.0f32, f32::max);
-        let keep = self::keep(region, outer, (w, h), (mw, mh), at) * (1.0 - covered);
+        let left: f32 = done.iter().map(|r| 1.0 - self::keep(r, outer, (w, h), (mw, mh), at)).product();
+        let keep = self::keep(region, outer, (w, h), (mw, mh), at) * left;
         if keep <= 0.0 {
             continue;
         }
