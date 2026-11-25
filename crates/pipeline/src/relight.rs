@@ -9,7 +9,7 @@
 //! The planes take mask ids beyond what a photo's masks use ([`IDS`]) and come after them; nothing else of the
 //! masks (their overlays, Amount, edges) sees them.
 
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
 
 use lightcraft_develop::relight::KindSettings;
 use lightcraft_develop::{DevelopSettings, LocalAdjustments};
@@ -19,6 +19,7 @@ use lightcraft_relight::{
     Beam, Effects, Field, Fill, Light, LightKind, Lobe, MAX_LIGHTS, Part, Pattern, Rig, Rim, Shading, Shafts, Softbox, Spot, Sun, Visibility, Water,
     WaterPlanes,
 };
+use rayon::prelude::*;
 
 use crate::masks::{Evaluated, MaskAlpha};
 use crate::{Plan, SourceInfo};
@@ -121,11 +122,50 @@ pub struct Lobes {
 pub(crate) struct Memo<T> {
     kept: Mutex<Vec<(u64, Arc<T>)>>,
     keep: usize,
+    /// The keys a render is making now ([`Memo::claim`]), and the signal that one of them is done.
+    making: Mutex<Vec<u64>>,
+    made: Condvar,
+}
+
+/// What [`Memo::claim`] found: the value kept, or the right to make it (the key is free again when this drops, made or not).
+pub(crate) enum Claim<'a, T> {
+    Kept(Arc<T>),
+    Make(Making<'a, T>),
+}
+
+/// The key a render makes ([`Claim::Make`]).
+pub(crate) struct Making<'a, T> {
+    memo: &'a Memo<T>,
+    key: u64,
+}
+
+impl<T> Drop for Making<'_, T> {
+    fn drop(&mut self) {
+        self.memo.making.lock().unwrap_or_else(PoisonError::into_inner).retain(|k| *k != self.key);
+        self.memo.made.notify_all();
+    }
 }
 
 impl<T> Memo<T> {
     pub(crate) const fn new(keep: usize) -> Self {
-        Memo { kept: Mutex::new(Vec::new()), keep }
+        Memo { kept: Mutex::new(Vec::new()), keep, making: Mutex::new(Vec::new()), made: Condvar::new() }
+    }
+
+    /// The value of `key` ([`Memo::get`]), or, when no render is making it, the right to make it. While another render makes
+    /// it, this waits for that one and takes what it kept (issue #374: the loupe and the open photo's filmstrip thumbnail, both
+    /// rendered after an edit, each made the same whole-field shading at once).
+    pub(crate) fn claim(&self, key: u64) -> Claim<'_, T> {
+        let mut making = self.making.lock().unwrap_or_else(PoisonError::into_inner);
+        loop {
+            if let Some(v) = self.get(key) {
+                return Claim::Kept(v);
+            }
+            if !making.contains(&key) {
+                making.push(key);
+                return Claim::Make(Making { memo: self, key });
+            }
+            making = self.made.wait(making).unwrap_or_else(PoisonError::into_inner);
+        }
     }
 
     /// The value of `key`, which becomes the most recently used (so what is asked for every step of a drag stays).
@@ -930,9 +970,10 @@ pub fn shading_for(input: &Input, scene: &Scene, ev: f64, draft: bool) -> (u64, 
 /// [`shading_for`], keeping what it makes when `keep`.
 fn shading_in(input: &Input, scene: &Scene, ev: f64, draft: bool, keep: bool) -> (u64, Arc<Shading>) {
     let key = shading_key(input, scene, ev, draft);
-    if let Some(sh) = MEMO.get(key) {
-        return (key, sh);
-    }
+    let _making = match MEMO.claim(key) {
+        Claim::Kept(sh) => return (key, sh),
+        Claim::Make(m) => m,
+    };
     let t = crate::profiling().then(std::time::Instant::now);
     let rigs: Vec<Rig> = scene.lights.iter().take(MAX_SCENE).map(|l| input.field.rig(l, scene.darken, ev)).collect();
     let none = Effects::default();
@@ -1009,13 +1050,13 @@ pub fn masks(plan: &Plan<'_>) -> Vec<Evaluated> {
             let q = map.apply(Point::new(x, y));
             (q.x, q.y)
         });
-        let top = plane.iter().copied().fold(0f32, f32::max);
+        let top = plane.par_iter().copied().reduce(|| 0f32, f32::max);
         if top <= 1e-6 || !top.is_finite() {
             continue;
         }
         // (in place: a second full-size plane per beam is 96 MB more at 24 MP; the mask keeps only the non-zero part of it, so a
         // source's small glow stays small)
-        plane.iter_mut().for_each(|v| *v = (*v / top).clamp(0.0, 1.0));
+        plane.par_iter_mut().for_each(|v| *v = (*v / top).clamp(0.0, 1.0));
         let alpha = plane;
         let added = b.colour.map(|c| f64::from(c * top));
         let id = if b.shafts { SHAFT_ID } else { BEAM_IDS - b.slot };
@@ -1028,13 +1069,13 @@ pub fn masks(plan: &Plan<'_>) -> Vec<Evaluated> {
             let q = map.apply(Point::new(x, y));
             (q.x, q.y)
         });
-        let top = tau.iter().copied().fold(0f32, f32::max);
+        let top = tau.par_iter().copied().reduce(|| 0f32, f32::max);
         if top <= 1e-6 || !top.is_finite() {
             continue;
         }
-        let dim = tau.iter().map(|v| (v / top).clamp(0.0, 1.0)).collect();
+        let dim = tau.par_iter().map(|v| (v / top).clamp(0.0, 1.0)).collect();
         let glow_top = 1.0 - (-top).exp();
-        let glow = tau.iter().map(|v| ((1.0 - (-v.max(0.0)).exp()) / glow_top).clamp(0.0, 1.0)).collect();
+        let glow = tau.par_iter().map(|v| ((1.0 - (-v.max(0.0)).exp()) / glow_top).clamp(0.0, 1.0)).collect();
         let id = FADE_IDS - 2 * k as u32;
         out.push(evaluated(id, w, h, dim, LocalAdjustments { exposure: -f64::from(top) / std::f64::consts::LN_2, ..LocalAdjustments::default() }));
         let added = f.colour.map(|c| f64::from(c * glow_top));
@@ -1061,11 +1102,12 @@ pub fn masks(plan: &Plan<'_>) -> Vec<Evaluated> {
 /// A plane's values over the render's pixels as the planes of the finish stage's terms: the strongest value `top` (of the sign
 /// asked for) is the term, the plane is each pixel's share of it. `None` while the plane holds no such value.
 fn share(values: &[f32], sign: f32) -> Option<(Vec<f32>, f64)> {
-    let top = values.iter().map(|v| v * sign).filter(|v| v.is_finite()).fold(0f32, f32::max);
+    // (on every core: the water's eight planes are each a full-size render plane, issue #374)
+    let top = values.par_iter().map(|v| v * sign).filter(|v| v.is_finite()).reduce(|| 0f32, f32::max);
     if top <= 1e-6 {
         return None;
     }
-    Some((values.iter().map(|v| (v * sign / top).clamp(0.0, 1.0)).collect(), f64::from(top)))
+    Some((values.par_iter().map(|v| (v * sign / top).clamp(0.0, 1.0)).collect(), f64::from(top)))
 }
 
 /// The water's planes (issue #333) as masks: the exposure and the temperature and tint (the finish stage's own, which together
@@ -1116,6 +1158,36 @@ mod tests {
         }
         memo.clear();
         assert!(memo.get(1).is_none());
+    }
+
+    #[test]
+    fn a_value_being_made_is_waited_for_and_a_dropped_claim_frees_its_key() {
+        // issue #374: two renders asking for the same value make it once; one that keeps nothing lets the other make it
+        let memo: Arc<Memo<u8>> = Arc::new(Memo::new(4));
+        let waiter = |memo: &Arc<Memo<u8>>| {
+            let (memo, (tx, rx)) = (memo.clone(), std::sync::mpsc::channel());
+            std::thread::spawn(move || {
+                let got = match memo.claim(7) {
+                    Claim::Kept(v) => Some(*v),
+                    Claim::Make(_) => None,
+                };
+                let _ = tx.send(got);
+            });
+            rx
+        };
+        let Claim::Make(making) = memo.claim(7) else { panic!("nothing is kept yet") };
+        let rx = waiter(&memo);
+        memo.put(7, Arc::new(42));
+        drop(making);
+        assert_eq!(rx.recv_timeout(std::time::Duration::from_secs(30)), Ok(Some(42)), "the second takes what the first made");
+        let Claim::Make(making) = memo.claim(8) else { panic!("nothing is kept for 8") };
+        let (memo8, (tx, rx)) = (memo.clone(), std::sync::mpsc::channel());
+        std::thread::spawn(move || {
+            let made = matches!(memo8.claim(8), Claim::Make(_));
+            let _ = tx.send(made);
+        });
+        drop(making);
+        assert_eq!(rx.recv_timeout(std::time::Duration::from_secs(30)), Ok(true), "a claim dropped without a value frees the key");
     }
 
     #[test]
