@@ -713,9 +713,19 @@ fn beam_for(input: &Input, light: &Light, effects: &Effects, rig: &Rig, draft: b
         return None;
     }
     let plane_key = |coarse: bool| hashed(|h| std::hash::Hash::hash(&(5u8, beam_key(input, light, effects, coarse)), h));
-    if let Some(l) = BEAM_LOBES.get(plane_key(false)) {
-        return Some((l, false));
-    }
+    // (the release's full beam: another render making it now is waited for, as for the shading; a render holds one such claim
+    // at a time, so two never wait on each other)
+    let _making = if draft {
+        if let Some(l) = BEAM_LOBES.get(plane_key(false)) {
+            return Some((l, false));
+        }
+        None
+    } else {
+        match BEAM_LOBES.claim(plane_key(false)) {
+            Claim::Kept(l) => return Some((l, false)),
+            Claim::Make(m) => Some(m),
+        }
+    };
     let t = crate::profiling().then(std::time::Instant::now);
     // (the full rays when kept, also for a drag: a drag of the Haze slider weighs them again and marches nothing)
     let full = SHAFTS.get(shafts_key(input, light, effects, false));
