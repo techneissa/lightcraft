@@ -320,7 +320,10 @@ impl Replay {
             o.insert(lightcraft_develop::relight::KEY.into(), flat);
         }
         delta::apply(&mut v, patch)?;
-        let s = Arc::new(DevelopSettings::deserialize(&v).map_err(|e| e.to_string())?);
+        let mut s = DevelopSettings::deserialize(&v).map_err(|e| e.to_string())?;
+        // a replayed step holds the strokes it has in common with its base once, as it did when painted (issue #370)
+        s.share_strokes_with(base);
+        let s = Arc::new(s);
         // (a base in the first form isn't the settings' own JSON: not kept for the next patch)
         self.cache = (!first_form).then(|| (s.clone(), v));
         Ok(s)

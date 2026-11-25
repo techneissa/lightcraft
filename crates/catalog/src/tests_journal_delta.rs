@@ -185,6 +185,38 @@ fn replaying_patches_gives_what_whole_records_gave() {
     assert_eq!(new.photo(a).unwrap().history.len(), HISTORY_LIMIT, "past the limit");
 }
 
+/// Issue #370: History steps replayed from the log share the strokes they have in common, as they did while
+/// painting, instead of each holding a copy of every stroke.
+#[test]
+fn a_library_reopened_from_its_log_shares_strokes_across_steps() {
+    let mut c = Catalog::new();
+    let (a, add) = add_photo(&mut c);
+    c.apply(add.clone()).unwrap();
+    let m = MemStore::new();
+    m.set(SNAPSHOT, snap_of(&Catalog::new(), journal::VERSION));
+    let (mut j, _, _) = open(&m);
+    j.policy = SnapshotPolicy { max_records: u64::MAX, max_bytes: u64::MAX };
+    j.append(&[add]).unwrap();
+    for i in 0..5 {
+        let op = edit(a, painted(&c.photo(a).unwrap().develop, i), "Brush");
+        c.apply(op.clone()).unwrap();
+        j.append(&[op]).unwrap();
+    }
+    drop(j);
+    let (_, back, r) = open(&m);
+    assert_eq!(r.failed, 0);
+    let p = back.photo(a).unwrap();
+    assert_eq!(**p, **c.photo(a).unwrap());
+    let first = |d: &DevelopSettings| match &d.masks[0].components[0].shape {
+        MaskShape::Brush { strokes } => Some(strokes[0].points.clone()),
+        _ => None,
+    };
+    let held = first(&p.develop).unwrap();
+    for step in &p.history {
+        assert!(Arc::ptr_eq(&first(&step.settings).unwrap(), &held), "{}: stroke 0 is held once", step.label);
+    }
+}
+
 /// Ops appended in batches of several (the engine's `persist` after a few commands), and after
 /// a reopen (the shadow then starts from the loaded catalog).
 #[test]
