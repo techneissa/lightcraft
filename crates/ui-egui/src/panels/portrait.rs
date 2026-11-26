@@ -172,6 +172,8 @@ pub(crate) fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, photo: PhotoId) {
     ui.add_space(6.0);
     divider(ui);
     let keys = app.session.retouch_key_map(photo);
+    // (one slider label column, Edit's: long labels shrink or wrap in it, so no section's sliders get shorter)
+    super::edit::fix_label_column(ui);
     let mut cx = Ctx { app, ui, d: &d, photo, face, input, keys };
     for s in SECTIONS {
         let id = format!("portrait.{}", s.key);
@@ -193,6 +195,7 @@ pub(crate) fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, photo: PhotoId) {
         }
         divider(cx.ui);
     }
+    crate::widgets::label_column::release(cx.ui);
     cx.ui.add_space(40.0);
 }
 

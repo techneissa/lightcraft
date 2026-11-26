@@ -43,14 +43,19 @@ use sliders::{REL_TEMP, REL_TINT, hdr_row, header_buttons, k_to_rel, profile_men
 pub use sliders::{apply_slider_out, sub_title};
 pub(crate) use sliders::{control, reload_preview_only};
 
-pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
-    // one label column, as wide as the common labels (Light, Color, Effects), open section or not (issues #21, #29);
-    // longer labels (Noise Reduction, HDR) shrink and wrap inside it
+/// One label column, as wide as the common labels (Light, Color, Effects), open section or not (issues #21, #29);
+/// longer labels (Noise Reduction, HDR) shrink and wrap inside it. The Portrait tab uses the same column, so its
+/// sliders line up with Edit's and keep one length whichever sections are open.
+pub(crate) fn fix_label_column(ui: &egui::Ui) {
     crate::widgets::label_column::fix(ui, "edit", || {
         let common =
             |c: &&controls::ControlSpec| matches!(c.section, Section::Light | Section::Color | Section::Effects) && !c.id.starts_with("hdr.");
         controls::CONTROLS.iter().filter(common).chain([&REL_TEMP, &REL_TINT]).map(|c| c.label).collect()
     });
+}
+
+pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
+    fix_label_column(ui);
     show_sections(app, ui, id);
     crate::widgets::label_column::release(ui);
 }
