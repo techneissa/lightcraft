@@ -34,13 +34,27 @@ struct Inner {
     /// store never keeps a photo alive, and a dropped source's address can't be taken again while this is held.
     source: Option<std::sync::Weak<Rgb32f>>,
     mattes: Option<Arc<Mattes>>,
-    /// The alphas by key, with the frame (`plan.geo`) each was evaluated for.
-    slots: Vec<(u64, u64, Arc<Buf>)>,
+    /// The alphas by key, with the frame (`plan.geo`) each was evaluated for: each a range of the stack of planes its
+    /// render evaluated, not a copy of it.
+    slots: Vec<Kept>,
     brushes: Vec<BrushPart>,
     /// The planes of brush parts with Auto Mask strokes, which the CPU stamps (they read the photo around each dab).
     cpu_brushes: BrushCache,
     /// The edges a stored selection follows (`masks::guide_plane` of the resampled photo) for the frame `plan.geo` keys.
     guide: Option<(u64, Arc<lightcraft_raster::Plane>)>,
+}
+
+/// A mask's alpha kept from a render: `len` values at `at` in that render's stack of alpha planes (the buffer the
+/// finish stage read). The alphas of one render share its stack: they are held once, and a render with no store copies
+/// none of them out.
+#[derive(Clone)]
+struct Kept {
+    key: u64,
+    /// The frame (`plan.geo`) it was evaluated for.
+    geo: u64,
+    stack: Arc<Buf>,
+    at: usize,
+    len: usize,
 }
 
 /// A brush part's plane and the strokes it holds (`masks::brush_chain`).
@@ -66,12 +80,26 @@ impl AlphaStore {
         self.lock().cpu_brushes.bytes()
     }
 
-    /// Hand every device buffer held to `add` (the caller counts each once).
-    pub(crate) fn each(&self, mut add: impl FnMut(&Arc<Buf>)) {
+    /// Hand every device buffer held to `add` with its part (the caller counts each once: the alphas of a render share
+    /// its stack).
+    pub(crate) fn each(&self, mut add: impl FnMut(AlphaPart, &Arc<Buf>)) {
         let g = self.lock();
-        g.slots.iter().for_each(|(_, _, b)| add(b));
-        g.brushes.iter().for_each(|p| add(&p.plane));
+        // (the last render's alphas come first, then the ones of earlier frames)
+        let current = g.slots.first().map(|k| k.geo);
+        g.slots.iter().for_each(|k| add(if Some(k.geo) == current { AlphaPart::Current } else { AlphaPart::Other }, &k.stack));
+        g.brushes.iter().for_each(|p| add(AlphaPart::Brush, &p.plane));
     }
+}
+
+/// Which of a view's kept alphas a device buffer is ([`AlphaStore::each`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AlphaPart {
+    /// The last render's.
+    Current,
+    /// An earlier window's or scale's.
+    Other,
+    /// A brush part's plane.
+    Brush,
 }
 
 /// What a brush part is stamped against.
@@ -86,8 +114,9 @@ struct BrushEnv<'a> {
 
 /// The plane of brush strokes `strokes` on the device (`masks::brush`), or `None` when the device can't hold their dabs
 /// (the CPU rasterizes the part). Strokes that extend a part held in `parts` are stamped over a copy of its plane; the
-/// result is kept there. `inverted`: the part is turned around. Parts with Auto Mask strokes are not stamped here (`None`).
-fn brush_part(cx: &mut Cx<'_>, env: &BrushEnv<'_>, strokes: &[BrushStroke], inverted: bool, parts: &mut Vec<BrushPart>) -> Option<Buf> {
+/// result is kept there when `keep` (a render with a store: one that keeps nothing copies nothing). `inverted`: the part is
+/// turned around. Parts with Auto Mask strokes are not stamped here (`None`).
+fn brush_part(cx: &mut Cx<'_>, env: &BrushEnv<'_>, strokes: &[BrushStroke], inverted: bool, parts: &mut Vec<BrushPart>, keep: bool) -> Option<Buf> {
     let n = env.w * env.h;
     if strokes.iter().any(|s| s.auto_mask) {
         return None;
@@ -115,7 +144,7 @@ fn brush_part(cx: &mut Cx<'_>, env: &BrushEnv<'_>, strokes: &[BrushStroke], inve
             return None;
         }
     }
-    if !strokes.is_empty() && from < strokes.len() {
+    if keep && !strokes.is_empty() && from < strokes.len() {
         parts.push(BrushPart { base, chain, plane: Arc::new(cx.copy(&plane)) });
         while parts.len() > BRUSH_ENTRIES {
             parts.remove(0);
@@ -250,6 +279,43 @@ fn upload_relit(cx: &mut Cx<'_>, relit: &[lightcraft_pipeline::masks::Evaluated]
     }
 }
 
+/// The alphas a render of frame `geo` used, and after them the ones of earlier windows and scales in `old` (most recent
+/// first) up to [`lightcraft_pipeline::masks::KEPT_ALPHAS`] and [`lightcraft_pipeline::masks::KEPT_ALPHA_BYTES`]: a pan
+/// back or a zoom to a scale seen before finds its masks (issue #175). Of this frame only the alphas the render used are
+/// looked up again (an edited mask's earlier alpha goes); this render's stack is kept whatever its size, and counts
+/// against the bytes. A stack is held whole, so it also holds planes no kept alpha points at: the chromaticity planes of
+/// local Moiré / Noise, Relight's planes, and a second mask with the same alpha. It costs its whole size the first time
+/// one of its alphas is kept.
+fn with_earlier(used: Vec<Kept>, old: Vec<Kept>, geo: u64) -> Vec<Kept> {
+    let mut stacks: Vec<*const Buf> = Vec::new();
+    let mut bytes = 0usize;
+    for k in &used {
+        if !stacks.contains(&Arc::as_ptr(&k.stack)) {
+            stacks.push(Arc::as_ptr(&k.stack));
+            bytes = bytes.saturating_add(k.stack.len * 4);
+        }
+    }
+    let mut kept = used;
+    for k in old {
+        if kept.len() >= lightcraft_pipeline::masks::KEPT_ALPHAS {
+            break;
+        }
+        if k.geo == geo || kept.iter().any(|q| q.key == k.key) {
+            continue;
+        }
+        let cost = if stacks.contains(&Arc::as_ptr(&k.stack)) { 0 } else { k.stack.len * 4 };
+        if bytes.saturating_add(cost) > lightcraft_pipeline::masks::KEPT_ALPHA_BYTES {
+            continue;
+        }
+        if cost > 0 {
+            stacks.push(Arc::as_ptr(&k.stack));
+            bytes += cost;
+        }
+        kept.push(k);
+    }
+    kept
+}
+
 /// Evaluate the masks (`lightcraft_pipeline::masks::evaluate`): their alpha planes (concatenated,
 /// followed by the blurred chromaticity when local Moiré / Noise need it) and their adjustment
 /// terms. Shapes without a kernel (Sky, Subject, …) run on the CPU.
@@ -262,7 +328,7 @@ pub(crate) fn masks(
     plan: &Plan<'_>,
     host: &mut Host,
     store: Option<(&AlphaStore, &Arc<Rgb32f>)>,
-) -> (Option<Buf>, Vec<[f32; MASK_TERMS]>) {
+) -> (Option<Arc<Buf>>, Vec<[f32; MASK_TERMS]>) {
     use lightcraft_develop::{MaskOp, MaskShape};
     let s = &*plan.settings;
     let list: Vec<_> = s.masks.iter().filter(|m| m.renders()).collect();
@@ -280,11 +346,12 @@ pub(crate) fn masks(
     let [a, b, c, d, e, f] = frame.out_to_norm(w, h).0;
     let (kx, ky) = (frame.ow / long, frame.oh / long);
     let aff = [a * kx, b * ky, c * kx, d * ky, e * kx, f * ky].map(|v| (v as f32).to_bits());
-    let alpha = cx.zeroed(n * stack + if prep.chroma.is_some() { 3 * n } else { 0 });
+    let planes = Arc::new(cx.zeroed(n * stack + if prep.chroma.is_some() { 3 * n } else { 0 }));
+    let alpha: &Buf = &planes;
     if let Some(ch) = &prep.chroma {
-        cx.copy_into(ch, &alpha, n * stack);
+        cx.copy_into(ch, alpha, n * stack);
     }
-    upload_relit(cx, &relit, &alpha, list.len(), n);
+    upload_relit(cx, &relit, alpha, list.len(), n);
     let comp_plane = cx.gpu.buffer(n);
     let mut guard = store.map(|(s, _)| s.lock());
     let mut unkept = Inner::default();
@@ -302,14 +369,16 @@ pub(crate) fn masks(
         _ => false,
     };
     let old = if same { std::mem::take(&mut held.slots) } else { Vec::new() };
-    let mut used: Vec<(u64, Arc<Buf>)> = Vec::new();
+    // (each a range of this render's stack: the earlier stacks go once nothing of theirs is kept)
+    let mut used: Vec<Kept> = Vec::new();
     let keys = AlphaKeys { geo: plan.geo, image: plan.lin_key };
+    let here = |key: u64, mi: usize| Kept { key, geo: plan.geo, stack: planes.clone(), at: mi * n, len: n };
     for (mi, m) in list.iter().enumerate() {
         let key = alpha_key(m, keys, ev);
-        if let Some((_, _, buf)) = old.iter().find(|(k, _, _)| *k == key) {
-            cx.copy_into(buf, &alpha, mi * n);
-            if !used.iter().any(|(k, _)| *k == key) {
-                used.push((key, buf.clone()));
+        if let Some(k) = old.iter().find(|k| k.key == key && k.len == n) {
+            cx.copy_range(&k.stack, k.at, alpha, mi * n, n);
+            if !used.iter().any(|u| u.key == key) {
+                used.push(here(key, mi));
             }
             continue;
         }
@@ -373,7 +442,7 @@ pub(crate) fn masks(
                     own = if strokes.iter().any(|s| s.auto_mask) {
                         Some(auto_brush_part(cx, host, &env, strokes, inverted, &mut held.cpu_brushes))
                     } else {
-                        brush_part(cx, &env, strokes, inverted, &mut held.brushes)
+                        brush_part(cx, &env, strokes, inverted, &mut held.brushes, store.is_some())
                     };
                     None
                 }
@@ -384,7 +453,7 @@ pub(crate) fn masks(
                 Some(k) => {
                     p[2] = k;
                     let aux = (!aux.is_empty()).then(|| cx.gpu.upload(&aux));
-                    cx.run("shape", &p, &[Some(lin), Some(&prep.log_l), aux.as_ref(), Some(&comp_plane), Some(&alpha)], groups2(w, h, [16, 16]));
+                    cx.run("shape", &p, &[Some(lin), Some(&prep.log_l), aux.as_ref(), Some(&comp_plane), Some(alpha)], groups2(w, h, [16, 16]));
                     // (the filter turns with an inverted part: smoothing `1 - c` gives `1 -` the smoothed `c`)
                     smooth.map(|sigma| {
                         guided_cross(cx, &prep.log_l, &comp_plane, w, h, sigma, lightcraft_pipeline::masks::color_range::SMOOTH_EPS, 1.0)
@@ -436,41 +505,26 @@ pub(crate) fn masks(
             };
             let cbuf = plane.as_ref().unwrap_or(&comp_plane);
             let k = [n as u32, 0, mi as u32, op];
-            cx.run("combine", &k, &[None, None, None, Some(cbuf), Some(&alpha)], groups1(n));
+            cx.run("combine", &k, &[None, None, None, Some(cbuf), Some(alpha)], groups1(n));
         }
         if m.refine > 0.0 {
             // Refine Edges (`masks::evaluate_one`): the combined alpha follows the photo's edges,
             // before the mask's invert and amount
             let k = (m.refine / 100.0).clamp(0.0, 1.0) as f32;
             let sigma = (0.04 * frame.output_long(w, h) as f32 * k).max(1.0);
-            let plane = cx.slice(&alpha, mi * n, n);
+            let plane = cx.slice(alpha, mi * n, n);
             let refined = guided_cross(cx, &prep.log_l, &plane, w, h, sigma, 0.02, k.sqrt());
-            cx.copy_into(&refined, &alpha, mi * n);
+            cx.copy_into(&refined, alpha, mi * n);
         }
         // (the mask's Amount scales its effect terms, not its alpha: see `effect_terms`)
-        if !used.iter().any(|(k, _)| *k == key) {
-            used.push((key, Arc::new(cx.slice(&alpha, mi * n, n))));
+        if !used.iter().any(|u| u.key == key) {
+            used.push(here(key, mi));
         }
     }
     // (a render that failed is redone on the CPU: what it left on the device is not kept)
     if !crate::ctx::failed() {
         held.mattes = plan.mattes.clone();
-        // and after this render's, the alphas of earlier windows and scales (most recent first) up to the caps: a pan back
-        // or a zoom to a scale seen before finds its masks (issue #175)
-        // (of this frame only what the render used: an edited mask's earlier alpha goes)
-        let mut kept: Vec<(u64, u64, Arc<Buf>)> = used.into_iter().map(|(k, b)| (k, plan.geo, b)).collect();
-        let mut bytes = kept.iter().map(|(_, _, b)| b.len * 4).fold(0usize, usize::saturating_add);
-        for (k, g, b) in old {
-            if kept.len() >= lightcraft_pipeline::masks::KEPT_ALPHAS {
-                break;
-            }
-            if g == plan.geo || kept.iter().any(|(q, ..)| *q == k) || bytes.saturating_add(b.len * 4) > lightcraft_pipeline::masks::KEPT_ALPHA_BYTES {
-                continue;
-            }
-            bytes += b.len * 4;
-            kept.push((k, g, b));
-        }
-        held.slots = kept;
+        held.slots = with_earlier(used, old, plan.geo);
     }
     let terms = list
         .iter()
@@ -480,5 +534,51 @@ pub(crate) fn masks(
         })
         .chain(relit.iter().map(|e| effect_terms_with(&e.adjust, e.amount, None)))
         .collect();
-    (Some(alpha), terms)
+    (Some(planes), terms)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use lightcraft_develop::{BrushStroke, DevelopSettings, LocalAdjustments, Mask, MaskComponent, MaskOp, MaskShape};
+    use lightcraft_geom::Point;
+    use lightcraft_pipeline::{RenderRequest, SourceInfo, StageCache};
+
+    /// A render's mask alphas are kept once (issue #402): each is a range of the one stack of planes the render made,
+    /// not a copy of its own, so a view of 12 masks never holds them twice; a slider tick afterwards keeps them so.
+    #[test]
+    fn the_kept_alphas_share_their_renders_stack() {
+        if !crate::available() {
+            lightcraft_testkit::skip!(Gpu, "no GPU adapter");
+            return;
+        }
+        let src = Arc::new(lightcraft_scenes::demo_library()[0].render(480, 320));
+        let stroke = BrushStroke { points: vec![Point::new(0.2, 0.3), Point::new(0.6, 0.5)].into(), ..Default::default() };
+        let shapes = [
+            MaskShape::Radial { center: Point::new(0.5, 0.45), rx: 0.3, ry: 0.2, angle: 0.0, feather: 50.0, invert: false },
+            MaskShape::Linear { start: Point::new(0.0, 0.0), end: Point::new(0.0, 0.5) },
+            MaskShape::Brush { strokes: vec![stroke] },
+        ];
+        let masks = (1..=3u32)
+            .zip(shapes)
+            .map(|(id, shape)| Mask {
+                id,
+                components: vec![MaskComponent { name: None, op: MaskOp::Add, invert: false, shape }],
+                adjust: LocalAdjustments { exposure: 0.5, ..Default::default() },
+                ..Default::default()
+            })
+            .collect();
+        let mut s = DevelopSettings { masks, ..Default::default() };
+        let (info, req, cache) = (SourceInfo { raw: true, ..Default::default() }, RenderRequest::fit(480, 480), StageCache::default());
+        for tick in 0..2 {
+            crate::render(&src, &info, &s, &req, Some(&cache)).expect("gpu");
+            let stages = cache.peek_extension::<crate::GpuStages>().expect("stages");
+            let held = stages.alphas().lock();
+            assert_eq!(held.slots.len(), 3, "tick {tick}: one alpha a mask");
+            assert!(held.slots.iter().all(|k| Arc::ptr_eq(&k.stack, &held.slots[0].stack)), "tick {tick}: every alpha in the one stack");
+            drop(held);
+            s.masks[0].adjust.exposure += 0.25;
+        }
+    }
 }

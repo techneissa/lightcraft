@@ -82,6 +82,11 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             ui.spacing_mut().item_spacing.y = 0.0;
             super::edit::histogram(app, ui, id);
         }
+        // the Masking panel's mask list stays above the rest as it scrolls (fork issue #401)
+        if app.ui.right == RightPanel::Masking {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            super::mask_list::pinned(app, ui, id);
+        }
         let mut area = egui::ScrollArea::vertical().id_salt("right-scroll").auto_shrink([false, false]);
         if let Some(offset) = held {
             area = area.vertical_scroll_offset(offset);

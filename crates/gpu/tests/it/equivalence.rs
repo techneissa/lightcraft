@@ -210,6 +210,28 @@ fn banded_full_size_render_matches() {
     check("banded 3000×2000", &src, &SourceInfo { raw: true, ..Default::default() }, &s, &RenderRequest::fit(w, h));
 }
 
+/// Where the device's free memory is unknown, the joint colour NR runs in bands of the app's band share
+/// (issue #409): banded and whole give the same pixels.
+#[test]
+fn colour_noise_bands_match_the_whole_frame() {
+    if !gpu() {
+        return;
+    }
+    // tall enough for several bands at the smallest share
+    let (w, h) = (240, 1600);
+    let src = scene(3, w, h);
+    let mut s = DevelopSettings::default();
+    s.detail.nr_color = 60.0;
+    let render = |share| {
+        lightcraft_gpu::set_band_budget(share);
+        lightcraft_gpu::render(&src, &SourceInfo { raw: true, ..Default::default() }, &s, &RenderRequest::fit(w, h), None).expect("gpu render").image
+    };
+    let banded = render(0);
+    // (shared with the other tests of this binary, whose pixels it can't change)
+    let whole = render(u64::MAX);
+    assert!(banded.data == whole.data, "the bands change pixels");
+}
+
 /// The crystal grain's tables stay on the GPU between renders: an Amount change reuses them,
 /// another pattern (Size, Roughness, seed) replaces them, and going back draws the first again.
 #[test]

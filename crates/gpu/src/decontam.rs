@@ -245,12 +245,12 @@ pub(crate) struct Lin<'a> {
 pub(crate) fn with_edges(
     cx: &mut Cx<'_>,
     plan: &Plan<'_>,
-    masks: Option<Buf>,
+    masks: Option<Arc<Buf>>,
     terms: &[[f32; MASK_TERMS]],
     lin: &Lin<'_>,
     host: &mut Host,
     kept: Option<(&KeptEdges, &Arc<Rgb32f>)>,
-) -> Option<(Option<Buf>, Edges)> {
+) -> Option<(Option<Arc<Buf>>, Edges)> {
     let attached = masks.as_ref().and_then(|m| attach(cx, plan, m, terms, lin, host, kept));
     if masks.is_none()
         && let Some((k, _)) = kept
@@ -261,7 +261,7 @@ pub(crate) fn with_edges(
         return None;
     }
     Some(match attached {
-        Some(a) => (Some(a.masks), Edges { desc: a.desc, fresh: a.fresh }),
+        Some(a) => (Some(Arc::new(a.masks)), Edges { desc: a.desc, fresh: a.fresh }),
         None => (masks, Edges::default()),
     })
 }

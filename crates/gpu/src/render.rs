@@ -135,45 +135,63 @@ impl GpuStages {
     /// Bytes held: device buffers (each counted once), and the images a loupe job kept on the host with them
     /// (`dirty::keep_host`, issue #111).
     pub fn bytes(&self) -> usize {
+        self.parts().total()
+    }
+
+    /// [`Self::bytes`] by part.
+    pub fn parts(&self) -> crate::StageParts {
         let mut seen: Vec<*const Buf> = Vec::new();
-        let mut total = 0;
-        // (each spot's patches are its own)
-        let mut patches = 0;
-        let mut add = |b: &Arc<Buf>| {
+        let mut parts = crate::StageParts::default();
+        let mut add = |to: &mut usize, b: &Arc<Buf>| {
             let p = Arc::as_ptr(b);
             if !seen.contains(&p) {
                 seen.push(p);
-                total += b.len * 4;
+                *to += b.len * 4;
             }
         };
         for e in self.lock().iter() {
-            add(&e.sampled);
+            let to = &mut parts.images;
+            add(to, &e.sampled);
             if let Some((_, b)) = &e.lin {
-                add(b);
+                add(to, b);
             }
             if let Some(l) = &e.last {
-                add(&l.out);
+                add(to, &l.out);
             }
             if let Some(p) = e.pre_retouch.as_ref().and_then(|p| p.kept.peek()) {
-                add(&p.dev);
+                add(to, &p.dev);
             }
             let p = &e.planes;
-            p.log_l.iter().for_each(&mut add);
-            p.base.iter().for_each(|(_, b)| add(b));
-            p.clarity.iter().for_each(|(_, b)| add(b));
-            p.texture.iter().for_each(|(_, b)| add(b));
-            p.sharpen.iter().for_each(|(_, b)| add(b));
-            p.dark.iter().for_each(|(_, b, _)| add(b));
-            p.chroma.iter().for_each(|(_, b)| add(b));
+            p.log_l.iter().for_each(|b| add(&mut parts.planes, b));
+            p.base.iter().for_each(|(_, b)| add(&mut parts.planes, b));
+            p.clarity.iter().for_each(|(_, b)| add(&mut parts.planes, b));
+            p.texture.iter().for_each(|(_, b)| add(&mut parts.planes, b));
+            p.sharpen.iter().for_each(|(_, b)| add(&mut parts.planes, b));
+            p.dark.iter().for_each(|(_, b, _)| add(&mut parts.planes, b));
+            p.chroma.iter().for_each(|(_, b)| add(&mut parts.planes, b));
         }
         if let Some((_, b)) = &*self.source.lock().unwrap_or_else(|e| e.into_inner()) {
-            add(b);
+            add(&mut parts.source, b);
         }
-        self.alphas.each(&mut add);
-        self.decontam.each(&mut add);
-        patches += self.spots.bytes();
-        let host = self.host.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map_or(0, |k| k.bytes);
-        total + patches + host + self.alphas.host_bytes()
+        self.alphas.each(|part, b| {
+            let to = match part {
+                crate::masks::AlphaPart::Current => &mut parts.alphas,
+                crate::masks::AlphaPart::Other => &mut parts.other_alphas,
+                crate::masks::AlphaPart::Brush => &mut parts.brushes,
+            };
+            add(to, b)
+        });
+        self.decontam.each(|b| add(&mut parts.other, b));
+        // (each spot's patches are its own)
+        parts.other += self.spots.bytes();
+        parts.host = self.host.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map_or(0, |k| k.bytes) + self.alphas.host_bytes();
+        parts
+    }
+
+    /// The kept mask alphas (tests).
+    #[cfg(test)]
+    pub(crate) fn alphas(&self) -> &crate::masks::AlphaStore {
+        &self.alphas
     }
 
     /// Drop everything (e.g. when memory is needed).
@@ -324,6 +342,12 @@ impl<'a> Cx<'a> {
     pub fn copy_into(&mut self, src: &Buf, dst: &Buf, offset: usize) {
         let enc = self.enc.get_or_insert_with(|| self.gpu.encoder());
         enc.copy_buffer_to_buffer(src.raw(), 0, dst.raw(), (offset * 4) as u64, (src.len * 4) as u64);
+    }
+
+    /// Copy `len` values of `src` from `from` into `dst` at `to` (all in 32-bit words; recorded).
+    pub fn copy_range(&mut self, src: &Buf, from: usize, dst: &Buf, to: usize, len: usize) {
+        let enc = self.enc.get_or_insert_with(|| self.gpu.encoder());
+        enc.copy_buffer_to_buffer(src.raw(), (from * 4) as u64, dst.raw(), (to * 4) as u64, (len * 4) as u64);
     }
 
     /// Copy `w × h` texels from `b` (rows of `stride` 32-bit texels, a multiple of 64) into
@@ -961,7 +985,7 @@ pub fn render(
     let (masks, terms) = crate::masks::masks(&mut cx, (&lin, &sampled), &prep, &plan, &mut host, stages.map(|c| (&c.alphas, src)));
     lap("masks", &mut t, &mut cx);
     if let Want::MaskPlanes(ask) = want {
-        return Some(Output::Masks(mask_planes(&mut cx, masks.as_ref(), &plan, (&lin, &prep.log_l), Arc::as_ptr(src) as usize, ask)));
+        return Some(Output::Masks(mask_planes(&mut cx, masks.as_deref(), &plan, (&lin, &prep.log_l), Arc::as_ptr(src) as usize, ask)));
     }
     // fork (`fork/perf-decontam-gpu.md`): the decontaminated masks' edges, after the alphas
     let edge_lin = crate::decontam::Lin { buf: &lin, boxes: edge_boxes.as_deref() };
@@ -1066,7 +1090,7 @@ pub fn render(
                     prep.clarity.as_deref(),
                     tex_buf.as_deref(),
                     prep.dark.as_deref(),
-                    masks.as_ref(),
+                    masks.as_deref(),
                     Some(&aux),
                     Some(&out),
                 ],
@@ -1104,7 +1128,7 @@ pub fn render(
     // the alpha a mask overlay shows: copied out before the readback below submits
     let overlay_mask = req.overlay.mask(s).map(|m| {
         let list = s.masks.iter().filter(|m| m.renders());
-        match (list.map(|m| m.id).position(|id| id == m.id), masks.as_ref()) {
+        match (list.map(|m| m.id).position(|id| id == m.id), masks.as_deref()) {
             (Some(mi), Some(all)) => Ok(cx.slice(all, mi * n, n)),
             _ => Err(m),
         }
@@ -1114,7 +1138,7 @@ pub fn render(
     // single-mask overlay uses, so read the whole buffer back in ONE GPU->CPU transfer and split it
     // on the CPU, instead of one synchronous readback per mask (which stalls the pipeline N times).
     let all_overlay_alphas: Option<Vec<Plane>> = if matches!(req.overlay, lightcraft_pipeline::Overlay::AllMasks { .. }) {
-        masks.as_ref().map(|all| {
+        masks.as_deref().map(|all| {
             let list: Vec<_> = s.masks.iter().filter(|m| m.renders()).collect();
             if list.is_empty() {
                 return Vec::new();
@@ -1804,6 +1828,19 @@ fn band_budget_from(free: u64, pooled: u64, renders: usize) -> usize {
     free.saturating_add(pooled).saturating_sub(reserve) as usize
 }
 
+/// Rows one band of the joint colour NR may have, its halos included, on a `w` × `h` image. `budget`
+/// (`NRV2_GPU_BAND_MB` or the free device memory) holds the whole output and one band. Where it is unknown,
+/// `share` ([`crate::set_band_budget`]) is for the band alone, and a band has at least four halos of rows: half
+/// of it or more is kept, so a small share doesn't make hundreds of bands that mostly repeat their halos.
+fn band_rows(budget: Option<usize>, share: usize, w: usize, h: usize, halo: usize) -> usize {
+    // about 12 values of 4 bytes per band pixel; 3 per output pixel
+    let per_row = 48 * w;
+    match budget {
+        Some(budget) => budget.saturating_sub(12 * w * h) / per_row,
+        None => (share / per_row).max(4 * halo),
+    }
+}
+
 /// The joint colour noise reduction (`lightcraft_pipeline::nrc_joint`) on the GPU, the same steps as the
 /// CPU: only the noise samples are read back (the noise model is fitted on the CPU, by the same code).
 /// Large images are filtered in horizontal bands whose halo covers every step's reach, so each kept pixel
@@ -1864,33 +1901,32 @@ fn color_nr_joint(
     // Memory: the whole output (3 values per pixel) is held besides the input; a band then holds about
     // 12 values per pixel (guide 3, two chroma buffers 2 + 2, paths 2, weights 2; up to 12 while the
     // speck brake and the guide run). The budget for both together is `band_budget_from` the device memory
-    // free right now (where the driver can be asked, `crate::vram`); else a fixed 2 GB. One band plan at a
-    // time (`BANDS`), held until the bands are done. PROTOTYPE: `NRV2_GPU_BAND_MB` overrides it.
+    // free right now (where the driver can be asked, `crate::vram`); else the app's band share (`band_rows`).
+    // One band plan at a time (`BANDS`), held until the bands are done. PROTOTYPE: `NRV2_GPU_BAND_MB` overrides it.
     // (free memory asked before the lock: the first question for a device waits for the driver)
     let free = crate::vram::free_bytes(&cx.gpu.info);
     let _bands = BANDS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let fixed = std::env::var("NRV2_GPU_BAND_MB").ok().and_then(|v| v.parse::<usize>().ok()).map(|mb| mb << 20);
     let renders = RENDERS.load(std::sync::atomic::Ordering::Relaxed);
     let measured = free.map(|free| band_budget_from(free, crate::ctx::memory().pooled, renders));
-    let budget = fixed.or(measured).unwrap_or(2048 << 20);
+    let share = usize::try_from(crate::ctx::BAND_BUDGET.load(std::sync::atomic::Ordering::Relaxed)).unwrap_or(usize::MAX);
+    // no band may exceed the device's largest buffer either (3 values per pixel are the largest)
+    let limit_rows = (cx.gpu.limit() as usize / (12 * w)).max(1);
+    let rows = band_rows(fixed.or(measured), share, w, h, halo).min(limit_rows);
     if profiling() {
         eprintln!(
-            "  gpu joint budget: {} MB ({}, {renders} render(s) on the device)",
-            budget >> 20,
+            "  gpu joint budget: {} MB ({}, {renders} render(s) on the device), bands of {} of {h} rows",
+            fixed.or(measured).unwrap_or(share) >> 20,
             if fixed.is_some() {
                 "NRV2_GPU_BAND_MB"
             } else if measured.is_some() {
                 "free device memory"
             } else {
-                "fixed default"
-            }
+                "the app's band share"
+            },
+            rows.min(h)
         );
     }
-    let out_bytes = 12 * n;
-    let per_row = 48 * w;
-    // no band may exceed the device's largest buffer either (3 values per pixel are the largest)
-    let limit_rows = (cx.gpu.limit() as usize / (12 * w)).max(1);
-    let rows = (budget.saturating_sub(out_bytes) / per_row).min(limit_rows);
     let core = if rows >= h {
         h
     } else if rows > 2 * halo {
@@ -2108,6 +2144,18 @@ mod tests {
             assert!(RENDERS.load(std::sync::atomic::Ordering::Relaxed) >= before + 2);
         }
         assert!(RENDERS.load(std::sync::atomic::Ordering::Relaxed) < before + 2, "a finished render no longer counts");
+    }
+
+    /// Free device memory unknown (a Mac): the app's share sizes the joint colour NR's bands, so a 33 MP frame is
+    /// not one band the size of the frame (issue #409), and a tiny share still keeps half of each band.
+    #[test]
+    fn a_small_share_filters_a_33_mp_frame_in_bands() {
+        let (w, h) = (7008, 4672);
+        let halo = joint_halo(&lightcraft_pipeline::nrc_joint::scale_plan(20.0, w, h));
+        let rows = band_rows(None, 256 << 20, w, h, halo);
+        assert!(rows < h && rows > 2 * halo, "several bands, each keeping rows: {rows} of {h}, halo {halo}");
+        let tiny = band_rows(None, 0, w, h, halo);
+        assert!(tiny - 2 * halo >= 2 * halo && tiny <= rows, "at least half of a band is kept: {tiny}, halo {halo}");
     }
 
     #[test]

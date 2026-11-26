@@ -42,7 +42,7 @@ On the 9 Nov build the first mask was SAM 3 9.3 s, BiRefNet 6.1 s (both candle) 
 
 ## Hooks in official files
 
-- `crates/engine/src/segment.rs`: `mod kept`, `pub use kept::MaskModels`. `crates/engine/src/cmd.rs`: `mod mask_stop_ai`. `crates/ui-egui/src/panels.rs`: `mod mask_stop_ai`; `crates/ui-egui/src/panels/masking.rs`: the button in a mask's row; `crates/ui-egui/src/icons.rs`: `Icon::Stop`. `crates/engine/Cargo.toml`: the `mask_timing` example.
+- `crates/engine/src/segment.rs`: `mod kept`, `pub use kept::MaskModels`. `crates/engine/src/cmd.rs`: `mod mask_stop_ai`. `crates/ui-egui/src/panels.rs`: `mod mask_stop_ai`; `crates/ui-egui/src/panels/mask_list.rs`: the button in a mask's row; `crates/ui-egui/src/icons.rs`: `Icon::Stop`. `crates/engine/Cargo.toml`: the `mask_timing` example.
 - Fork files of other features: `crates/engine/src/segment/worker.rs` (`mod keep`, `Shared::hold`, `Shared::loading`, `Shared::sam3_in` and `birefnet_in`, `State::publish`, `Kind::Release`, `Worker::hold`, `loaded_models`, `release` and `loading`, the idle wait asks `keep::unload_at` and lets go only unheld models, SAM 3's load raises `loading`), `crates/engine/src/segment/worker/birefnet.rs` (BiRefNet's load and an unloaded matting model raise `loading`), `crates/engine/src/hair_edges.rs` and `hair_edges/model.rs` (`Inner::held`, `Inner::release`, `keep_loaded`, `release`, `model_loaded`, `may_use_matting`), `crates/ui-egui/src/background.rs` (the hold follows the Masking panel in the front window and the photo's AI masks), `crates/ui-egui/src/panels/masking.rs` ("Loading the AI models…").
 
 ## Tests

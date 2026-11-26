@@ -18,6 +18,9 @@ use serde::Serialize;
 /// - a quarter for the working memory of decodes in flight ([`work_gate`]);
 /// - an eighth for the GPU renderer's pool of recycled buffers (trimmed when the app is idle).
 ///
+/// Where the GPU can't say how much memory is free, one band of its noise reduction takes a quarter
+/// (transient: a full-size render or export filters the frame in bands of that size).
+///
 /// The rest is headroom for what isn't cached (renders in progress, textures, the UI). An export
 /// batch may, in addition, hold up to twice the budget in photos rendering side by side
 /// ([`export_gate`]): transient memory, given back when the batch ends. Default:
@@ -89,6 +92,7 @@ fn apply(b: usize) {
         g.set_limit(export_share(b));
     }
     lightcraft_gpu::set_pool_limit((b / 8) as u64);
+    lightcraft_gpu::set_band_budget((b / 4) as u64);
 }
 
 /// Share of the budget for the engine's caches.
@@ -252,6 +256,8 @@ pub struct GpuUsage {
     pub pooled: u64,
     /// Of which buffers released since their thread's last submit.
     pub retired: u64,
+    /// The most device bytes allocated at once since launch.
+    pub peak: u64,
 }
 
 /// What the engine's caches hold.
@@ -312,7 +318,7 @@ pub fn heap_stats() -> Option<HeapUsage> {
 /// The GPU renderer's device buffers.
 pub fn gpu_usage() -> GpuUsage {
     let g = lightcraft_gpu::memory();
-    GpuUsage { allocated: g.allocated, pooled: g.pooled, retired: g.retired }
+    GpuUsage { allocated: g.allocated, pooled: g.pooled, retired: g.retired, peak: g.peak }
 }
 
 impl crate::Session {
