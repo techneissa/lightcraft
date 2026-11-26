@@ -1,4 +1,4 @@
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::sync::Arc;
 
 use lightcraft_develop::{BrushStroke, DevelopSettings, LocalAdjustments, Mask, MaskComponent, MaskOp, MaskShape, SegMask};
@@ -8,22 +8,45 @@ use lightcraft_pipeline::{RenderRequest, SourceInfo};
 thread_local! {
     /// The band share of renders on this thread (`None`: the app's).
     pub(super) static SHARE_HERE: Cell<Option<usize>> = const { Cell::new(None) };
-    /// Most bytes of alphas a render on this thread held at once.
-    pub(super) static ALPHAS: Cell<usize> = const { Cell::new(0) };
-    /// Bands finished on this thread.
-    pub(super) static BANDS: Cell<usize> = const { Cell::new(0) };
+    /// Bands filled on this thread.
+    static BANDS: Cell<usize> = const { Cell::new(0) };
+    /// Masks a banded render on this thread evaluated whole.
+    pub(super) static WHOLE: Cell<usize> = const { Cell::new(0) };
+    /// When set, each band's alphas read back into planes of the whole frame (`w × h` values each), in mask order.
+    static CAPTURE: RefCell<Option<Vec<Vec<f32>>>> = const { RefCell::new(None) };
 }
 
-/// A render (keeping nothing) of `s` with a band share of `share` bytes: the image, the bands it was finished in, and
-/// the most bytes of alphas it held at once.
-fn render(src: &Arc<lightcraft_raster::Rgb32f>, s: &DevelopSettings, share: usize) -> (lightcraft_raster::Rgba8, usize, usize) {
+/// A band filled ([`super::note_band`]): counted, and its alphas read back into [`CAPTURE`] when it is set.
+pub(super) fn note_band(cx: &mut crate::render::Cx<'_>, buf: &crate::ctx::Buf, (y0, rows): (usize, usize), (w, np): (usize, usize)) {
+    BANDS.with(|c| c.set(c.get() + 1));
+    CAPTURE.with(|c| {
+        for (k, plane) in c.borrow_mut().iter_mut().flatten().enumerate() {
+            let band = cx.slice(buf, k * np, w * rows);
+            let values: Vec<f32> = cx.read(&band, w * rows);
+            plane[y0 * w..(y0 + rows) * w].copy_from_slice(&values);
+        }
+    });
+}
+
+/// What a render (keeping nothing) of `s` with a band share of `share` bytes made and held.
+struct Run {
+    image: lightcraft_raster::Rgba8,
+    bands: usize,
+    whole: usize,
+    /// The most bytes of device buffers the render held at once.
+    peak: u64,
+}
+
+fn render(src: &Arc<lightcraft_raster::Rgb32f>, s: &DevelopSettings, share: usize) -> Run {
     SHARE_HERE.with(|c| c.set(Some(share)));
-    ALPHAS.with(|c| c.set(0));
     BANDS.with(|c| c.set(0));
+    WHOLE.with(|c| c.set(0));
+    let _ = crate::ctx::thread_bytes();
     let req = RenderRequest::fit(src.width, src.height);
     let r = crate::render(src, &SourceInfo { raw: true, ..Default::default() }, s, &req, None).expect("gpu render");
+    let peak = crate::ctx::thread_bytes();
     SHARE_HERE.with(|c| c.set(None));
-    (r.image, BANDS.with(Cell::get), ALPHAS.with(Cell::get))
+    Run { image: r.image, bands: BANDS.with(Cell::get), whole: WHOLE.with(Cell::get), peak }
 }
 
 fn mask(id: u32, shapes: Vec<MaskShape>, adjust: LocalAdjustments) -> Mask {
@@ -76,16 +99,53 @@ fn banded_masks_match_the_whole_render() {
         mask(10, vec![MaskShape::Sky { seg: None, detail: Vec::new(), edge: 0.0 }], lift(0.3)),
     ];
     let s = DevelopSettings { masks, ..Default::default() };
-    let (whole, whole_bands, _) = render(&src, &s, usize::MAX);
-    let (banded, bands, _) = render(&src, &s, 0);
-    assert_eq!(whole_bands, 0, "a share that holds the frame evaluates the masks whole");
-    assert!(bands > 4, "the frame is in bands ({bands})");
-    let differ = whole.data.iter().zip(&banded.data).filter(|(a, b)| a != b).count();
+    let whole = render(&src, &s, usize::MAX);
+    // (bands of a few dozen rows: the colour ranges and the light Refine Edges reach a few rows and go per band)
+    let banded = render(&src, &s, 1_200_000);
+    assert_eq!(whole.bands, 0, "a share that holds the frame evaluates the masks whole");
+    assert!(banded.bands > 4, "the frame is in bands ({})", banded.bands);
+    assert_eq!(banded.whole, 5, "Auto Mask, the wide Refine Edges, both decontaminated masks and Sky go whole");
+    let differ = whole.image.data.iter().zip(&banded.image.data).filter(|(a, b)| a != b).count();
     assert_eq!(differ, 0, "{differ} of {} pixels differ from the whole render", w * h);
 }
 
-/// A render that keeps nothing holds one band's alphas (issue #406): with 12 masks it holds about as much as with one,
-/// within the band share, and far less than the whole frame's 12 planes.
+/// Masks that reach far (a colour range and Refine Edges, whose box filters run their sums over runs of rows that start on
+/// the whole frame's) evaluated in bands of a few hundred rows, not whole, give the whole frame's alphas bit for bit.
+#[test]
+fn wide_masks_in_bands_match_the_whole_alphas() {
+    if !crate::available() {
+        lightcraft_testkit::skip!(Gpu, "no GPU adapter");
+        return;
+    }
+    let (w, h) = (160, 1000);
+    let src = Arc::new(lightcraft_scenes::demo_library()[1].render(w, h));
+    let colour = MaskShape::ColorRange { samples: vec![[0.6, 0.05, 0.08], [0.45, -0.04, -0.06]], refine: 50.0 };
+    let radial = MaskShape::Radial { center: Point::new(0.5, 0.5), rx: 0.4, ry: 0.3, angle: 15.0, feather: 60.0, invert: false };
+    let masks = vec![
+        Mask { refine: 30.0, ..mask(1, vec![colour.clone()], lift(0.5)) },
+        Mask { refine: 30.0, ..mask(2, vec![radial], lift(-0.4)) },
+        mask(3, vec![colour], lift(0.3)),
+    ];
+    let s = DevelopSettings { masks, ..Default::default() };
+    let ask = lightcraft_pipeline::masks::PlanesAsk { want: lightcraft_pipeline::masks::MaskWant::All, known: None };
+    let req = RenderRequest::fit(w, h);
+    let info = SourceInfo { raw: true, ..Default::default() };
+    let whole = crate::mask_planes(&src, &info, &s, &req, None, &ask).and_then(|p| p.planes).expect("mask planes");
+    CAPTURE.with(|c| *c.borrow_mut() = Some(vec![vec![f32::NAN; w * h]; 3]));
+    // (about 320-row bands, wider than the masks' reach)
+    let banded = render(&src, &s, 9_300_000);
+    let planes = CAPTURE.with(|c| c.borrow_mut().take()).unwrap_or_default();
+    assert!(banded.bands > 1 && banded.whole == 0, "{} bands, {} masks whole", banded.bands, banded.whole);
+    assert_eq!(whole.len(), planes.len());
+    for ((id, a), b) in whole.iter().zip(&planes) {
+        let differ = a.data.iter().zip(b).filter(|(x, y)| x.to_bits() != y.to_bits()).count();
+        assert_eq!(differ, 0, "mask {id}: {differ} of {} alphas differ from the whole frame's", w * h);
+    }
+}
+
+/// A render that keeps nothing holds one band's masks (issue #406): with 12 masks, every device buffer it holds at once
+/// comes to not much above what it holds with one, within the band share, while the whole frame's 12 alphas would add
+/// a plane a mask.
 #[test]
 fn twelve_masks_hold_one_bands_alphas() {
     if !crate::available() {
@@ -102,10 +162,12 @@ fn twelve_masks_hold_one_bands_alphas() {
     let settings =
         |count: usize| DevelopSettings { masks: (0..count).map(|k| mask(k as u32 + 1, vec![shapes(k)], lift(0.3))).collect(), ..Default::default() };
     let share = 1 << 20;
-    let (_, bands_one, one) = render(&src, &settings(1), share);
-    let (_, bands, twelve) = render(&src, &settings(12), share);
-    let (_, _, whole) = render(&src, &settings(12), usize::MAX);
-    assert!(bands_one > 1 && bands > 1, "both in bands ({bands_one}, {bands})");
-    assert!(twelve <= one + share, "12 masks held {twelve} bytes of alphas, one {one}");
-    assert!(twelve * 8 < whole, "12 masks in bands held {twelve} bytes of alphas, whole {whole}");
+    let one = render(&src, &settings(1), share);
+    let twelve = render(&src, &settings(12), share);
+    let whole = render(&src, &settings(12), usize::MAX);
+    assert!(one.bands > 1 && twelve.bands > 1, "both in bands ({}, {})", one.bands, twelve.bands);
+    let plane = (w * h * 4) as u64;
+    assert!(twelve.peak <= one.peak + share as u64, "12 masks held {} bytes at once, one {}", twelve.peak, one.peak);
+    assert!(twelve.peak * 4 < one.peak * 5, "12 masks held {} bytes at once, one {}", twelve.peak, one.peak);
+    assert!(whole.peak > twelve.peak + 6 * plane, "12 masks held {} bytes at once in bands, {} whole", twelve.peak, whole.peak);
 }

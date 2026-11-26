@@ -337,7 +337,8 @@ pub(crate) fn attach(
 ) -> Option<Attached> {
     let n = plan.w.checked_mul(plan.h)?;
     let found = found(cx, plan, |k| Some((masks, k.checked_mul(n)?)), terms, lin, host, kept)?;
-    let out = found.append(cx, masks)?;
+    let out = found.after(cx, masks.len)?;
+    cx.copy_into(masks, &out, 0);
     Some(Attached { desc: found.desc(masks.len, plan.h), masks: out, fresh: found.fresh })
 }
 
@@ -383,17 +384,16 @@ impl Found {
         desc
     }
 
-    /// `masks` with the edges after it (where [`Self::desc`] says). `None` when that is over the device's buffer limit,
-    /// which fails the render.
-    pub(crate) fn append(&self, cx: &mut Cx<'_>, masks: &Buf) -> Option<Buf> {
-        let total = self.edges.iter().try_fold(masks.len, |a, (.., b)| a.checked_add(b.len))?;
+    /// A buffer of a masks buffer's `len` words, then the edges (where [`Self::desc`] says), the edges copied in: the
+    /// masks go in its first `len` words. `None` when that is over the device's buffer limit, which fails the render.
+    pub(crate) fn after(&self, cx: &mut Cx<'_>, len: usize) -> Option<Buf> {
+        let total = self.edges.iter().try_fold(len, |a, (.., b)| a.checked_add(b.len))?;
         if !cx.gpu.fits(total) || u32::try_from(total).is_err() {
             fail(FailKind::Limit, format!("the masks and their decontaminated edges ({total} words) are over the device's buffer limit"));
             return None;
         }
         let out = cx.gpu.buffer(total);
-        cx.copy_into(masks, &out, 0);
-        let mut at = masks.len;
+        let mut at = len;
         for (.., b) in &self.edges {
             cx.copy_into(b, &out, at);
             at += b.len;
@@ -438,7 +438,11 @@ fn found<'b>(
         let Some(t) = terms.get(k) else { continue };
         let (scene, colour) = decontam::layers_of(t);
         let layers = u32::from(scene) | (u32::from(colour) << 1);
-        let Some(alpha) = alpha(k) else { continue };
+        // (a banded render evaluates every decontaminated mask whole: `masks::bands::whole_only`)
+        let Some(alpha) = alpha(k) else {
+            fail(FailKind::Limit, "a decontaminated mask's alpha over the whole frame is missing".into());
+            return None;
+        };
         let want = Want {
             exact: edge_key(plan, plan.lin_key, alpha_key(m, full, ev)),
             key: edge_key(plan, plan.edge_lin_key, alpha_key(m, loose, ev)),

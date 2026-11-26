@@ -124,8 +124,8 @@ const FIELDS: &[(&str, usize)] = &[
     // (`decontam::DESC_WORDS` each)
     ("DC_N", 1),
     ("DC_OFF", 1),
-    // the masks buffer's planes (issue #406): pixels a plane, from which row of the frame (`w × h` from 0 for a whole
-    // render; a band's in a render that keeps nothing, `masks::bands`)
+    // the masks buffer's planes (issue #406): the values a plane holds, and the frame row its first value is on (`w × h`
+    // and 0 for a whole render; a band's in a render that keeps nothing, `masks::bands`)
     ("MASK_N", 1),
     ("MASK_Y0", 1),
 ];
@@ -266,6 +266,7 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     p.u("H", fp.h as u32);
     p.u("NMASK", masks.len() as u32);
     p.u("MASK_N", (fp.w * fp.h) as u32);
+    p.u("MASK_Y0", 0);
     p.u("MASK_OFF", mask_off as u32);
     p.u("SRGB_OFF", srgb_off as u32);
     p.u("CURVE_OFF", curve_off as u32);

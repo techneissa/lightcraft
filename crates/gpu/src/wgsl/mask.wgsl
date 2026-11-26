@@ -66,10 +66,10 @@ fn shape(@builtin(global_invocation_id) g: vec3<u32>) {
         let d = p - vec2<f32>(pf(10u), pf(11u));
         let co = pf(12u);
         let s = pf(13u);
-        let x = d.x * co - d.y * s;
-        let y = d.x * s + d.y * co;
-        let qx = x / pf(14u);
-        let qy = y / pf(15u);
+        let ax = d.x * co - d.y * s;
+        let ay = d.x * s + d.y * co;
+        let qx = ax / pf(14u);
+        let qy = ay / pf(15u);
         let r = sqrt(qx * qx + qy * qy);
         let f = pf(16u);
         v = 1.0 - sstep(1.0 - max(f, 0.01), 1.0, r);

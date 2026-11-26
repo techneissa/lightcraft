@@ -230,6 +230,16 @@ pub struct Buf {
 }
 
 impl Buf {
+    /// A live buffer of `len` values (in tests also counted in [`thread_bytes`]).
+    fn held(buf: Tracked, len: usize) -> Buf {
+        #[cfg(test)]
+        THREAD_BYTES.with(|c| {
+            let now = c.get().0 + buf.0.size();
+            c.set((now, c.get().1.max(now)));
+        });
+        Buf { buf: Some(buf), len }
+    }
+
     pub fn raw(&self) -> &wgpu::Buffer {
         // `buf` is `Some` from construction (`Gpu::buffer`/`upload`) until `Drop` takes it back
         // for the pool, so a live `Buf` always has it.
@@ -241,6 +251,8 @@ impl Buf {
 impl Drop for Buf {
     fn drop(&mut self) {
         let Some(b) = self.buf.take() else { return };
+        #[cfg(test)]
+        let _ = THREAD_BYTES.try_with(|c| c.set((c.get().0.saturating_sub(b.0.size()), c.get().1)));
         // Outside a render this thread has no commands recorded (only renders record), so the
         // buffer is reusable at once; without this, buffers dropped on threads that rarely
         // submit (the UI thread clearing a view's stages) would wait indefinitely.
@@ -334,6 +346,23 @@ impl Drop for Tracked {
     fn drop(&mut self) {
         ALLOCATED.fetch_sub(self.0.size(), Ordering::Relaxed);
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Bytes of the live buffers this thread made (with the pool's or a new allocation's own size), and the most at once
+    /// since [`thread_bytes`] last started it over (tests: what one render holds, whatever other tests do meanwhile).
+    static THREAD_BYTES: std::cell::Cell<(u64, u64)> = const { std::cell::Cell::new((0, 0)) };
+}
+
+/// The most bytes of buffers this thread's live buffers held at once since the last call (tests); starts over from now.
+#[cfg(test)]
+pub(crate) fn thread_bytes() -> u64 {
+    THREAD_BYTES.with(|c| {
+        let (now, peak) = c.get();
+        c.set((now, now));
+        peak
+    })
 }
 
 #[cfg(test)]
@@ -620,7 +649,7 @@ impl Gpu {
         let size = (len.max(1) * 4) as u64;
         if size > self.limit() {
             self.over_limit(size);
-            return Buf { buf: Some(Tracked::new(self.placeholder())), len };
+            return Buf::held(Tracked::new(self.placeholder()), len);
         }
         let recycled = {
             let mut f = self.free.lock().unwrap_or_else(|e| e.into_inner());
@@ -646,7 +675,7 @@ impl Gpu {
                 mapped_at_creation: false,
             }))
         });
-        Buf { buf: Some(buf), len }
+        Buf::held(buf, len)
     }
 
     /// Submit command buffers, then make the buffers this thread dropped before reusable.
@@ -712,14 +741,14 @@ impl Gpu {
         // render is redone on the CPU): staging the bytes would still queue a copy for the next
         // submission, so the caller gets the placeholder with the requested length instead.
         if failed() {
-            return Buf { buf: Some(Tracked::new(self.placeholder())), len };
+            return Buf::held(Tracked::new(self.placeholder()), len);
         }
         if bytes.is_empty() {
             return self.buffer(1);
         }
         if bytes.len() as u64 > self.limit() {
             self.over_limit(bytes.len() as u64);
-            return Buf { buf: Some(Tracked::new(self.placeholder())), len };
+            return Buf::held(Tracked::new(self.placeholder()), len);
         }
         let usage = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST;
         if let Some(size) = wgpu::BufferSize::new(bytes.len() as u64).filter(|s| s.get() % wgpu::COPY_BUFFER_ALIGNMENT == 0) {
@@ -749,10 +778,10 @@ impl Gpu {
             }
             // no view: the buffer couldn't be allocated (out of device memory). The error scope has recorded why and
             // the render fails over to the CPU; allocating it again would only fail again (issue #1764)
-            return Buf { buf: Some(Tracked::new(buf)), len };
+            return Buf::held(Tracked::new(buf), len);
         }
         let buf = self.init_buffer(bytes, usage);
-        Buf { buf: Some(Tracked::new(buf)), len }
+        Buf::held(Tracked::new(buf), len)
     }
 
     /// A buffer holding `contents` (zero-padded to the copy alignment), written through the queue. Not

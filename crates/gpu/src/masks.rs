@@ -214,6 +214,36 @@ fn auto_brush_part(cx: &mut Cx<'_>, host: &mut Host, env: &BrushEnv<'_>, strokes
     cx.gpu.upload(env.cut.of(&v.data, w))
 }
 
+/// Whether `count` dabs fit a device buffer (five words a dab, pen pressure applied).
+fn dabs_fit(cx: &Cx<'_>, count: usize) -> bool {
+    count.checked_mul(5).is_some_and(|words| cx.gpu.fits(words))
+}
+
+/// Whether a part of mask `m` is evaluated on the CPU over the whole frame ([`evaluate`]): a shape with no kernel, Auto
+/// Mask strokes, a gradient too sharp for the warp's position grid in `f32` ([`gradient`]), or a stroke with more dabs
+/// than a device buffer holds ([`stamp_stroke`]).
+fn on_cpu(cx: &Cx<'_>, plan: &Plan<'_>, m: &lightcraft_develop::Mask) -> bool {
+    use lightcraft_develop::MaskShape;
+    let (w, h) = (plan.w, plan.h);
+    let mframe = plan.frame.for_mask(m.on_photo);
+    let frame = &*mframe;
+    let mut grid = None;
+    m.components.iter().any(|c| match &c.shape {
+        MaskShape::LuminanceRange { .. } | MaskShape::ColorRange { .. } => false,
+        MaskShape::Linear { start, end } => {
+            let a = frame.norm_to_long(*start);
+            let ramp = Ramp::linear(a, frame.norm_to_long(*end) - a);
+            grid.get_or_insert_with(|| lightcraft_pipeline::masks::grid::pos_grid(frame, w, h)).as_deref().is_some_and(|g| !g.fits(&ramp, GRID_F32))
+        }
+        MaskShape::Radial { center, rx, ry, angle, feather, .. } => {
+            let ramp = Ramp::radial(frame.norm_to_long(*center), *rx, *ry, *angle, *feather / 100.0);
+            grid.get_or_insert_with(|| lightcraft_pipeline::masks::grid::pos_grid(frame, w, h)).as_deref().is_some_and(|g| !g.fits(&ramp, GRID_F32))
+        }
+        MaskShape::Brush { strokes } => strokes.iter().any(|s| s.auto_mask || !dabs_fit(cx, brush_dabs(s, frame, w, h).dabs.len())),
+        _ => true,
+    })
+}
+
 /// Stamp one stroke (not Auto Mask) into `plane` (the rows `env.cut`) inside its bounding box (the `stroke` kernel).
 fn stamp_stroke(cx: &mut Cx<'_>, env: &BrushEnv<'_>, s: &BrushStroke, plane: &Buf) -> bool {
     note_stroke();
@@ -222,8 +252,7 @@ fn stamp_stroke(cx: &mut Cx<'_>, env: &BrushEnv<'_>, s: &BrushStroke, plane: &Bu
     if bd.dabs.is_empty() {
         return true;
     }
-    // five words a dab, pen pressure applied
-    if !bd.dabs.len().checked_mul(5).is_some_and(|words| cx.gpu.fits(words)) {
+    if !dabs_fit(cx, bd.dabs.len()) {
         return false;
     }
     let rmax = bd.r.max(0.5);
@@ -381,24 +410,29 @@ fn upload_cut(cx: &mut Cx<'_>, mut v: lightcraft_raster::Plane, inverted: bool, 
     cx.gpu.upload(cut.of(&v.data, v.width))
 }
 
-/// Evaluate mask `m` (`lightcraft_pipeline::masks::evaluate_one`) over the rows `cut` of the frame into plane `at` of
-/// `dst` (planes of the cut's size): its parts combined, then Refine Edges (before its invert and Amount, which the
-/// finish stage applies). Parts with no kernel are evaluated on the CPU over the whole frame, and their rows `cut`
-/// uploaded. `comp` holds one part at a time (a plane of the cut's size). `keep`: a brush part stamped here may be kept
-/// in `held` for the next render (one with a store).
-#[allow(clippy::too_many_arguments)]
+/// Where [`evaluate`] puts a mask's alpha: plane `at` of `dst` (planes of the rows `cut` of the frame), with `comp` for
+/// one part at a time (a plane of the cut's size).
+struct Target<'b> {
+    cut: Cut,
+    dst: &'b Buf,
+    at: usize,
+    comp: &'b Buf,
+}
+
+/// Evaluate mask `m` (`lightcraft_pipeline::masks::evaluate_one`) over the rows `to.cut` of the frame into its target:
+/// its parts combined, then Refine Edges (before its invert and Amount, which the finish stage applies). Parts with no
+/// kernel are evaluated on the CPU over the whole frame ([`on_cpu`]), and their rows `cut` uploaded. `keep`: a brush part
+/// stamped here may be kept in `held` for the next render (one with a store).
 fn evaluate(
     cx: &mut Cx<'_>,
     img: &Images<'_>,
     plan: &Plan<'_>,
     host: &mut Host,
-    held: &mut Inner,
-    keep: bool,
+    (held, keep): (&mut Inner, bool),
     m: &lightcraft_develop::Mask,
-    cut: Cut,
-    (dst, at): (&Buf, usize),
-    comp: &Buf,
+    to: Target<'_>,
 ) {
+    let Target { cut, dst, at, comp } = to;
     use lightcraft_develop::{MaskOp, MaskShape};
     let (lin, prep) = (img.lin, img.prep);
     let (w, h) = (plan.w, plan.h);
@@ -571,7 +605,6 @@ pub(crate) fn masks(
         cx.copy_into(ch, alpha, n * stack);
     }
     upload_relit(cx, &relit, alpha, list.len(), n);
-    bands::note_alphas(planes.len * 4);
     let comp = cx.gpu.buffer(n);
     let mut guard = store.map(|(s, _)| s.lock());
     let mut unkept = Inner::default();
@@ -599,7 +632,7 @@ pub(crate) fn masks(
             cx.copy_range(&k.stack, k.at, alpha, mi * n, n);
         } else {
             note_evaluation();
-            evaluate(cx, img, plan, host, held, store.is_some(), m, Cut::whole(h), (alpha, mi), &comp);
+            evaluate(cx, img, plan, host, (held, store.is_some()), m, Target { cut: Cut::whole(h), dst: alpha, at: mi, comp: &comp });
         }
         // (the mask's Amount scales its effect terms, not its alpha: see `effect_terms`)
         if !used.iter().any(|u| u.key == key) {

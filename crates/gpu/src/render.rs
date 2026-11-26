@@ -323,6 +323,12 @@ impl<'a> Cx<'a> {
         out
     }
 
+    /// Zero `len` values of `b` from `offset` (32-bit words; recorded).
+    pub fn clear_range(&mut self, b: &Buf, offset: usize, len: usize) {
+        let enc = self.enc.get_or_insert_with(|| self.gpu.encoder());
+        enc.clear_buffer(b.raw(), (offset * 4) as u64, Some((len * 4) as u64));
+    }
+
     /// A copy of `b` (recorded).
     pub fn copy(&mut self, b: &Buf) -> Buf {
         let out = self.gpu.buffer(b.len);
@@ -985,7 +991,7 @@ pub fn render(
     // 4. masks: a render that keeps nothing evaluates them band by band in the per-pixel stage when they are large (issue
     // #406; the whole frame's alphas otherwise, which the overlays and mask planes read)
     let images = crate::masks::Images { lin: &lin, sampled: &sampled, prep: &prep };
-    let (mut bands, masks, terms) = crate::masks::bands::stage(&mut cx, &images, &plan, &mut host, stages.map(|c| (&c.alphas, src)), (&want, req));
+    let (bands, masks, terms) = crate::masks::bands::stage(&mut cx, &images, &plan, &mut host, stages.map(|c| (&c.alphas, src)), (&want, req));
     lap("masks", &mut t, &mut cx);
     if let Want::MaskPlanes(ask) = want {
         return Some(Output::Masks(mask_planes(&mut cx, masks.as_deref(), &plan, (&lin, &prep.log_l), Arc::as_ptr(src) as usize, ask)));
@@ -1106,7 +1112,7 @@ pub fn render(
     };
     if fault != Some(crate::Fault::DropWork) {
         let whole = (masks.as_deref(), rects.as_slice());
-        crate::masks::bands::per_pixel(&mut cx, bands.as_mut(), (&plan, &images), &mut host, edges.as_ref(), whole, &mut p, run)?;
+        crate::masks::bands::per_pixel(&mut cx, (bands.as_ref(), edges.as_ref()), (&plan, &images), &mut host, whole, &mut p, run)?;
     }
     if deep {
         let rendered = read_deep(&mut cx, &out, &plan, req);
