@@ -372,6 +372,13 @@ pub(crate) static POOL_LIMIT: AtomicU64 = AtomicU64::new(DEFAULT_POOL_BYTES);
 /// Default for the most bytes kept in the free pool (apps derive it from their memory budget).
 pub(crate) const DEFAULT_POOL_BYTES: u64 = 256 << 20;
 
+/// Bytes of one noise-reduction band where the device's free memory is unknown (see
+/// [`crate::set_band_budget`]).
+pub(crate) static BAND_BUDGET: AtomicU64 = AtomicU64::new(DEFAULT_BAND_BYTES);
+
+/// Default for [`BAND_BUDGET`] (apps derive it from their memory budget).
+pub(crate) const DEFAULT_BAND_BYTES: u64 = 384 << 20;
+
 /// Device buffers held by the renderer (bytes).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct GpuMemory {
