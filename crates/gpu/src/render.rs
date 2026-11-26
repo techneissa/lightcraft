@@ -304,7 +304,8 @@ impl<'a> Cx<'a> {
         self.held.clear();
     }
 
-    /// Submit what is recorded and wait for it (profiling only: stage timings).
+    /// Submit what is recorded and wait for it: stage timings when profiling, and between the bands of a render that keeps
+    /// nothing (`masks::bands`), so what a band let go is freed before the next.
     pub fn sync(&mut self) {
         self.submitted();
         if let Some(enc) = self.enc.take() {
@@ -320,6 +321,12 @@ impl<'a> Cx<'a> {
         let enc = self.enc.get_or_insert_with(|| self.gpu.encoder());
         enc.clear_buffer(out.raw(), 0, None);
         out
+    }
+
+    /// Zero `len` values of `b` from `offset` (32-bit words; recorded).
+    pub fn clear_range(&mut self, b: &Buf, offset: usize, len: usize) {
+        let enc = self.enc.get_or_insert_with(|| self.gpu.encoder());
+        enc.clear_buffer(b.raw(), (offset * 4) as u64, Some((len * 4) as u64));
     }
 
     /// A copy of `b` (recorded).
@@ -981,15 +988,19 @@ pub fn render(
         });
     }
 
-    // 4. masks
-    let (masks, terms) = crate::masks::masks(&mut cx, (&lin, &sampled), &prep, &plan, &mut host, stages.map(|c| (&c.alphas, src)));
+    // 4. masks: a render that keeps nothing evaluates them band by band in the per-pixel stage when they are large (issue
+    // #406; the whole frame's alphas otherwise, which the overlays and mask planes read)
+    let images = crate::masks::Images { lin: &lin, sampled: &sampled, prep: &prep };
+    let (bands, masks, terms) = crate::masks::bands::stage(&mut cx, &images, &plan, &mut host, stages.map(|c| (&c.alphas, src)), (&want, req));
     lap("masks", &mut t, &mut cx);
     if let Want::MaskPlanes(ask) = want {
         return Some(Output::Masks(mask_planes(&mut cx, masks.as_deref(), &plan, (&lin, &prep.log_l), Arc::as_ptr(src) as usize, ask)));
     }
     // fork (`fork/perf-decontam-gpu.md`): the decontaminated masks' edges, after the alphas
     let edge_lin = crate::decontam::Lin { buf: &lin, boxes: edge_boxes.as_deref() };
-    let (masks, dc) = crate::decontam::with_edges(&mut cx, &plan, masks, &terms, &edge_lin, &mut host, stages.map(|c| (&c.decontam, src)))?;
+    let kept_edges = stages.map(|c| (&c.decontam, src));
+    let (masks, dc, edges) =
+        crate::masks::bands::edges(&mut cx, (&plan, &images), bands.as_ref(), (masks, &terms), &edge_lin, &mut host, kept_edges)?;
 
     // 5. per-pixel stage
     let mut fp = FinishParams::new(FinishParamsInput {
@@ -1015,7 +1026,8 @@ pub fn render(
         sharpen: prep.sharpen.is_some(),
         sharpen_off: if prep.texture.is_some() && prep.sharpen.is_some() { n } else { 0 },
         dark: prep.dark.is_some(),
-        chroma: masks.is_some() && prep.chroma.is_some(),
+        // (a render with masks: their alphas are whole, or each band's)
+        chroma: !terms.is_empty() && prep.chroma.is_some(),
     };
     // the finish kernel's `tex` binding: the texture plane, then (process V3) the sharpening plane at
     // `SHARP_OFF` (one binding for both keeps the kernel within the storage-buffer count every
@@ -1074,7 +1086,7 @@ pub fn render(
             start.is_some()
         );
     }
-    for r in rects.iter().filter(|_| fault != Some(crate::Fault::DropWork)) {
+    let run = |cx: &mut Cx<'_>, p: &mut [u32], masks: Option<&Buf>, r: &[usize; 4]| {
         let rw = r[2].saturating_sub(r[0]);
         let rows = (BAND_PIXELS / rw.max(1) / 16 * 16).max(16); // whole workgroups: bands never overlap
         for y0 in (r[1]..r[3]).step_by(rows) {
@@ -1082,7 +1094,7 @@ pub fn render(
             p[x0_at] = r[0] as u32;
             cx.run(
                 dc.entry(),
-                &p,
+                p,
                 &[
                     Some(&lin),
                     Some(&prep.log_l),
@@ -1090,13 +1102,17 @@ pub fn render(
                     prep.clarity.as_deref(),
                     tex_buf.as_deref(),
                     prep.dark.as_deref(),
-                    masks.as_deref(),
+                    masks,
                     Some(&aux),
                     Some(&out),
                 ],
                 groups2(rw, rows.min(r[3] - y0), [16, 16]),
             );
         }
+    };
+    if fault != Some(crate::Fault::DropWork) {
+        let whole = (masks.as_deref(), rects.as_slice());
+        crate::masks::bands::per_pixel(&mut cx, (bands.as_ref(), edges.as_ref()), (&plan, &images), &mut host, whole, &mut p, run)?;
     }
     if deep {
         let rendered = read_deep(&mut cx, &out, &plan, req);

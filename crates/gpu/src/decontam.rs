@@ -32,12 +32,12 @@ pub(crate) const MAIN_DC: &str = "main_dc";
 const HOOKS: [(&str, &str); 3] = [
     (
         "    // --- local tone in log luminance\n    var l1 = l0;\n    if (dz != 0.0 || l_exp != 0.0 || has_added) {\n        l1 = log_lum(c);\n    }\n",
-        "    // (fork: at a decontaminated mask's soft edge, its edits made to each colour apart)\n    let ndc = pu(F_DC_N);\n    if (ndc > 0u) {\n        let dc = dc_scene(c, x, y, i, n, Local(lt, tint_on, tint_dir, tint_amt));\n        c = dc.xyz;\n        l1 = l1 + dc.w;\n    }\n",
+        "    // (fork: at a decontaminated mask's soft edge, its edits made to each colour apart)\n    let ndc = pu(F_DC_N);\n    if (ndc > 0u) {\n        let dc = dc_scene(c, x, y, i, Local(lt, tint_on, tint_dir, tint_amt));\n        c = dc.xyz;\n        l1 = l1 + dc.w;\n    }\n",
     ),
     ("    // --- colour\n", "    let pre = d;\n"),
     (
-        "    d = recolor_masks(d, i, n);\n",
-        "    if (ndc > 0u) {\n        d = dc_colour(pre, d, select(1.0, exp2(delta), delta != 0.0), x, y, i, n);\n    }\n",
+        "    d = recolor_masks(d, i);\n",
+        "    if (ndc > 0u) {\n        d = dc_colour(pre, d, select(1.0, exp2(delta), delta != 0.0), x, y, i);\n    }\n",
     ),
 ];
 
@@ -266,13 +266,12 @@ pub(crate) fn with_edges(
     })
 }
 
-/// What one decontaminated mask asks of [`edge_of`]: its place `k` in the render's list, its full and its loose
-/// ([`Slot::key`]) key, the alphas' buffer and the linear image.
+/// What one decontaminated mask asks of [`edge_of`]: its full and its loose ([`Slot::key`]) key, its alpha over the whole
+/// frame (a buffer and where it starts there) and the linear image.
 struct Want<'a> {
-    k: usize,
     exact: u64,
     key: u64,
-    masks: &'a Buf,
+    alpha: (&'a Buf, usize),
     lin: &'a Lin<'a>,
 }
 
@@ -284,7 +283,7 @@ fn edge_of(cx: &mut Cx<'_>, plan: &Plan<'_>, want: &Want<'_>, host: &mut Host, h
     if let Some(s) = held.iter().find(|s| s.exact == want.exact) {
         return Some((s.clone(), false));
     }
-    let plane = cx.slice(want.masks, want.k.checked_mul(n)?, n);
+    let plane = cx.slice(want.alpha.0, want.alpha.1, n);
     let alpha_plane = cx.read_plane(&plane, w, h);
     // the same edge but for the retouch step: kept when nothing it wrote reaches the edge's estimate, and the alpha is
     // the very one it was estimated from
@@ -336,6 +335,85 @@ pub(crate) fn attach(
     host: &mut Host,
     kept: Option<(&KeptEdges, &Arc<Rgb32f>)>,
 ) -> Option<Attached> {
+    let n = plan.w.checked_mul(plan.h)?;
+    let found = found(cx, plan, |k| Some((masks, k.checked_mul(n)?)), terms, lin, host, kept)?;
+    let out = found.after(cx, masks.len)?;
+    cx.copy_into(masks, &out, 0);
+    Some(Attached { desc: found.desc(masks.len, plan.h), masks: out, fresh: found.fresh })
+}
+
+/// [`with_edges`] for a render whose masks are evaluated in bands (`masks::bands`): the edges of its decontaminated
+/// masks (evaluated over the whole frame, `alpha`: mask `k`'s alpha there), to go after each band's masks buffer of
+/// `len` words, and the finish kernel's inputs. `None` when that failed the render.
+pub(crate) fn for_bands<'b>(
+    cx: &mut Cx<'_>,
+    plan: &Plan<'_>,
+    alpha: impl Fn(usize) -> Option<(&'b Buf, usize)>,
+    terms: &[[f32; MASK_TERMS]],
+    lin: &Lin<'_>,
+    host: &mut Host,
+    len: usize,
+) -> Option<(Option<Found>, Edges)> {
+    let found = found(cx, plan, alpha, terms, lin, host, None);
+    if crate::ctx::failed() {
+        return None;
+    }
+    let edges = found.as_ref().map_or_else(Edges::default, |f| Edges { desc: f.desc(len, plan.h), fresh: f.fresh });
+    Some((found, edges))
+}
+
+/// A render's decontaminated edges on the device ([`found`]), to go after its masks buffer.
+pub(crate) struct Found {
+    /// (mask index, Amount, layers, the edge's words), in mask order.
+    edges: Vec<(usize, f32, u32, Arc<Buf>)>,
+    /// An edge was estimated in this render.
+    fresh: bool,
+}
+
+impl Found {
+    /// The descriptors ([`DESC_WORDS`] each) of the edges after a masks buffer of `len` words, on a frame `h` rows high.
+    fn desc(&self, len: usize, h: usize) -> Vec<f32> {
+        let mut at = len;
+        let mut desc = Vec::with_capacity(self.edges.len() * DESC_WORDS);
+        for (k, t, layers, b) in &self.edges {
+            let rows = at as u32;
+            let px = (at + h + 1) as u32;
+            desc.extend([f32::from_bits(*k as u32), *t, f32::from_bits(rows), f32::from_bits(px), f32::from_bits(*layers)]);
+            at += b.len;
+        }
+        desc
+    }
+
+    /// A buffer of a masks buffer's `len` words, then the edges (where [`Self::desc`] says), the edges copied in: the
+    /// masks go in its first `len` words. `None` when that is over the device's buffer limit, which fails the render.
+    pub(crate) fn after(&self, cx: &mut Cx<'_>, len: usize) -> Option<Buf> {
+        let total = self.edges.iter().try_fold(len, |a, (.., b)| a.checked_add(b.len))?;
+        if !cx.gpu.fits(total) || u32::try_from(total).is_err() {
+            fail(FailKind::Limit, format!("the masks and their decontaminated edges ({total} words) are over the device's buffer limit"));
+            return None;
+        }
+        let out = cx.gpu.buffer(total);
+        let mut at = len;
+        for (.., b) in &self.edges {
+            cx.copy_into(b, &out, at);
+            at += b.len;
+        }
+        Some(out)
+    }
+}
+
+/// The edges of the render's decontaminated masks (`decontam::applies`; `alpha`: mask `k`'s alpha over the whole frame),
+/// estimated or taken from `kept` (the view's edges and the source they were estimated on). `None` when no mask is
+/// decontaminated (the edges kept are freed), a mask's edge holds no pixel, or estimating one failed the render.
+fn found<'b>(
+    cx: &mut Cx<'_>,
+    plan: &Plan<'_>,
+    alpha: impl Fn(usize) -> Option<(&'b Buf, usize)>,
+    terms: &[[f32; MASK_TERMS]],
+    lin: &Lin<'_>,
+    host: &mut Host,
+    kept: Option<(&KeptEdges, &Arc<Rgb32f>)>,
+) -> Option<Found> {
     let s = &*plan.settings;
     if !s.masks.iter().any(decontam::applies) {
         // (no mask is decontaminated: what was kept for an earlier one is of no use)
@@ -360,11 +438,15 @@ pub(crate) fn attach(
         let Some(t) = terms.get(k) else { continue };
         let (scene, colour) = decontam::layers_of(t);
         let layers = u32::from(scene) | (u32::from(colour) << 1);
+        // (a banded render evaluates every decontaminated mask whole: `masks::bands::whole_only`)
+        let Some(alpha) = alpha(k) else {
+            fail(FailKind::Limit, "a decontaminated mask's alpha over the whole frame is missing".into());
+            return None;
+        };
         let want = Want {
-            k,
             exact: edge_key(plan, plan.lin_key, alpha_key(m, full, ev)),
             key: edge_key(plan, plan.edge_lin_key, alpha_key(m, loose, ev)),
-            masks,
+            alpha,
             lin,
         };
         // (a render's own edges first: two masks of one alpha share one)
@@ -388,23 +470,7 @@ pub(crate) fn attach(
     if found.is_empty() {
         return None;
     }
-    let total = found.iter().try_fold(masks.len, |a, (.., b)| a.checked_add(b.len))?;
-    if !cx.gpu.fits(total) || u32::try_from(total).is_err() {
-        fail(FailKind::Limit, format!("the masks and their decontaminated edges ({total} words) are over the device's buffer limit"));
-        return None;
-    }
-    let out = cx.gpu.buffer(total);
-    cx.copy_into(masks, &out, 0);
-    let mut at = masks.len;
-    let mut desc = Vec::with_capacity(found.len() * DESC_WORDS);
-    for (k, t, layers, b) in &found {
-        cx.copy_into(b, &out, at);
-        let rows = at as u32;
-        let px = (at + h + 1) as u32;
-        desc.extend([f32::from_bits(*k as u32), *t, f32::from_bits(rows), f32::from_bits(px), f32::from_bits(*layers)]);
-        at += b.len;
-    }
-    Some(Attached { masks: out, desc, fresh })
+    Some(Found { edges: found, fresh })
 }
 
 /// The finish kernel's parameter block and `aux` with the descriptors `desc` ([`Attached::desc`]) after `aux`'s tables.

@@ -253,13 +253,24 @@ fn recolor_one(lab: vec3<f32>, t: u32, alpha: f32) -> vec3<f32> {
     return lab + (nlab - lab) * k + (turned - lab) * k_hue;
 }
 
+// Where mask `m`'s alpha at pixel `i` is in `masks`: its planes hold `F_MASK_N` pixels from row `F_MASK_Y0` (a band of
+// a render that keeps nothing, `masks::bands`; else the whole frame, from row 0).
+fn mask_at(m: u32, i: u32) -> u32 {
+    return m * pu(F_MASK_N) + i - pu(F_MASK_Y0) * pu(F_W);
+}
+
+// Where pixel `i`'s blurred chromaticity (three values) is in `masks`, after the alphas.
+fn chroma_at(i: u32) -> u32 {
+    return pu(F_NMASK) * pu(F_MASK_N) + 3u * (i - pu(F_MASK_Y0) * pu(F_W));
+}
+
 // Every mask's Recolor at pixel `i`, in mask order (`finish::recolor_pixel`); `d` unchanged where none is on.
-fn recolor_masks(d: vec3<f32>, i: u32, n: u32) -> vec3<f32> {
+fn recolor_masks(d: vec3<f32>, i: u32) -> vec3<f32> {
     var lab = vec3<f32>(0.0);
     var found = false;
     let nm = pu(F_NMASK);
     for (var m = 0u; m < nm; m++) {
-        let a = masks[m * n + i];
+        let a = masks[mask_at(m, i)];
         let t = pu(F_MASK_OFF) + m * MASK_TERMS + MASK_RECOLOR;
         if (a <= 0.0 || aux[t] <= 0.0) {
             continue;
@@ -278,12 +289,12 @@ fn recolor_masks(d: vec3<f32>, i: u32, n: u32) -> vec3<f32> {
 
 // `recolor_masks` with mask `ok` reading alpha `ov` instead of its own (`NO_MASK`: none; a decontaminated edge's
 // layers, `wgsl/decontam.wgsl`).
-fn recolor_masks_over(d: vec3<f32>, i: u32, n: u32, ok: u32, ov: f32) -> vec3<f32> {
+fn recolor_masks_over(d: vec3<f32>, i: u32, ok: u32, ov: f32) -> vec3<f32> {
     var lab = vec3<f32>(0.0);
     var found = false;
     let nm = pu(F_NMASK);
     for (var m = 0u; m < nm; m++) {
-        let a = select(masks[m * n + i], ov, m == ok);
+        let a = select(masks[mask_at(m, i)], ov, m == ok);
         let t = pu(F_MASK_OFF) + m * MASK_TERMS + MASK_RECOLOR;
         if (a <= 0.0 || aux[t] <= 0.0) {
             continue;
@@ -615,11 +626,11 @@ struct Local {
 const NO_MASK: u32 = 0xffffffffu;
 
 // The sum of the masks' terms at pixel `i` (`finish::pixel_local_terms`); mask `ok` reads alpha `ov` instead of its own.
-fn local_terms(i: u32, n: u32, ok: u32, ov: f32) -> Local {
+fn local_terms(i: u32, ok: u32, ov: f32) -> Local {
     var r: Local;
     let nm = pu(F_NMASK);
     for (var m = 0u; m < nm; m++) {
-        let a = select(masks[m * n + i], ov, m == ok);
+        let a = select(masks[mask_at(m, i)], ov, m == ok);
         if (a <= 0.0) {
             continue;
         }
@@ -638,10 +649,9 @@ fn local_terms(i: u32, n: u32, ok: u32, ov: f32) -> Local {
 
 // The scene-linear edits of colour `raw` at pixel `i` with terms `lt` (`finish::adjust_scene_pixel`): the colour and
 // its log luminance.
-fn scene_pixel(raw: vec3<f32>, i: u32, n: u32, lt: Local) -> vec4<f32> {
+fn scene_pixel(raw: vec3<f32>, i: u32, lt: Local) -> vec4<f32> {
     let gain = pf(F_GAIN);
     let ev = pf(F_EV);
-    let nm = pu(F_NMASK);
     var c = raw;
     if (gain != 1.0) {
         c = c * gain;
@@ -657,7 +667,7 @@ fn scene_pixel(raw: vec3<f32>, i: u32, n: u32, lt: Local) -> vec4<f32> {
     if (mt != 0.0 && pu(F_HAS_CHROMA) != 0u) {
         let y = lum2020(c);
         let ch0 = raw / max(lum2020(raw), 1e-6);
-        let o = nm * n + 3u * i;
+        let o = chroma_at(i);
         let cb = vec3<f32>(masks[o], masks[o + 1u], masks[o + 2u]);
         c = max((ch0 + (cb - ch0) * mt) * y, vec3<f32>(0.0));
     }
@@ -832,13 +842,13 @@ fn to_display(c0: vec3<f32>) -> vec3<f32> {
 
 // The colour edits of display colour `d0` at pixel `i` with terms `lt`; mask `ok` reads alpha `ov` (`finish_with`'s
 // `colour`).
-fn colour_pixel(d0: vec3<f32>, i: u32, n: u32, lt: Local, ok: u32, ov: f32) -> vec3<f32> {
+fn colour_pixel(d0: vec3<f32>, i: u32, lt: Local, ok: u32, ov: f32) -> vec3<f32> {
     var d = color_ops(d0, lt.v[11], lt.v[12]);
     if (lt.tint_on) {
         let lab = oklab(d);
         d = oklab_inv(vec3<f32>(lab.x, lab.y + lt.tint_dir.x * 0.08 * lt.tint_amt, lab.z + lt.tint_dir.y * 0.08 * lt.tint_amt));
     }
-    return recolor_masks_over(d, i, n, ok, ov);
+    return recolor_masks_over(d, i, ok, ov);
 }
 
 @compute @workgroup_size(16, 16)
@@ -851,7 +861,6 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
     let i = y * w + x;
-    let n = w * h;
     let gain = pf(F_GAIN);
     let ev = pf(F_EV);
     let peak = pf(F_PEAK);
@@ -871,7 +880,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     var tint_amt = 0.0;
     let nm = pu(F_NMASK);
     for (var m = 0u; m < nm; m++) {
-        let a = masks[m * n + i];
+        let a = masks[mask_at(m, i)];
         if (a <= 0.0) {
             continue;
         }
@@ -896,7 +905,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let raw = vec3<f32>(img[3u * i], img[3u * i + 1u], img[3u * i + 2u]);
         let y = lum2020(c);
         let ch0 = raw / max(lum2020(raw), 1e-6);
-        let o = nm * n + 3u * i;
+        let o = chroma_at(i);
         let cb = vec3<f32>(masks[o], masks[o + 1u], masks[o + 2u]);
         c = max((ch0 + (cb - ch0) * mt) * y, vec3<f32>(0.0));
     }
@@ -1064,7 +1073,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let lab = oklab(d);
         d = oklab_inv(vec3<f32>(lab.x, lab.y + tint_dir.x * 0.08 * tint_amt, lab.z + tint_dir.y * 0.08 * tint_amt));
     }
-    d = recolor_masks(d, i, n);
+    d = recolor_masks(d, i);
 
     // --- vignette (display linear, post-crop)
     if (pu(F_VIG) != 0u) {

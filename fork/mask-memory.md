@@ -26,7 +26,7 @@ What the views held at 200 % (before): the zoom window's stages 0.9–1.0 GB (al
 
 ## Not done
 
-- The full-size picture (`ui-egui/src/full_picture.rs`) renders the whole 33 MP frame at once after each pause past Fit, and every mask's alpha is a full-size plane in it (4 bytes a pixel a mask: 132 MB each, 2.2 GB for 17). That render is the remaining peak (5.2 GB of GPU buffers). Evaluating masks and the finish stage band by band would bound it.
+- The full-size picture (`ui-egui/src/full_picture.rs`) renders the whole 33 MP frame at once after each pause past Fit, and every mask's alpha is a full-size plane in it (4 bytes a pixel a mask: 132 MB each, 2.2 GB for 17). That render is the remaining peak (5.2 GB of GPU buffers). Its masks and finish stage now run band by band (`fork/mask-bands.md`, issue #406); its other stages are still whole (issue #411).
 - SAM 3 (about 2.2 GB) stays loaded while the Masking panel is open in the front window (issue #353); BiRefNet Matting runs ahead on its own on some photos: on one private A7 V photo it loaded during the session and the app held about 3 GB more GPU-mapped memory while it stayed loaded.
 
 ## Branch

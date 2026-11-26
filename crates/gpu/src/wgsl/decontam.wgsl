@@ -42,13 +42,13 @@ struct DcHit {
     unsel: vec3<f32>,
 }
 
-fn dc_hit(s: u32, x: u32, y: u32, i: u32, n: u32) -> DcHit {
+fn dc_hit(s: u32, x: u32, y: u32, i: u32) -> DcHit {
     var h: DcHit;
     let d = pu(F_DC_OFF) + s * DC_DESC;
     h.k = bitcast<u32>(aux[d]);
     h.t = aux[d + 1u];
     h.layers = bitcast<u32>(aux[d + 4u]);
-    h.a = masks[h.k * n + i];
+    h.a = masks[mask_at(h.k, i)];
     if (!(h.a > DC_E0 && h.a < DC_E1) || h.t <= 0.0 || h.layers == 0u) {
         return h;
     }
@@ -65,18 +65,18 @@ fn dc_hit(s: u32, x: u32, y: u32, i: u32, n: u32) -> DcHit {
 
 // The pixel's scene colour `c` (every mask at its own alpha, terms `lt`) with each hit's scene edits made apart, and
 // the change of its log luminance (`decontam::pixel::scene`).
-fn dc_scene(c: vec3<f32>, x: u32, y: u32, i: u32, n: u32, lt: Local) -> vec4<f32> {
+fn dc_scene(c: vec3<f32>, x: u32, y: u32, i: u32, lt: Local) -> vec4<f32> {
     var out = c;
     for (var s = 0u; s < pu(F_DC_N); s++) {
-        let h = dc_hit(s, x, y, i, n);
+        let h = dc_hit(s, x, y, i);
         if (!h.ok || (h.layers & 1u) == 0u) {
             continue;
         }
-        let su = scene_pixel(h.sel, i, n, local_terms(i, n, h.k, 1.0)).xyz;
-        let uu = scene_pixel(h.unsel, i, n, local_terms(i, n, h.k, 0.0)).xyz;
+        let su = scene_pixel(h.sel, i, local_terms(i, h.k, 1.0)).xyz;
+        let uu = scene_pixel(h.unsel, i, local_terms(i, h.k, 0.0)).xyz;
         // what the mask's edit does to each colour wholly on (off) beyond what it does at the pixel's alpha
-        let sa = scene_pixel(h.sel, i, n, lt).xyz;
-        let ua = scene_pixel(h.unsel, i, n, lt).xyz;
+        let sa = scene_pixel(h.sel, i, lt).xyz;
+        let ua = scene_pixel(h.unsel, i, lt).xyz;
         out = out + h.t * (h.a * (su - sa) + (1.0 - h.a) * (uu - ua));
     }
     var shift = 0.0;
@@ -90,17 +90,17 @@ fn dc_scene(c: vec3<f32>, x: u32, y: u32, i: u32, n: u32, lt: Local) -> vec4<f32
 
 // The pixel's colour edits with each hit's made apart (`decontam::pixel::colour`): `pre` is the composite's display
 // colour before them, `d` after them (every mask at its own alpha), `g` the tone stage's gain.
-fn dc_colour(pre: vec3<f32>, d: vec3<f32>, g: f32, x: u32, y: u32, i: u32, n: u32) -> vec3<f32> {
+fn dc_colour(pre: vec3<f32>, d: vec3<f32>, g: f32, x: u32, y: u32, i: u32) -> vec3<f32> {
     var out = d;
     for (var s = 0u; s < pu(F_DC_N); s++) {
-        let h = dc_hit(s, x, y, i, n);
+        let h = dc_hit(s, x, y, i);
         if (!h.ok || (h.layers & 2u) == 0u) {
             continue;
         }
-        let on = local_terms(i, n, h.k, 1.0);
-        let off = local_terms(i, n, h.k, 0.0);
-        let su = scene_pixel(h.sel, i, n, on).xyz;
-        let uu = scene_pixel(h.unsel, i, n, off).xyz;
+        let on = local_terms(i, h.k, 1.0);
+        let off = local_terms(i, h.k, 0.0);
+        let su = scene_pixel(h.sel, i, on).xyz;
+        let uu = scene_pixel(h.unsel, i, off).xyz;
         // the two colours as the composite's tone stage draws them, corrected to mix back to it exactly
         var ds = to_display(su * g);
         var du = to_display(uu * g);
@@ -109,8 +109,8 @@ fn dc_colour(pre: vec3<f32>, d: vec3<f32>, g: f32, x: u32, y: u32, i: u32, n: u3
         let r = (pre - (a * ds + (1.0 - a) * du)) / norm;
         ds = max(ds + a * r, vec3<f32>(0.0));
         du = max(du + (1.0 - a) * r, vec3<f32>(0.0));
-        let cs = colour_pixel(ds, i, n, on, h.k, 1.0);
-        let cu = colour_pixel(du, i, n, off, h.k, 0.0);
+        let cs = colour_pixel(ds, i, on, h.k, 1.0);
+        let cu = colour_pixel(du, i, off, h.k, 0.0);
         out = out + h.t * (a * cs + (1.0 - a) * cu - d);
     }
     return out;
