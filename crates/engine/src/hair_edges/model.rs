@@ -26,6 +26,8 @@ impl HairEdges {
         if len != MODEL_BYTES {
             return Err(damaged(format!("the BiRefNet Matting model file is {len} bytes, not {MODEL_BYTES}")));
         }
+        // (a release asked while something else held the lock is stale now: this run starts afresh)
+        self.inner.release.store(false, Ordering::SeqCst);
         let attempt = |cpu: bool| -> Attempt {
             if stop() {
                 return Attempt::Fail("cancelled".into());
@@ -77,7 +79,8 @@ impl HairEdges {
         let out = on_devices(&self.inner.gpu_refused, attempt);
         if self.inner.release.swap(false, Ordering::SeqCst) {
             // (a mask's stop button asked for it during the run: fork, issue #407)
-            *lock(&self.inner.loaded) = None;
+            let old = lock(&self.inner.loaded).take();
+            drop(old);
             log::info!("BiRefNet Matting unloaded");
             return out;
         }
@@ -101,14 +104,18 @@ impl HairEdges {
     /// Let the model go now, held or not (fork, issue #407: an AI mask's stop button); a run going lets it go when it
     /// ends.
     pub fn release(&self) {
-        match self.inner.loaded.try_lock() {
-            Ok(mut slot) => {
-                if slot.take().is_some() {
-                    log::info!("BiRefNet Matting unloaded");
-                }
+        // (taken out under the lock, dropped after it: freeing the model takes a while)
+        let old = match self.inner.loaded.try_lock() {
+            Ok(mut slot) => slot.take(),
+            Err(std::sync::TryLockError::Poisoned(p)) => p.into_inner().take(),
+            Err(std::sync::TryLockError::WouldBlock) => {
+                self.inner.release.store(true, Ordering::SeqCst);
+                None
             }
-            Err(std::sync::TryLockError::Poisoned(p)) => *p.into_inner() = None,
-            Err(std::sync::TryLockError::WouldBlock) => self.inner.release.store(true, Ordering::SeqCst),
+        };
+        if old.is_some() {
+            drop(old);
+            log::info!("BiRefNet Matting unloaded");
         }
     }
 

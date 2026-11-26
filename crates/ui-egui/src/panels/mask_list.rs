@@ -81,6 +81,8 @@ pub(crate) fn pinned(app: &mut LightcraftApp, ui: &mut egui::Ui, photo: PhotoId)
             }
         });
         announce_selection(app, ui, &d);
+        // (fork, issue #407: what Stop AI did)
+        super::mask_stop_ai::announce(app, ui);
     });
     divider(ui);
 }
@@ -206,7 +208,7 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, photo: PhotoId, masks: &[Mask
         super::mask_parts::mask_invert_button(app, ui, r, m.id, m.invert);
     }
     if ai {
-        super::mask_stop_ai::button(app, ui, r, r.right() - if sel { 64.0 } else { 40.0 }, m.id, &m.name);
+        super::mask_stop_ai::button(app, ui, r, r.right() - if sel { 64.0 } else { 40.0 }, photo, m.id, &m.name);
     }
     if resp.clicked() {
         let _ = app.run("mask.select", json!({"id": m.id}));

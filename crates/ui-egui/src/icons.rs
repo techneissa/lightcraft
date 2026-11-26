@@ -114,8 +114,10 @@ pub enum Icon {
     Play,
     /// Pause (two bars).
     Pause,
-    /// Stop (a square in a ring): an AI mask's Stop AI (fork, issue #407).
+    /// Stop (a filled rounded square): an AI mask's Stop AI (fork, issue #407).
     Stop,
+    /// Stop with nothing to stop (the square's outline).
+    StopIdle,
     /// Colour grading, all three wheels: three small circles.
     GradeAll,
     /// Colour grading, shadows wheel: a filled circle.
@@ -638,10 +640,8 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, color: Color32, turn: Option<
             pen.rect_fill(5.0, 4.0, 8.5, 16.0, 0.5);
             pen.rect_fill(11.5, 4.0, 15.0, 16.0, 0.5);
         }
-        Stop => {
-            pen.circle(10.0, 10.0, 7.5);
-            pen.rect_fill(7.0, 7.0, 13.0, 13.0, 1.0);
-        }
+        Stop => pen.rect_fill(5.0, 5.0, 15.0, 15.0, 2.0),
+        StopIdle => pen.rect(5.5, 5.5, 14.5, 14.5, 2.0),
         FaceBox => {
             pen.line(&[(2.5, 7.0), (2.5, 2.5), (7.0, 2.5)]);
             pen.line(&[(13.0, 2.5), (17.5, 2.5), (17.5, 7.0)]);

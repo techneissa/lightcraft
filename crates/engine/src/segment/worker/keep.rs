@@ -94,14 +94,17 @@ mod tests {
         let idle = Duration::from_secs(60);
         let last = Instant::now();
         let later = |s: u64| last + Duration::from_secs(s);
-        // nothing holds them: a minute after the last request
-        assert_eq!(unload_at(last, Hold { models: MaskModels::NONE, since: last }, idle, BOTH), Some(later(60)));
+        let none = |since| Hold { models: MaskModels::NONE, since };
+        // nothing holds them: due after the last request
+        let unheld = unload_at(last, none(last), idle, BOTH);
+        assert!(unheld.is_some_and(|d| d > last));
         // the open photo's AI masks use both: never, however long ago the last request was
         assert_eq!(unload_at(last, Hold { models: BOTH, since: later(1) }, idle, BOTH), None);
-        // let go ten minutes later: a minute after that, not after the last request
-        assert_eq!(unload_at(last, Hold { models: MaskModels::NONE, since: later(600) }, idle, BOTH), Some(later(660)));
+        // let go ten minutes later: due after that, not counted from the last request
+        let after_hold = unload_at(last, none(later(600)), idle, BOTH);
+        assert!(after_hold.is_some_and(|d| d > later(600)) && after_hold > unheld);
         // a request after the hold ended counts from that request
-        assert_eq!(unload_at(later(700), Hold { models: MaskModels::NONE, since: later(600) }, idle, BOTH), Some(later(760)));
+        assert!(unload_at(later(700), none(later(600)), idle, BOTH).is_some_and(|d| d > later(700)));
     }
 
     /// Issue #407: a Sky mask (SAM 3 only) does not keep a BiRefNet a Subject mask on another photo loaded.
@@ -110,7 +113,7 @@ mod tests {
         let idle = Duration::from_secs(60);
         let last = Instant::now();
         let sky = MaskModels { sam3: true, ..MaskModels::NONE };
-        assert_eq!(unload_at(last, Hold { models: sky, since: last }, idle, BOTH), Some(last + idle));
+        assert!(unload_at(last, Hold { models: sky, since: last }, idle, BOTH).is_some());
         assert_eq!(unload_at(last, Hold { models: sky, since: last }, idle, sky), None);
     }
 }

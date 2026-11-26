@@ -31,6 +31,11 @@ impl MaskModels {
         MaskModels { sam3: self.sam3 || o.sam3, birefnet: self.birefnet || o.birefnet, matting: self.matting || o.matting }
     }
 
+    /// The models any of `all` has.
+    pub fn union(all: impl IntoIterator<Item = MaskModels>) -> MaskModels {
+        all.into_iter().fold(MaskModels::NONE, MaskModels::either)
+    }
+
     /// The ids of the models that are on (`sam3`, `birefnet`, `matting`).
     pub fn ids(self) -> Vec<&'static str> {
         [(self.sam3, "sam3"), (self.birefnet, "birefnet"), (self.matting, "matting")].into_iter().filter_map(|(on, id)| on.then_some(id)).collect()
@@ -70,9 +75,10 @@ impl crate::Session {
         self.hair_edges.keep_loaded(models.matting);
     }
 
-    /// The models an AI part `shape` is made with (brush, gradient and range parts: none). Whether a model is installed
-    /// is not asked: one that is not never loads, so holding it costs nothing.
-    pub fn mask_models_of(&self, shape: &MaskShape) -> MaskModels {
+    /// The models an AI part `shape` on photo `photo` is made with (brush, gradient and range parts: none). A Subject,
+    /// Background or Sky part on a photo with its own matte for it, or with no model for it on this computer, uses none
+    /// (as `concepts::wanted` decides when it is made). Reads a few files (the installed selection models).
+    pub fn mask_models_of(&self, photo: PhotoId, shape: &MaskShape) -> MaskModels {
         use crate::hair_edges::EdgeKind;
         if !crate::segment::Segmenter::AVAILABLE {
             return MaskModels::NONE;
@@ -80,6 +86,9 @@ impl crate::Session {
         match shape {
             MaskShape::Subject { .. } | MaskShape::Background { .. } | MaskShape::Sky { .. } => {
                 let Some(c) = crate::cmd::concepts::of(shape) else { return MaskModels::NONE };
+                if !crate::cmd::concepts::wanted(self, photo, shape) {
+                    return MaskModels::NONE;
+                }
                 let model = self.segmenter.concept_model(c.kind);
                 MaskModels {
                     sam3: model.uses_sam3(),
@@ -93,53 +102,58 @@ impl crate::Session {
         }
     }
 
-    /// The models mask `m`'s parts are made with.
-    pub fn mask_models_of_mask(&self, m: &Mask) -> MaskModels {
-        m.components.iter().fold(MaskModels::NONE, |a, c| a.either(self.mask_models_of(&c.shape)))
+    /// The models mask `m` of photo `photo` is made with.
+    pub fn mask_models_of_mask(&self, photo: PhotoId, m: &Mask) -> MaskModels {
+        MaskModels::union(m.components.iter().map(|c| self.mask_models_of(photo, &c.shape)))
     }
 
-    /// The models photo `id`'s masks are made with.
-    pub fn mask_models_on(&self, id: PhotoId) -> MaskModels {
-        let Some(d) = self.develop_of(id) else { return MaskModels::NONE };
-        d.masks.iter().fold(MaskModels::NONE, |a, m| a.either(self.mask_models_of_mask(m)))
+    /// The models each mask of photo `photo` is made with, by mask id.
+    pub fn mask_models_by_mask(&self, photo: PhotoId) -> Vec<(u32, MaskModels)> {
+        let Some(d) = self.develop_of(photo) else { return Vec::new() };
+        d.masks.iter().map(|m| (m.id, self.mask_models_of_mask(photo, m))).collect()
     }
 
-    /// The models in memory now, or working (a request on the AI mask worker counts for SAM 3 and BiRefNet: it may be
-    /// loading them).
-    pub fn mask_models_in_use(&self) -> MaskModels {
+    /// The models photo `photo`'s masks are made with: what the Masking panel holds for it.
+    pub fn mask_models_on(&self, photo: PhotoId) -> MaskModels {
+        MaskModels::union(self.mask_models_by_mask(photo).into_iter().map(|(_, m)| m))
+    }
+
+    /// The models in memory now.
+    pub fn mask_models_loaded(&self) -> MaskModels {
         #[cfg(feature = "sam")]
         {
-            let (loaded, busy) = (self.segmenter.worker.loaded_models(), self.segmenter.worker.pending() + self.segmenter.worker.detail() > 0);
-            MaskModels { sam3: loaded.sam3 || busy, birefnet: loaded.birefnet || busy, matting: self.hair_edges.model_loaded() }
+            MaskModels { matting: self.hair_edges.model_loaded(), ..self.segmenter.worker.loaded_models() }
         }
         #[cfg(not(feature = "sam"))]
         MaskModels::NONE
     }
 
-    /// Stop the AI of mask `mask` on the open photo (`mask.stopAi`): the requests on the AI mask worker are cancelled
-    /// and the models the mask uses are let go now, even while held. The mask keeps its stored selection. The models
-    /// let go.
+    /// Whether Stop AI does something for mask `mask` of photo `photo`, which uses `uses`: one of those models is in
+    /// memory, or a request for this mask is under way (on the AI mask worker, or Update AI Masks finding its parts).
+    pub fn mask_ai_stoppable(&self, photo: PhotoId, mask: u32, uses: MaskModels) -> bool {
+        uses.both(self.mask_models_loaded()).any() || self.segmenter.mask_busy(photo, mask) || self.adaptive.asking_for(photo, mask)
+    }
+
+    /// Stop the AI of mask `mask` on the open photo (`mask.stopAi`): this mask's requests are cancelled (on the AI mask
+    /// worker and Update AI Masks'), and the models it uses are let go once the step under way ends, held or not. The
+    /// mask keeps its stored selection. Returns the models it uses.
     pub fn stop_mask_ai(&mut self, mask: u32) -> Result<MaskModels, String> {
         let id = self.active().ok_or("no photo is open")?;
         let d = self.develop_of(id).ok_or("no such photo")?;
         let m = d.masks.iter().find(|m| m.id == mask).ok_or_else(|| format!("no mask {mask}"))?;
-        let models = self.mask_models_of_mask(m);
+        let models = self.mask_models_of_mask(id, m);
         if !models.any() {
-            return Err(format!("“{}” is not made by an AI model", m.name));
+            return Err(format!("“{}” uses none of the AI models that stay loaded (SAM 3, BiRefNet, BiRefNet Matting)", m.name));
         }
+        self.segmenter.cancel_mask(id, mask);
+        self.adaptive.stop_mask(id, mask);
         #[cfg(feature = "sam")]
         {
             if models.sam3 || models.birefnet {
-                for j in &self.segmenter.in_flight {
-                    j.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
-                }
                 self.segmenter.worker.release(models);
             }
             if models.matting {
-                if m.components.iter().any(|c| matches!(c.shape, MaskShape::People { .. })) {
-                    // (a Person mask's matte is made in a people parse)
-                    self.parsing.cancel_runs();
-                }
+                // (a Person mask's people parse runs inside the command that makes the mask, so none is left to stop)
                 self.hair_edges.release();
             }
         }
@@ -153,6 +167,15 @@ mod tests {
 
     use super::MaskModels;
 
+    /// A folder removed when the test ends, passed or not.
+    struct TempDir(std::path::PathBuf);
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
     /// Issue #407: masks no AI model makes (brush, gradients, ranges), with the Masking panel's hold on, send no request to
     /// the AI mask worker and make no matte, so no model loads.
     #[test]
@@ -160,8 +183,9 @@ mod tests {
         let mut s = crate::Session::with_demo();
         s.segmenter.background = true;
         // (an installed-looking SAM 3 and matting model: a request would be sent if anything asked for one)
-        let dir = std::env::temp_dir().join(format!("lc-test-sam-no-ai-masks-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = TempDir(std::env::temp_dir().join(format!("lc-test-sam-no-ai-masks-{}", std::process::id())));
+        let dir = &dir.0;
+        std::fs::create_dir_all(dir).unwrap();
         std::fs::write(dir.join("model.safetensors"), b"\x10\x00\x00\x00\x00\x00\x00\x00{}").unwrap();
         std::fs::write(dir.join("vocab.json"), b"{}").unwrap();
         std::fs::write(dir.join("merges.txt"), b"#version: 0.2\n").unwrap();
@@ -184,7 +208,6 @@ mod tests {
         assert!(!s.hair_edges.is_held());
         assert_eq!(s.segmenter.next_job_id, jobs, "no request to the AI mask worker");
         assert_eq!((s.hair_edges.runs(), s.parsing.runs()), (mattes, parses), "no matte, no people parse");
-        let _ = std::fs::remove_dir_all(dir);
     }
 
     /// Photo `id` with a Person mask (its stored selection `seg`) and a brush mask; the Person mask is selected.
@@ -244,5 +267,27 @@ mod tests {
         let brush = d.masks.iter().find(|m| m.id != person).unwrap().id;
         assert!(s.execute("mask.stopAi", &json!({"id": brush})).is_err());
         s.keep_mask_models(MaskModels::NONE);
+    }
+
+    /// Issue #407 (review): Stop AI on one mask cancels that mask's requests only; another AI mask's request goes on.
+    #[test]
+    fn stop_ai_on_one_mask_leaves_another_masks_request() {
+        let mut s = crate::Session::with_demo();
+        let (id, first, _) = with_a_person_mask(&mut s).unwrap();
+        let (_, second, _) = with_a_person_mask(&mut s).unwrap();
+        let mut flags = Vec::new();
+        for mask in [first, second] {
+            let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let tag = super::super::Tag::Clicks { photo: id, mask, comp: 0, hint: Vec::new(), exclude: Vec::new() };
+            let task = s.activity.start_background("segment", "test", crate::activity::Cancel::Flag(cancel.clone()));
+            s.segmenter.in_flight.push(super::super::InFlight { id: u64::from(mask), tag, cancel: cancel.clone(), detail: false, _task: task });
+            flags.push(cancel);
+        }
+        let uses = MaskModels { matting: true, ..MaskModels::NONE };
+        assert!(s.mask_ai_stoppable(id, second, uses), "a request for it is under way");
+        s.stop_mask_ai(first).unwrap();
+        let cancelled = |i: usize| flags[i].load(std::sync::atomic::Ordering::Relaxed);
+        assert!(cancelled(0) && !cancelled(1), "only the stopped mask's request");
+        assert!(s.segmenter.mask_busy(id, second) && !s.segmenter.mask_busy(id, first));
     }
 }

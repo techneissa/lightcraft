@@ -1,8 +1,9 @@
 //! Fork (issue #407, `fork/mask-models-kept.md`): which AI mask models the open photo's masks use, for the Masking
 //! panel's hold (`background::tick`), and each AI mask's Stop AI button in its row of the Masks list.
 //!
-//! What a mask uses depends on its parts and on the chosen selection model and hair edges, which read a few files, so it
-//! is worked out again when the photo or its settings change, and at most once a second otherwise.
+//! What a mask uses is the session's (`Session::mask_models_by_mask`, the same the tests check); it depends on the
+//! chosen selection model and hair edges, which read a few files, so it is worked out again when the photo or its
+//! settings change, and at most once a second otherwise.
 
 use egui::{Rect, Sense, pos2, vec2};
 use lightcraft_catalog::PhotoId;
@@ -23,6 +24,8 @@ pub struct Uses {
     key: Option<(PhotoId, usize)>,
     at: f64,
     per_mask: Vec<(u32, MaskModels)>,
+    /// The last Stop AI's message, read out by the list's live region ([`announce`]).
+    said: String,
 }
 
 fn refresh(app: &mut LightcraftApp, now: f64) {
@@ -35,14 +38,15 @@ fn refresh(app: &mut LightcraftApp, now: f64) {
     if app.background.ai.key == key && now - app.background.ai.at < REFRESH {
         return;
     }
-    let per_mask = d.masks.iter().map(|m| (m.id, app.session.mask_models_of_mask(m))).collect();
-    app.background.ai = Uses { key, at: now, per_mask };
+    let per_mask = app.session.mask_models_by_mask(id);
+    let ai = &mut app.background.ai;
+    (ai.key, ai.at, ai.per_mask) = (key, now, per_mask);
 }
 
 /// The models the open photo's masks use (what the Masking panel holds).
 pub fn photo_models(app: &mut LightcraftApp, now: f64) -> MaskModels {
     refresh(app, now);
-    app.background.ai.per_mask.iter().fold(MaskModels::NONE, |a, (_, m)| a.either(*m))
+    MaskModels::union(app.background.ai.per_mask.iter().map(|(_, m)| *m))
 }
 
 /// The models mask `mask` of the open photo uses.
@@ -56,15 +60,16 @@ pub fn is_ai(app: &mut LightcraftApp, ui: &egui::Ui, mask: u32) -> bool {
     mask_models(app, mask, ui.input(|i| i.time)).any()
 }
 
-/// Mask `mask`'s Stop AI button, centred at `x` in its row `r`: it can be clicked while a model the mask uses is in
-/// memory or working, and runs `mask.stopAi`.
-pub fn button(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect, x: f32, mask: u32, name: &str) {
+/// Mask `mask`'s Stop AI button, centred at `x` in its row `r` of photo `photo`: it can be clicked while a model the
+/// mask uses is in memory or a request for the mask is under way, and runs `mask.stopAi`. Enabled, it is a filled square;
+/// disabled, an outline (so the state is not told by colour alone).
+pub fn button(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect, x: f32, photo: PhotoId, mask: u32, name: &str) {
     let t = Tokens::get(ui.ctx());
     let uses = mask_models(app, mask, ui.input(|i| i.time));
-    let enabled = uses.both(app.session.mask_models_in_use()).any();
+    let enabled = app.session.mask_ai_stoppable(photo, mask, uses);
     if enabled {
-        // (the button turns off by itself when the model goes)
-        ui.ctx().request_repaint_after(std::time::Duration::from_millis(500));
+        // (it turns off by itself when the model goes or the request ends: looked at again once a second)
+        ui.ctx().request_repaint_after(std::time::Duration::from_secs(1));
     }
     let br = Rect::from_center_size(pos2(x, r.center().y), vec2(22.0, 22.0));
     register(ui, format!("button:maskStopAi:{mask}"), br);
@@ -73,10 +78,9 @@ pub fn button(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect, x: f32, mask:
     let tip = crate::i18n::tr(if enabled {
         "Stop AI: cancels this mask's AI work and unloads its models. The mask stays as it is."
     } else {
-        "Stop AI: no AI model is loaded for this mask."
+        "Stop AI: no AI model is loaded or working for this mask."
     });
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, label));
-    ui.ctx().accesskit_node_builder(resp.id, |node| node.set_description(tip.to_string()));
     let color = if !enabled {
         t.text_disabled
     } else if resp.hovered() || resp.has_focus() {
@@ -84,11 +88,27 @@ pub fn button(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect, x: f32, mask:
     } else {
         t.text_dim
     };
-    paint(ui.painter(), br.shrink(3.0), Icon::Stop, color);
+    if resp.has_focus() {
+        ui.painter().rect_stroke(br, 4.0, egui::Stroke::new(1.5, t.accent), egui::StrokeKind::Inside);
+    }
+    paint(ui.painter(), br.shrink(3.0), if enabled { Icon::Stop } else { Icon::StopIdle }, color);
     if resp.on_hover_text(tip).clicked() && enabled {
-        app.ui.status = match app.run("mask.stopAi", json!({"id": mask})) {
-            Ok(_) => crate::i18n::tr("AI stopped for {name}").replace("{name}", name),
+        let said = match app.run("mask.stopAi", json!({"id": mask})) {
+            Ok(_) => crate::i18n::tr_format!("AI stopped for {name}", name = name),
             Err(e) => e,
         };
+        app.toast(ui.ctx(), said.clone());
+        app.background.ai.said = said;
     }
+}
+
+/// The last Stop AI's message in a polite live region, so a screen reader reads it out (the toast is not read).
+pub fn announce(app: &LightcraftApp, ui: &mut egui::Ui) {
+    let (_, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 0.0), Sense::hover());
+    let text = app.background.ai.said.clone();
+    ui.ctx().accesskit_node_builder(resp.id, |node| {
+        node.set_role(egui::accesskit::Role::Status);
+        node.set_label(text);
+        node.set_live(egui::accesskit::Live::Polite);
+    });
 }

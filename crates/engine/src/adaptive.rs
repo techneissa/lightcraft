@@ -83,8 +83,8 @@ struct Running {
     id: PhotoId,
     orientation: Orientation,
     parts: Vec<Part>,
-    /// Stops its model requests.
-    cancels: Vec<Arc<AtomicBool>>,
+    /// Stops its model requests, by the mask they are for.
+    cancels: Vec<(u32, Arc<AtomicBool>)>,
     /// Its parts changed while they were being found (a command reached it): it is done again afterwards.
     again: bool,
 }
@@ -102,6 +102,21 @@ pub struct Adaptive {
 }
 
 impl Adaptive {
+    /// Whether a model request for a part of mask `mask` on `photo` is under way (fork, issue #407).
+    pub(crate) fn asking_for(&self, photo: PhotoId, mask: u32) -> bool {
+        self.running
+            .as_ref()
+            .is_some_and(|r| r.id == photo && r.parts.iter().any(|p| p.waiting.mask == mask && matches!(p.state, State::Model { .. })))
+    }
+
+    /// Stop the model requests for mask `mask` on `photo` (Stop AI, fork issue #407): their parts keep waiting, as
+    /// when the batch is stopped.
+    pub(crate) fn stop_mask(&self, photo: PhotoId, mask: u32) {
+        if let Some(r) = self.running.as_ref().filter(|r| r.id == photo) {
+            r.cancels.iter().filter(|(m, _)| *m == mask).for_each(|(_, c)| c.store(true, Ordering::Relaxed));
+        }
+    }
+
     /// Whether photos wait for their AI parts or one is being done.
     pub fn busy(&self) -> bool {
         self.running.is_some() || !self.queue.is_empty()
@@ -122,7 +137,7 @@ impl Adaptive {
     /// goes to a channel nobody reads any more, so it never lands on a photo (another library's may have the same id).
     pub(crate) fn stop(&mut self) {
         if let Some(r) = self.running.take() {
-            r.cancels.iter().for_each(|c| c.store(true, Ordering::Relaxed));
+            r.cancels.iter().for_each(|(_, c)| c.store(true, Ordering::Relaxed));
         }
         self.queue.clear();
         self.replies = Replies::default();
@@ -469,7 +484,7 @@ impl Session {
                             self.adaptive.replies = replies;
                             match sent {
                                 Ok((job, cancel)) => {
-                                    r.cancels.push(cancel);
+                                    r.cancels.push((w.mask, cancel));
                                     State::Model { job, invert }
                                 }
                                 Err(e) => State::Done(Found::nothing(e)),
