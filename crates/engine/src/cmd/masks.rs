@@ -777,6 +777,24 @@ pub fn specs() -> Vec<CommandSpec> {
             has_active,
             |s, p| super::mask_parts::select(s, p)
         ),
+        cmd!(
+            "mask.next",
+            "Next Mask",
+            [],
+            Some("."),
+            "{} — selects the mask after the selected one in the list (the first after the last, or with none selected)",
+            has_active,
+            |s, _| { super::mask_parts::step(s, "mask.next", true) }
+        ),
+        cmd!(
+            "mask.previous",
+            "Previous Mask",
+            [],
+            Some(","),
+            "{} — selects the mask before the selected one in the list (the last before the first, or with none selected)",
+            has_active,
+            |s, _| { super::mask_parts::step(s, "mask.previous", false) }
+        ),
         cmd!("mask.delete", "Delete Mask", [], None, "{id?}", has_active, |s, p| {
             let mid = mask_id(p, s.active_mask, "mask.delete")?;
             masks_edit(s, "mask.delete", "Delete Mask", |masks, active| {

@@ -35,6 +35,9 @@ pub const DECLARED: &[(&str, &str)] = &[
     ("map.zoomOut", "view == map"),
     ("panel.addKeywords", "view != map"),
     ("map.lockMarkers", "view == map"),
+    // `,` and `.` step the masks in the Masking tool only
+    ("mask.previous", "tool == masking"),
+    ("mask.next", "tool == masking"),
 ];
 
 /// The keymap entry of the condition of `id`.

@@ -419,6 +419,8 @@ pub struct LightcraftApp {
     pub handoffs: Vec<editor_handoff::Handoff>,
     /// Background file-system work of other commands (Find Missing Photos, auto import…).
     pub tasks: tasks::Tasks,
+    /// The Masking panel's pinned mask list: what it showed last and its thumbnails.
+    pub(crate) mask_list: panels::mask_list::MaskList,
     /// The open photo's original, read in the background ahead of the first zoom (#182).
     pub full_decode: full_decode::FullDecodeAhead,
     /// The files of the last finished background export (`ui.inspect` → `export.last`).

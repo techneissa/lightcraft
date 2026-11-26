@@ -1,4 +1,4 @@
-//! The Masking panel: create masks, list them, edit components and local adjustments.
+//! The Masking panel: create masks, edit components and local adjustments. The mask list above it is `mask_list`.
 
 use egui::{Rect, Sense, Stroke, pos2, vec2};
 use lightcraft_catalog::PhotoId;
@@ -6,7 +6,6 @@ use lightcraft_develop::{ControlSpec, LocalAdjustments, MaskShape, Section, Trac
 use serde_json::json;
 
 use super::edit::apply_slider_out;
-use super::right::header;
 use crate::LightcraftApp;
 use crate::icons::{Icon, paint};
 use crate::theme::Tokens;
@@ -99,10 +98,10 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
 fn show_mask_panel(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let t = Tokens::get(ui.ctx());
     let d = app.session.develop_of(id).unwrap_or_default();
-    header(ui, "Masking");
     super::mask_menus::confirm_window(app, ui.ctx());
-    super::selection_model::show(app, ui);
-    egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 0, bottom: 10 }).show(ui, |ui| {
+    // (room under the pinned list, which the title otherwise gives)
+    let top = if d.masks.is_empty() { 0 } else { 8 };
+    egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top, bottom: 10 }).show(ui, |ui| {
         ui.label(egui::RichText::new(crate::i18n::tr("Create New Mask")).color(t.text_dim));
         ui.add_space(6.0);
         // (fork, `fork/select-people.md`: Person / Background / Custom; the tiles are Custom's)
@@ -223,113 +222,24 @@ fn show_mask_panel(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     divider(ui);
     // (fork, issue #329: the user's mask presets)
     super::mask_presets::show(app, ui);
-    divider(ui);
-    // mask list
-    egui::Frame::NONE.inner_margin(egui::Margin { left: 16, right: 16, top: 8, bottom: 8 }).show(ui, |ui| {
-        ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(crate::i18n::tr("Masks")).font(t.semibold(13.0)).color(t.text_label));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let on = app.ui.mask_overlay;
-                if icon_button(ui, "maskOverlay", Icon::Eye, vec2(24.0, 24.0), on, true, "Show overlay (O)").clicked() {
-                    app.ui.mask_overlay = !on;
-                }
-                let all = app.ui.mask_overlay_all;
-                let all_mac = ui.ctx().os() == egui::os::OperatingSystem::Mac;
-                let all_base = crate::i18n::tr("Show all overlays");
-                let all_tip = match crate::shortcuts::shortcut_of(&app.ui.settings.keymap, "view.maskOverlayAll") {
-                    Some(sc) => format!("{all_base} ({})", crate::menubar::shortcut_text(sc, all_mac)),
-                    None => all_base.to_string(),
-                };
-                if icon_button(ui, "maskOverlayAll", Icon::Stack, vec2(24.0, 24.0), all, true, &all_tip).clicked() {
-                    app.ui.mask_overlay_all = !all;
-                }
-            });
-        });
-        let count = d.masks.len();
-        for (index, m) in d.masks.iter().enumerate() {
-            let sel = app.session.active_mask == Some(m.id);
-            if let Some((rid, mut name)) = app.ui.renaming_mask.clone().filter(|(rid, _)| *rid == m.id) {
-                // inline rename, as in every list: Enter or leaving the field saves, Esc cancels, a name
-                // that is empty or another mask's is refused with the reason
-                let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), 30.0), Sense::hover());
-                let rect = row.shrink2(vec2(2.0, 2.0));
-                register(ui, format!("maskRename:{rid}"), rect);
-                let others = d.masks.iter().filter(|o| o.id != rid).map(|o| o.name.as_str());
-                let verdict = crate::inline_rename::verdict(&name, others);
-                let unchanged = name.trim() == m.name;
-                let outcome = crate::inline_rename::edit(ui, &format!("field:maskRename:{rid}"), &mut name, rect, &verdict, unchanged);
-                crate::inline_rename::finish_with(app, ui.ctx(), outcome, "mask.rename", json!({"id": rid}), "name", name, |app, name| {
-                    app.ui.renaming_mask = name.map(|n| (rid, n));
-                });
-                continue;
-            }
-            let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 30.0), Sense::click());
-            crate::widgets::announce_selected(&resp, m.name.clone(), Some(m.id) == app.session.active_mask);
-            register(ui, format!("mask:{}", m.id), r);
-            ui.painter().rect_filled(
-                r,
-                4.0,
-                if sel {
-                    t.tool_active
-                } else if resp.hovered() {
-                    t.hover.gamma_multiply(0.7)
-                } else {
-                    t.chrome
-                },
-            );
-            let icon = m.components.first().map(|c| kind_label(&c.shape).1).unwrap_or(Icon::Mask);
-            paint(ui.painter(), Rect::from_min_size(r.min + vec2(8.0, 7.0), vec2(16.0, 16.0)), icon, t.text_label);
-            // a long name is cut short (with …) before the eye, the full name on hover
-            let color = if m.visible { t.text } else { t.text_disabled };
-            let g = super::mask_name::fit(ui.painter(), &m.name, t.font(13.0), color, r.width() - 32.0 - if sel { 56.0 } else { 32.0 });
-            let elided = g.elided;
-            let at = pos2(r.left() + 32.0, r.center().y - g.size().y / 2.0);
-            register(ui, format!("maskName:{}", m.id), Rect::from_min_size(at, g.size()));
-            ui.painter().galley(at, g, color);
-            let resp = if elided { resp.on_hover_text(&m.name) } else { resp };
-            // show / hide on hover (and always while hidden)
-            // (the pointer test, not `hovered`: over the eye, the row itself no longer counts as hovered)
-            if ui.rect_contains_pointer(r) || !m.visible {
-                let er = Rect::from_center_size(pos2(r.right() - 16.0, r.center().y), vec2(22.0, 22.0));
-                register(ui, format!("maskVisible:{}", m.id), er);
-                let eye = ui.interact(er, egui::Id::unique(("maskVisible", m.id)), Sense::click());
-                crate::widgets::announce_selected(&eye, crate::i18n::tr("Show mask"), m.visible);
-                let eye = eye.on_hover_text(crate::i18n::tr(if m.visible { "Hide Mask" } else { "Show Mask" }));
-                paint(
-                    ui.painter(),
-                    er.shrink(3.0),
-                    if m.visible { Icon::Eye } else { Icon::EyeOff },
-                    if eye.hovered() { t.text } else { t.text_dim },
-                );
-                if eye.clicked() {
-                    let _ = app.run("mask.visible", json!({"id": m.id}));
-                }
-            }
-            if sel {
-                // Invert of the whole mask, beside the eye
-                super::mask_parts::mask_invert_button(app, ui, r, m.id, m.invert);
-            }
-            if resp.clicked() {
-                let _ = app.run("mask.select", json!({"id": m.id}));
-            }
-            if resp.double_clicked() {
-                app.ui.renaming_mask = Some((m.id, m.name.clone()));
-            }
-            crate::widgets::context_menu(&resp, |ui| super::mask_menus::mask_menu(app, ui, m.id, &m.name, m.visible, index, count));
-            if sel {
-                // right under the selected mask: the mode of the next part and a button for each kind of part
-                // (Describe… opens its field here)
-                super::mask_parts::add_controls(app, ui);
-                describe_field(app, ui, false);
-            }
-        }
-        if !d.masks.is_empty() {
-            ui.add_space(6.0);
-            overlay_options(app, ui);
-        }
-    });
+    // (the mask list itself is pinned above the panel's scroll area: `mask_list`, fork issue #401)
+    if !d.masks.is_empty() {
+        divider(ui);
+        egui::Frame::NONE.inner_margin(egui::Margin { left: 16, right: 16, top: 8, bottom: 8 }).show(ui, |ui| overlay_options(app, ui));
+    }
+    let jump = super::mask_list::take_jump(app);
     let Some(mid) = app.session.active_mask else { return };
     let Some(m) = d.masks.iter().find(|m| m.id == mid).cloned() else { return };
+    divider(ui);
+    // a mask just picked: its section comes to the top of the scroll area
+    if jump {
+        ui.scroll_to_cursor_animation(Some(egui::Align::TOP), egui::style::ScrollAnimation::none());
+    }
+    // the mode of the next part and a button for each kind of part (Describe… opens its field here)
+    egui::Frame::NONE.inner_margin(egui::Margin { left: 16, right: 16, top: 4, bottom: 8 }).show(ui, |ui| {
+        super::mask_parts::add_controls(app, ui);
+        describe_field(app, ui, false);
+    });
     divider(ui);
     egui::Frame::NONE.inner_margin(egui::Margin { left: 14, right: 12, top: 8, bottom: 8 }).show(ui, |ui| {
         super::mask_parts::part_rows(app, ui, &m);

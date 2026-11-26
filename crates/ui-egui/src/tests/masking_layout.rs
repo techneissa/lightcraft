@@ -31,6 +31,7 @@ fn panel(width: f32, scale: f32, locale: Locale, describe: bool) -> (Vec<egui::e
         let raw = HeadlessView::raw_input(vec2(width, 1600.0), scale, frame as f64 / 60.0, vec![]);
         let mut out = ctx.run_ui(raw, |ui| {
             egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
+                crate::panels::mask_list::pinned(&mut app, ui, photo);
                 crate::panels::masking::show(&mut app, ui, photo);
             });
         });
@@ -78,11 +79,10 @@ fn masking_long_names_and_describe_controls_stay_inside_the_panel() {
             let (texts, widgets) = panel(width, 2.0, locale, true);
             let row = widgets.iter().find(|(id, _)| id == "mask:1").unwrap().1;
             let name = texts.iter().find(|t| t.galley.job.text == LONG_NAME).unwrap();
-            // (a long name takes a smaller font first, and ends with … only when that does not fit either)
-            let size = name.galley.job.sections.first().map_or(13.0, |s| s.format.font_id.size);
-            assert!(name.galley.elided || size < 13.0, "long mask names should shrink or be elided");
+            // (a long name wraps in its row, whole: fork issue #401)
+            assert!(!name.galley.elided, "{locale:?} {width}: the mask's name is cut");
             assert!(
-                Rect::from_min_max(pos2(row.left() + 32.0, row.top()), pos2(row.right() - 28.0, row.bottom()))
+                Rect::from_min_max(pos2(row.left() + 44.0, row.top()), pos2(row.right() - 28.0, row.bottom()))
                     .contains_rect(name.visual_bounding_rect())
             );
             let field = widgets.iter().find(|(id, _)| id == "maskDescribe").unwrap().1;
