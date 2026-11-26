@@ -51,12 +51,12 @@ fn link(from: &Path, to: &Path) {
 
 /// A models folder in a temporary folder holding links to the shared set's weights, and to the Core ML packages of
 /// `coreml`.
-fn linked(name: &str, models: &Path, coreml: &[ModelFile]) -> PathBuf {
+fn linked(name: &str, models: &Path, coreml: &[ModelFile]) -> super::Scratch {
     linked_set(name, ModelSet::Segformer, models, coreml)
 }
 
 /// [`linked`] for `set`.
-fn linked_set(name: &str, set: ModelSet, models: &Path, coreml: &[ModelFile]) -> PathBuf {
+fn linked_set(name: &str, set: ModelSet, models: &Path, coreml: &[ModelFile]) -> super::Scratch {
     let dir = super::scratch(name);
     for f in set.files() {
         link(&f.path_in(models), &f.path_in(&dir));
