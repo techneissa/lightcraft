@@ -81,6 +81,8 @@ pub(crate) fn pinned(app: &mut LightcraftApp, ui: &mut egui::Ui, photo: PhotoId)
             }
         });
         announce_selection(app, ui, &d);
+        // (fork, issue #407: what Stop AI did)
+        super::mask_stop_ai::announce(app, ui);
     });
     divider(ui);
 }
@@ -152,7 +154,9 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, photo: PhotoId, masks: &[Mask
     let color = if m.visible { t.text } else { t.text_disabled };
     let font = if sel { t.semibold(13.0) } else { t.font(13.0) };
     let width = ui.available_width();
-    let room = (width - NAME_LEFT - if sel { 56.0 } else { 32.0 }).max(24.0);
+    // (fork, issue #407: an AI mask's Stop AI button, left of Invert and the eye)
+    let ai = super::mask_stop_ai::is_ai(app, ui, m.id);
+    let room = (width - NAME_LEFT - if sel { 56.0 } else { 32.0 } - if ai { 24.0 } else { 0.0 }).max(24.0);
     let name = ui.painter().layout(m.name.clone(), font, color, room);
     let (r, _) = ui.allocate_exact_size(vec2(width, (name.size().y + 10.0).max(ROW)), Sense::hover());
     let resp = ui.interact(r, rid, Sense::click());
@@ -202,6 +206,9 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, photo: PhotoId, masks: &[Mask
     if sel {
         // Invert of the whole mask, beside the eye
         super::mask_parts::mask_invert_button(app, ui, r, m.id, m.invert);
+    }
+    if ai {
+        super::mask_stop_ai::button(app, ui, r, r.right() - if sel { 64.0 } else { 40.0 }, photo, m.id, &m.name);
     }
     if resp.clicked() {
         let _ = app.run("mask.select", json!({"id": m.id}));

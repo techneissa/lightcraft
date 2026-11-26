@@ -34,6 +34,7 @@ pub mod mask_name;
 pub mod mask_parts;
 pub mod mask_presets;
 pub mod mask_recolor;
+pub mod mask_stop_ai;
 pub(crate) mod mask_thumbs;
 pub mod mask_tiles;
 pub mod masking;

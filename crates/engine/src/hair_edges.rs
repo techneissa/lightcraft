@@ -187,6 +187,9 @@ struct Inner {
     /// Keeps the model while the Masking panel is open (fork, issue #353).
     #[cfg(feature = "sam")]
     held: Mutex<Option<crate::idle::Use>>,
+    /// A mask's stop button asked for the model to go while a run held it (fork, issue #407): it goes after that run.
+    #[cfg(feature = "sam")]
+    release: AtomicBool,
     #[cfg(feature = "sam")]
     download: crate::segment::download::Downloader,
     /// The GPU failed once: run on the CPU from now on ([`on_devices`]).
@@ -230,6 +233,8 @@ impl HairEdges {
                 idle: std::sync::OnceLock::new(),
                 #[cfg(feature = "sam")]
                 held: Mutex::new(None),
+                #[cfg(feature = "sam")]
+                release: AtomicBool::new(false),
                 #[cfg(feature = "sam")]
                 download: Default::default(),
                 gpu_refused: AtomicBool::new(false),
@@ -315,6 +320,17 @@ impl HairEdges {
             EdgeKind::Subject => c.subject,
         };
         saved.unwrap_or_else(|| self.default_edge())
+    }
+
+    /// Whether `kind` masks may be edged with BiRefNet Matting: it is chosen, or nothing is chosen (the default once it
+    /// is installed). Reads no file (fork, issue #407: asked every second while masking).
+    pub fn may_use_matting(&self, kind: EdgeKind) -> bool {
+        let c = *lock(&self.inner.choice);
+        let saved = match kind {
+            EdgeKind::People => c.people,
+            EdgeKind::Subject => c.subject,
+        };
+        saved.is_none_or(|e| e == Edge::Matting)
     }
 
     /// The edge a kind gets until the user picks one.
