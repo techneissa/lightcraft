@@ -281,9 +281,11 @@ fn upload_relit(cx: &mut Cx<'_>, relit: &[lightcraft_pipeline::masks::Evaluated]
 
 /// The alphas a render of frame `geo` used, and after them the ones of earlier windows and scales in `old` (most recent
 /// first) up to [`lightcraft_pipeline::masks::KEPT_ALPHAS`] and [`lightcraft_pipeline::masks::KEPT_ALPHA_BYTES`]: a pan
-/// back or a zoom to a scale seen before finds its masks (issue #175). Of this frame only what the render used is kept
-/// (an edited mask's earlier alpha goes), whatever its size, and counts against the bytes. A stack costs its whole size
-/// the first time one of its alphas is kept.
+/// back or a zoom to a scale seen before finds its masks (issue #175). Of this frame only the alphas the render used are
+/// looked up again (an edited mask's earlier alpha goes); this render's stack is kept whatever its size, and counts
+/// against the bytes. A stack is held whole, so it also holds planes no kept alpha points at: the chromaticity planes of
+/// local Moiré / Noise, Relight's planes, and a second mask with the same alpha. It costs its whole size the first time
+/// one of its alphas is kept.
 fn with_earlier(used: Vec<Kept>, old: Vec<Kept>, geo: u64) -> Vec<Kept> {
     let mut stacks: Vec<*const Buf> = Vec::new();
     let mut bytes = 0usize;

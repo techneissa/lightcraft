@@ -1970,7 +1970,9 @@ impl Renderer {
             self.idle = None;
             return;
         }
-        let wait = if window { KEPT_WINDOW_IDLE_TRIM } else { IDLE_TRIM };
+        // (a window kept at Fit: its texture, or only its stages once an edit dropped the texture, issue #402)
+        let kept = window || self.stages.contains_key(&Slot::Region) || self.stages.contains_key(&Slot::RegionBefore);
+        let wait = if kept { KEPT_WINDOW_IDLE_TRIM } else { IDLE_TRIM };
         let now = std::time::Instant::now();
         let (since, trimmed) = *self.idle.get_or_insert((now, false));
         if trimmed {
@@ -1979,8 +1981,7 @@ impl Renderer {
         let waited = now.duration_since(since);
         if waited >= wait {
             if !self.window_on_screen {
-                // (a window kept at Fit, or one whose texture already went: the next zoom renders it again, from the
-                // original it uploads again anyway)
+                // (a window kept at Fit: the next zoom renders it again, from the original it uploads again anyway)
                 self.stages.remove(&Slot::Region);
                 self.stages.remove(&Slot::RegionBefore);
             }
@@ -2299,6 +2300,15 @@ mod stage_budget_tests {
         // (issue #402: a window's stages held every mask's alpha at full size until the next zoom)
         assert!(!r.stages.contains_key(&Slot::Region), "the window's stage caches go with it");
         assert!(r.stages.contains_key(&Slot::Main), "the loupe's own stay for the next edit");
+        // an edit at Fit dropped the window's texture and kept its stages: it is still kept for the longer wait
+        r.textures.remove(&Slot::Region);
+        r.stages.insert(Slot::Region, Arc::default());
+        r.idle = Some((short, false));
+        r.trim_when_idle(&ctx);
+        assert_eq!(r.idle_trims, 1, "a window kept as stages only is not trimmed after the usual idle");
+        r.idle = Some((long, false));
+        r.trim_when_idle(&ctx);
+        assert!(!r.stages.contains_key(&Slot::Region), "its stages go after the longer one");
     }
 
     // Given views drawn from GPU-resident frames, freeing those frames (the screen can't show one any more) drops
