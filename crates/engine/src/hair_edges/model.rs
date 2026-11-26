@@ -59,6 +59,8 @@ impl HairEdges {
                     if model.device().is_cpu() { "CPU" } else { "GPU" }
                 );
                 *slot = Some(Loaded { model, runtime });
+                // (a model loaded again has made no mask's matte yet: issue #407)
+                self.inner.for_masks.store(false, Ordering::SeqCst);
             }
             let Some(l) = slot.as_mut() else { return Attempt::Fail("the BiRefNet Matting model did not load".into()) };
             l.model.set_cancel(Some(cancel.clone()));
@@ -84,11 +86,25 @@ impl HairEdges {
     }
 
     /// Keep the model loaded while `on` (the Masking panel is open in the front window, fork issue #353): it is not let
-    /// go until this is turned off, and its idle time counts from then.
+    /// go until this is turned off, and its idle time counts from then. Only a model a Subject or Background mask has
+    /// used is kept (issue #407): one a people parse loaded goes after the idle time, as outside Masking.
     pub fn keep_loaded(&self, on: bool) {
+        // (`holding` changes and is read under the `held` lock, so a matte made as the panel closes leaves no hold)
         let mut held = lock(&self.inner.held);
-        if on != held.is_some() {
-            *held = on.then(|| self.idle().using());
+        self.inner.holding.store(on, Ordering::SeqCst);
+        if !on {
+            *held = None;
+        } else if held.is_none() && self.inner.for_masks.load(Ordering::SeqCst) {
+            *held = Some(self.idle().using());
+        }
+    }
+
+    /// A Subject or Background mask's matte was made (issue #407): from now on the Masking panel's hold keeps the model.
+    pub(super) fn used_for_masks(&self) {
+        self.inner.for_masks.store(true, Ordering::SeqCst);
+        let mut held = lock(&self.inner.held);
+        if self.inner.holding.load(Ordering::SeqCst) && held.is_none() {
+            *held = Some(self.idle().using());
         }
     }
 
@@ -114,6 +130,7 @@ impl HairEdges {
                     Err(std::sync::TryLockError::Poisoned(p)) => p.into_inner().take(),
                     Err(std::sync::TryLockError::WouldBlock) => return Unload::Busy,
                 };
+                inner.for_masks.store(false, Ordering::SeqCst);
                 if old.is_some() { Unload::Freed } else { Unload::Nothing }
             })
         })
@@ -170,9 +187,36 @@ impl HairEdges {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+
+    use super::super::{Edge, EdgeKind, HairEdges, Matte, lock};
+
     #[test]
     fn the_pinned_size_is_the_variants() {
         assert_eq!(super::MODEL_BYTES, lightcraft_birefnet::Variant::Matting.size());
         assert_eq!(super::super::MODEL_DIR, lightcraft_birefnet::Variant::Matting.dir_name());
+    }
+
+    /// Issue #407: a people parse ahead of time loaded the model during a session of brush masks, and the Masking
+    /// panel's hold kept it (about 3 GB) until the panel closed. Only a mask's matte makes the hold keep it.
+    #[test]
+    fn the_masking_hold_keeps_the_model_only_once_a_mask_used_it() {
+        let edges = HairEdges::new(crate::activity::Activity::default());
+        edges.set_runner(Some(Arc::new(|_, _, _, _| Ok(Matte { side: 2, logits: vec![1.0; 4] }))));
+        let held = || lock(&edges.inner.held).is_some();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let matte = |kind, shade: u8| edges.matte_for(Edge::Matting, kind, &[shade; 12], 2, 2, &cancel).unwrap();
+        edges.keep_loaded(true);
+        matte(EdgeKind::People, 1);
+        assert!(!held(), "a people parse is not a mask");
+        matte(EdgeKind::Subject, 2);
+        assert!(held(), "a Subject mask's matte is kept while masking");
+        edges.keep_loaded(false);
+        assert!(!held());
+        // (back in Masking with the model a mask used still loaded: kept again, as before #407)
+        edges.keep_loaded(true);
+        assert!(held());
+        edges.keep_loaded(false);
     }
 }

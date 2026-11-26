@@ -34,3 +34,39 @@ impl crate::Session {
         self.hair_edges.keep_loaded(on);
     }
 }
+
+#[cfg(all(test, feature = "sam"))]
+mod tests {
+    use serde_json::json;
+
+    /// Issue #407: masks no AI model makes (brush, gradients, ranges), with the Masking panel's hold on, send no request to
+    /// the AI mask worker and make no matte, so no model loads.
+    #[test]
+    fn brush_gradient_and_range_masks_ask_no_model() {
+        let mut s = crate::Session::with_demo();
+        s.segmenter.background = true;
+        // (an installed-looking SAM 3 and matting model: a request would be sent if anything asked for one)
+        let dir = std::env::temp_dir().join(format!("lc-test-sam-no-ai-masks-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("model.safetensors"), b"\x10\x00\x00\x00\x00\x00\x00\x00{}").unwrap();
+        std::fs::write(dir.join("vocab.json"), b"{}").unwrap();
+        std::fs::write(dir.join("merges.txt"), b"#version: 0.2\n").unwrap();
+        s.segmenter.dir = Some(dir.clone());
+        assert!(s.segmenter.installed());
+        s.hair_edges.set_runner(Some(std::sync::Arc::new(|_, _, _, _| Err("no model in this test".into()))));
+        s.keep_mask_models(true);
+        let (jobs, mattes, parses) = (s.segmenter.next_job_id, s.hair_edges.runs(), s.parsing.runs());
+        s.execute("mask.add", &json!({"kind": "brush"})).unwrap();
+        s.execute("mask.brushStroke", &json!({"points": [[0.2, 0.2], [0.6, 0.4]]})).unwrap();
+        s.execute("mask.brushStroke", &json!({"points": [[0.3, 0.3], [0.4, 0.3]], "erase": true})).unwrap();
+        for kind in ["linear", "radial", "luminanceRange", "colorRange"] {
+            s.execute("mask.add", &json!({"kind": kind})).unwrap();
+            s.execute("mask.adjust", &json!({"values": {"exposure": 0.5}})).unwrap();
+        }
+        s.execute("crop.set", &json!({"rect": [0.1, 0.1, 0.9, 0.9]})).unwrap();
+        assert_eq!(s.segmenter.next_job_id, jobs, "no request to the AI mask worker");
+        assert_eq!((s.hair_edges.runs(), s.parsing.runs()), (mattes, parses), "no matte, no people parse");
+        s.keep_mask_models(false);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}

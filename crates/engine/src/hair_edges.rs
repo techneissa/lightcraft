@@ -184,9 +184,16 @@ struct Inner {
     /// Lets the model go after a while without use.
     #[cfg(feature = "sam")]
     idle: std::sync::OnceLock<crate::idle::Tracker>,
-    /// Keeps the model while the Masking panel is open (fork, issue #353).
+    /// Keeps the model while the Masking panel is open (fork, issue #353), once a mask has used it (issue #407).
     #[cfg(feature = "sam")]
     held: Mutex<Option<crate::idle::Use>>,
+    /// The Masking panel asks for the hold ([`HairEdges::keep_loaded`]).
+    #[cfg(feature = "sam")]
+    holding: AtomicBool,
+    /// The loaded model made a Subject or Background matte (issue #407): only then does the hold keep it. A people
+    /// parse ahead of time loads it too, and holding it for that kept about 3 GB through a session of brush masks.
+    #[cfg(feature = "sam")]
+    for_masks: AtomicBool,
     #[cfg(feature = "sam")]
     download: crate::segment::download::Downloader,
     /// The GPU failed once: run on the CPU from now on ([`on_devices`]).
@@ -230,6 +237,10 @@ impl HairEdges {
                 idle: std::sync::OnceLock::new(),
                 #[cfg(feature = "sam")]
                 held: Mutex::new(None),
+                #[cfg(feature = "sam")]
+                holding: AtomicBool::new(false),
+                #[cfg(feature = "sam")]
+                for_masks: AtomicBool::new(false),
                 #[cfg(feature = "sam")]
                 download: Default::default(),
                 gpu_refused: AtomicBool::new(false),
@@ -482,6 +493,10 @@ impl HairEdges {
             return Err(format!("{} produced an invalid matte", edge.label()));
         }
         log::info!("{}: {w}×{h} in {:?}", edge.label(), t.elapsed());
+        #[cfg(feature = "sam")]
+        if kind == EdgeKind::Subject {
+            self.used_for_masks();
+        }
         let m = Arc::new(m);
         self.remember(key, m.clone());
         Ok(m)

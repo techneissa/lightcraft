@@ -6,6 +6,7 @@ List: the AI mask models (SAM 3, BiRefNet, BiRefNet Matting) stay loaded while t
 
 - **The cause.** Since #304 (17 Nov) the SAM 3 worker lets SAM 3 and BiRefNet go a minute after its last request (it was 10 minutes), and the idle rule lets BiRefNet Matting go after a minute too. On Core ML, loading them again and planning each part on the GPU at its first run makes the next mask take about 17 s instead of about 4 s. So every mask made more than a minute after the last one was as slow as the first one after a start.
 - **Kept while masking.** While the Masking panel is open in the front window (the Tools panel shown, not full screen), the app holds the models (`Session::keep_mask_models`): the worker does not unload them (`segment/worker/keep.rs`: `unload_at`), and BiRefNet Matting holds an idle-rule use (`HairEdges::keep_loaded`). When the panel closes or the window goes to the background, the minute starts. Outside Masking, #304's rule is unchanged.
+- **Only what a mask used (issue #407).** BiRefNet Matting is kept only once a Subject or Background mask has made a matte with it since it loaded (`HairEdges::used_for_masks`). A people parse ahead of time (`parse_ahead`) loads it too; before, the hold kept that load for the whole visit to Masking (about 3 GB through a session of brush masks). SAM 3 and BiRefNet load only for an AI request on the worker, so the hold has nothing to keep in a session of brush, gradient and range masks.
 - **What the mask waits for.** When a request loads a model, or runs one for the first time after its load (Core ML plans it then), the Masking panel says "Loading the AI models…" for that request instead of "Selecting…" (`Segmenter::loading_models`).
 - Not done: loading the models when the panel opens, before the first mask (it would cost GPU time and memory for every visit to Masking, brush masks included).
 
@@ -46,7 +47,7 @@ On the 9 Nov build the first mask was SAM 3 9.3 s, BiRefNet 6.1 s (both candle) 
 
 ## Tests
 
-`fork/tests.d/mask-models-kept.txt`. `keep::tests`: held models are never due, and the minute starts when the hold ends (the old rule unloaded them a minute after the last request whatever the panel). Timing: `LIGHTCRAFT_CONFIG_DIR=<scratch> MASKING_PANEL=1 cargo run --release -p lightcraft-engine --features sam --example mask_timing -- sam3+birefnet 0,0,75 PHOTO1 PHOTO2 PHOTO3` (`MASKING_PANEL` holds the models as the open panel does).
+`fork/tests.d/mask-models-kept.txt`. `keep::tests`: held models are never due, and the minute starts when the hold ends (the old rule unloaded them a minute after the last request whatever the panel). `hair_edges::model::tests`: the hold keeps BiRefNet Matting only once a mask's matte used it (issue #407). `segment::kept::tests`: brush, gradient and range masks send no request to the AI mask worker and make no matte or people parse (issue #407). Timing: `LIGHTCRAFT_CONFIG_DIR=<scratch> MASKING_PANEL=1 cargo run --release -p lightcraft-engine --features sam --example mask_timing -- sam3+birefnet 0,0,75 PHOTO1 PHOTO2 PHOTO3` (`MASKING_PANEL` holds the models as the open panel does).
 
 ## What's New entry
 
