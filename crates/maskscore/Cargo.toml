@@ -1,0 +1,11 @@
+[package]
+name = "lightcraft-maskscore"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "LightCraft mask scoring: overlap, edge, matte and gap metrics of a mask against its truth, and the click rule (L1)"
+
+[lints]
+workspace = true
+
+[dependencies]

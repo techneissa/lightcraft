@@ -4222,6 +4222,7 @@ dependencies = [
  "lightcraft-look",
  "lightcraft-macraw",
  "lightcraft-map",
+ "lightcraft-maskscore",
  "lightcraft-merge",
  "lightcraft-meta",
  "lightcraft-parsing",
@@ -4445,6 +4446,10 @@ dependencies = [
  "thiserror 2.0.21",
  "web-time",
 ]
+
+[[package]]
+name = "lightcraft-maskscore"
+version = "0.21.1"
 
 [[package]]
 name = "lightcraft-mcp"
@@ -8686,8 +8691,12 @@ checksum = "e450f9b2ed1dff33c94c12589a87338689467b9c4f5d8a5710bd09a847d2c8a7"
 name = "xtask"
 version = "0.21.1"
 dependencies = [
+ "ab_glyph",
  "brotli",
  "flate2",
+ "image",
+ "lightcraft-maskscore",
+ "rayon",
  "serde_json",
  "sha2",
 ]

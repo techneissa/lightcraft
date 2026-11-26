@@ -117,6 +117,10 @@ name = "mask_edges_audit"
 required-features = ["sam"]
 
 [[example]]
+name = "mask_score"
+required-features = ["sam"]
+
+[[example]]
 name = "decontam_compare"
 required-features = ["sam"]
 
@@ -133,6 +137,8 @@ lightcraft-model = ["denoise", "lightcraft-denoise/lightcraft-model", "lightcraf
 [dev-dependencies]
 # the Wrinkles example writes its pictures
 image = { workspace = true }
+# the mask_score example's click rule (fork, issue #256)
+lightcraft-maskscore = { workspace = true }
 # counts the settings hashes a frame takes (`hash64_calls`)
 lightcraft-develop = { workspace = true, features = ["test-hooks"] }
 # Construct RAW errors using the same TIFF package as craft-raw.

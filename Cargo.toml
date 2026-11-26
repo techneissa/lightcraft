@@ -90,6 +90,8 @@ lightcraft-birefnet = { path = "crates/birefnet" }
 lightcraft-depth = { path = "crates/depth" }
 lightcraft-relight = { path = "crates/relight" }
 lightcraft-edgerefine = { path = "crates/edgerefine" }
+# mask scoring against human-drawn truth (fork, issue #256)
+lightcraft-maskscore = { path = "crates/maskscore" }
 lightcraft-parsing = { path = "crates/parsing" }
 lightcraft-geocode = { path = "crates/geocode" }
 lightcraft-slideshow = { path = "crates/slideshow" }
