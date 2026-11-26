@@ -227,6 +227,41 @@ fn a_new_or_picked_mask_shows_the_overlay_hidden_by_a_slider() {
     h.settle(SETTLE);
 }
 
+/// `,` and `.` step the masks in the Masking tool only, also with the keyboard on the list, where Up / Down move to the
+/// neighbouring mask and the focus goes along (fork issue #401).
+#[test]
+fn keys_step_the_masks_from_the_panel_and_from_the_list() {
+    let mut h = detail("panel.masking");
+    exec(&mut h, "mask.add", json!({"kind": "radial", "center": [0.3, 0.3], "rx": 0.1, "ry": 0.1}));
+    exec(&mut h, "mask.add", json!({"kind": "radial", "center": [0.7, 0.7], "rx": 0.1, "ry": 0.1}));
+    let ids: Vec<u32> = develop(&h).masks.iter().map(|m| m.id).collect();
+    let press = |h: &mut Headless, key: &str| {
+        let r = h.request("ui.key", json!({"key": key}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.settle(SETTLE);
+        h.app.session.active_mask
+    };
+    h.view.ctx.enable_accesskit();
+    h.settle(SETTLE);
+    assert_eq!(press(&mut h, "."), Some(ids[0]), "next after the last is the first");
+    // what a screen reader gets: a list box of the masks, and the pick said while the keyboard is elsewhere
+    h.step();
+    let count = |role: &str, label: &str| h.view.a11y.iter().filter(|n| n.role == role && n.label.contains(label)).count();
+    assert_eq!((count("ListBox", "Masks"), count("ListBoxOption", "Radial Mask"), count("Status", "Mask Radial Mask 1 selected")), (1, 2, 1));
+    assert_eq!(press(&mut h, ","), Some(ids[1]));
+    // the keyboard on the picked row
+    let row = egui::Id::unique(("maskRow", ids[1]));
+    h.view.ctx.memory_mut(|m| m.request_focus(row));
+    h.settle(SETTLE);
+    assert_eq!(press(&mut h, "ArrowUp"), Some(ids[0]));
+    assert_eq!(h.view.ctx.memory(|m| m.focused()), Some(egui::Id::unique(("maskRow", ids[0]))), "the focus moves with the pick");
+    assert_eq!(press(&mut h, "."), Some(ids[1]), "a focused row leaves the step keys working");
+    assert_eq!(h.view.ctx.memory(|m| m.focused()), Some(row));
+    exec(&mut h, "panel.edit", json!({}));
+    h.settle(SETTLE);
+    assert_eq!(press(&mut h, "."), Some(ids[1]), "outside the Masking tool the key does nothing");
+}
+
 #[test]
 fn radial_body_drag_moves_rotated_components_and_undoes_once() {
     let mut h = detail("panel.masking");

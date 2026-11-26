@@ -1784,6 +1784,27 @@ fn a_selected_brush_part_gets_the_strokes() {
     assert_eq!(s.active_part(), None);
 }
 
+/// `mask.next` / `mask.previous` step through the list and around its ends (fork issue #401).
+#[test]
+fn next_and_previous_mask_step_through_the_list_and_wrap() {
+    let mut s = demo();
+    assert!(s.execute("mask.next", &json!({})).is_err(), "no masks to step to");
+    for _ in 0..3 {
+        s.execute("mask.add", &json!({"kind": "radial"})).unwrap();
+    }
+    let ids: Vec<u32> = active_dev(&s).masks.iter().map(|m| m.id).collect();
+    let mut picked = |command: &str, from: Option<u32>| {
+        s.execute("mask.select", &json!({"id": from})).unwrap();
+        s.execute(command, &json!({})).unwrap();
+        s.active_mask
+    };
+    assert_eq!(picked("mask.next", Some(ids[0])), Some(ids[1]));
+    assert_eq!(picked("mask.next", Some(ids[2])), Some(ids[0]));
+    assert_eq!(picked("mask.previous", Some(ids[1])), Some(ids[0]));
+    assert_eq!(picked("mask.previous", Some(ids[0])), Some(ids[2]));
+    assert_eq!((picked("mask.next", None), picked("mask.previous", None)), (Some(ids[0]), Some(ids[2])));
+}
+
 /// The selected part stays the same part when another part is deleted or duplicated before it.
 #[test]
 fn the_selected_part_follows_deletes_and_duplicates() {

@@ -410,8 +410,10 @@ fn keyboard_owned(app: &LightcraftApp, ctx: &egui::Context) -> bool {
             [Key::ArrowLeft, Key::ArrowRight, Key::ArrowUp, Key::ArrowDown, Key::Enter, Key::Space].iter().any(|key| input.key_pressed(*key))
         });
     }
-    let chrome =
-        app.ui.docking.as_ref().is_some_and(|workspace| {
+    // a row of the mask list keeps the same keys as dock chrome: `,` and `.` still step the masks from it
+    let chrome = crate::panels::mask_list::row_has_focus(app, ctx);
+    let chrome = chrome
+        || app.ui.docking.as_ref().is_some_and(|workspace| {
             craft_ui::docking::DockArea::new(egui::Id::unique("lightcraft-docking")).chrome_has_focus(ctx, &workspace.layout)
         });
     if !chrome {

@@ -216,6 +216,8 @@ chooses Erase (taking away from the mask; a stroke in a Subtract part goes the o
 into the selected part when it is a brush part, else the mask's last one; `mask.select {id, component}` selects a
 part, `mask.brushStroke {component}` names the part to paint into, and `ui.inspect` / `engine.state` report
 `activeComponent`. The first part of a mask is its base and acts as Add whatever its mode says.
+`mask.next` and `mask.previous` select the neighbouring mask of the list, wrapping at its ends (the first or last with
+none selected), and reply `{id}`.
 
 ### When the library can't be saved
 

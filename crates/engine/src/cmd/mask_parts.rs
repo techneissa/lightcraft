@@ -41,6 +41,24 @@ fn index_param(p: &Value, key: &str, c: &str) -> Result<Option<usize>> {
         .transpose()
 }
 
+/// `mask.next` / `mask.previous`: select the neighbouring mask of the list, around its ends; with none selected, the
+/// first (`forward`) or the last. Answers the id picked.
+pub(super) fn step(s: &mut Session, c: &str, forward: bool) -> Result<Value> {
+    let ids: Vec<u32> = s.active().and_then(|a| s.develop_of(a)).map_or_else(Vec::new, |d| d.masks.iter().map(|m| m.id).collect());
+    let at = s.active_mask.and_then(|m| ids.iter().position(|i| *i == m));
+    let n = ids.len();
+    let k = match (at, forward) {
+        (Some(i), true) => (i + 1).checked_rem(n),
+        (Some(i), false) => (i + n.saturating_sub(1)).checked_rem(n),
+        (None, true) => Some(0),
+        (None, false) => n.checked_sub(1),
+    };
+    let id = k.and_then(|k| ids.get(k).copied()).ok_or_else(|| bad(c, "this photo has no masks"))?;
+    s.active_mask = Some(id);
+    s.active_component = None;
+    Ok(serde_json::json!({ "id": id }))
+}
+
 /// `mask.select {id|null, component?}`: select a mask, and with `component` one of its parts.
 pub(super) fn select(s: &mut Session, p: &Value) -> Result<Value> {
     let c = "mask.select";

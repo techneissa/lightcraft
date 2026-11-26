@@ -149,6 +149,7 @@ impl LightcraftApp {
             handoffs: Vec::new(),
             macos_job: None,
             tasks: Default::default(),
+            mask_list: Default::default(),
             full_decode: Default::default(),
             last_export_result: None,
             slideshow_export_reported: true,
@@ -311,7 +312,7 @@ impl LightcraftApp {
             // Keep it hidden after release; O / the overlay eye can show it again.
             self.ui.mask_overlay = false;
         }
-        if r.is_ok() && matches!(id, "mask.add" | "mask.addComponent" | "mask.duplicate" | "mask.select") {
+        if r.is_ok() && matches!(id, "mask.add" | "mask.addComponent" | "mask.duplicate" | "mask.select" | "mask.next" | "mask.previous") {
             // A new or newly picked mask shows its overlay again, as in Lightroom: hidden by a slider
             // drag above, it stayed hidden while the Overlay menu still named a mode (issue #1800).
             self.ui.mask_overlay = true;

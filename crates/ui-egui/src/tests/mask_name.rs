@@ -1,4 +1,4 @@
-//! A long mask name in the Masks list takes a smaller font, then ends with "…" (issue #37).
+//! A long mask name in the Masks list wraps in its row, whole (fork issue #401).
 
 use std::time::Duration;
 
@@ -14,7 +14,7 @@ fn rect(h: &Headless, id: &str) -> Option<egui::Rect> {
 }
 
 #[test]
-fn a_long_mask_name_fits_its_row() {
+fn a_long_mask_name_wraps_whole_in_its_row() {
     let services = Services { png: None, ..Default::default() };
     let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
     let mut h = Headless::new(app, [1200.0, 900.0], 1.0);
@@ -34,7 +34,8 @@ fn a_long_mask_name_fits_its_row() {
     let (short, long) = (rect(&h, "maskName:1").expect("the first row"), rect(&h, "maskName:2").expect("the second row"));
     let row = rect(&h, "mask:2").expect("the row");
     assert!(long.right() <= row.right() - 30.0, "the long name stays inside its row: {long:?} in {row:?}");
-    assert!(long.height() < short.height() - 0.4, "the long name is set smaller ({} against {})", long.height(), short.height());
+    assert!(long.height() > 1.5 * short.height(), "the long name wraps ({} against {})", long.height(), short.height());
+    assert!(row.contains_rect(long), "the row grows with the name: {long:?} in {row:?}");
     // the mask's own generated name
     assert_eq!(h.app.session.develop_of(h.app.session.active().unwrap()).unwrap().masks[0].name, "Radial Mask 1");
 }
