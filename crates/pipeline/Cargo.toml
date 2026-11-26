@@ -19,6 +19,8 @@ lightcraft-inpaint = { workspace = true }
 lightcraft-relight = { workspace = true }
 rayon = { workspace = true }
 serde = { workspace = true }
+# SCRATCH (issue #417 prototype, never merged)
+half = "2"
 
 [dev-dependencies]
 dhat = { workspace = true }

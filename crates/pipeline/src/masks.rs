@@ -324,6 +324,7 @@ pub fn evaluate_alpha_guided(
         let t = k.sqrt();
         zip_rows(&mut alpha, &refined, |a, r| *a += (r - *a) * t);
     }
+    crate::kept_round::mask(&mut alpha);
     MaskAlpha::from_plane(alpha)
 }
 

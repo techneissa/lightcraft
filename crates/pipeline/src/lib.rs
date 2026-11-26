@@ -63,6 +63,7 @@ pub mod retouch_effect;
 pub mod retouch_step;
 // fork: `fork/perf-portrait-draft.md`
 pub mod kept_budget;
+mod kept_round;
 pub mod spot_area;
 pub mod spot_lasso;
 pub mod spots;
@@ -1200,6 +1201,13 @@ fn render_impl(
         Src::Borrowed(r) => r,
         Src::Shared(a) => a,
     };
+    // SCRATCH #417: the original as it would be read back from a smaller store
+    let kept_original = kept_round::images_rounded().then(|| {
+        let mut i = src_img.clone();
+        kept_round::img(&mut i);
+        i
+    });
+    let src_img: &Rgb32f = kept_original.as_ref().unwrap_or(src_img);
     let plan = plan_kept(src_img, info, s, req, cache.map(|c| &c.spot_finals));
     let Plan { ref frame, w, h, px_per_long, detail_scale, geo, lin_key, .. } = plan;
     let s = &*plan.settings;
@@ -1211,7 +1219,11 @@ fn render_impl(
     let cached = shared.and_then(|(a, c)| c.get(a, geo));
     let sampled = match &cached {
         Some(e) => e.sampled.clone(),
-        None => Arc::new(frame.sample(src_img, w, h)),
+        None => Arc::new({
+            let mut i = frame.sample(src_img, w, h);
+            kept_round::img(&mut i);
+            i
+        }),
     };
     lap("sample", &mut t);
 
@@ -1277,6 +1289,7 @@ fn render_impl(
             }
             local::denoise(&mut img, s, detail_scale, colour_noise.as_ref().map(|c| &c.1));
             lens_blur::apply_with(&mut img, s, frame, px_per_long, plan.mattes.as_deref(), plan.lens_subject.as_deref());
+            kept_round::img(&mut img);
             Arc::new(img)
         }
     };

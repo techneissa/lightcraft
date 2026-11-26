@@ -866,7 +866,7 @@ pub(crate) fn prepare(
     mattes: Option<&Arc<masks::Mattes>>,
     alphas: (&mut masks::AlphaCache, masks::AlphaKeys),
 ) -> Prepared {
-    let log_l = planes.log_l.get_or_insert_with(|| Arc::new(timed("log_l", || img.map(log_lum)))).clone();
+    let log_l = planes.log_l.get_or_insert_with(|| Arc::new(timed("log_l", || crate::kept_round::log_plane(img.map(log_lum))))).clone();
     let PlaneSigmas {
         base: base_sigma,
         base_detail,
@@ -881,28 +881,48 @@ pub(crate) fn prepare(
     let chroma_blur = chroma_sigma.map(|sg| match sch {
         Some((k, c)) if *k == sg.to_bits() => c.clone(),
         _ => {
-            let c = timed("chroma", || Arc::new(gaussian(&img.map(masks::chromaticity), sg)));
+            let c = timed("chroma", || {
+                let mut c = gaussian(&img.map(masks::chromaticity), sg);
+                crate::kept_round::img(&mut c);
+                Arc::new(c)
+            });
             *sch = Some((sg.to_bits(), c.clone()));
             c
         }
     });
     let l = &log_l;
     let (base, (clarity_blur, (texture_blur, (sharpen_blur, dark)))) = par_join(
-        || base_sigma.map(|sg| plane_at(sb, base_key(s, sg, base_detail), || timed("base", || tone_base(l, sg, base_detail, base_keeps_gaps(s))))),
+        || {
+            base_sigma.map(|sg| {
+                plane_at(sb, base_key(s, sg, base_detail), || {
+                    timed("base", || crate::kept_round::log_plane(tone_base(l, sg, base_detail, base_keeps_gaps(s))))
+                })
+            })
+        },
         || {
             par_join(
-                || clarity_sigma.map(|sg| plane_at(sc, sg.to_bits(), || timed("clarity", || guided_fast(l, sg, CLARITY_EPS)))),
+                || {
+                    clarity_sigma
+                        .map(|sg| plane_at(sc, sg.to_bits(), || timed("clarity", || crate::kept_round::log_plane(guided_fast(l, sg, CLARITY_EPS)))))
+                },
                 || {
                     par_join(
-                        || texture_sigma.map(|sg| plane_at(st, sg.to_bits(), || timed("texture", || gaussian(l, sg)))),
+                        || texture_sigma.map(|sg| plane_at(st, sg.to_bits(), || timed("texture", || crate::kept_round::log_plane(gaussian(l, sg))))),
                         || {
                             par_join(
-                                || sharpen_sigma.map(|sg| plane_at(ssh, sg.to_bits(), || timed("sharpen", || gaussian(l, sg)))),
+                                || {
+                                    sharpen_sigma
+                                        .map(|sg| plane_at(ssh, sg.to_bits(), || timed("sharpen", || crate::kept_round::log_plane(gaussian(l, sg)))))
+                                },
                                 || {
                                     dark_sigma.map(|sg| match sd {
                                         Some((k, d, air)) if *k == sg.to_bits() => (d.clone(), *air),
                                         _ => {
-                                            let d = timed("dehaze", || Arc::new(gaussian(&img.map(dark_of), sg)));
+                                            let d = timed("dehaze", || {
+                                                let mut d = gaussian(&img.map(dark_of), sg);
+                                                crate::kept_round::linear_plane(&mut d);
+                                                Arc::new(d)
+                                            });
                                             let air = airlight(&d);
                                             *sd = Some((sg.to_bits(), d.clone(), air));
                                             (d, air)
