@@ -35,7 +35,7 @@ struct Seen {
 
 #[derive(Default)]
 pub(crate) struct MaskList {
-    pub(super) thumbs: MaskThumbs,
+    pub(crate) thumbs: MaskThumbs,
     seen: Option<Seen>,
     /// The panel's scroll area has the picked mask's section to bring to its top.
     jump: bool,

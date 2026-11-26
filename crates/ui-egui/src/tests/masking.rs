@@ -262,6 +262,22 @@ fn keys_step_the_masks_from_the_panel_and_from_the_list() {
     assert_eq!(press(&mut h, "."), Some(ids[1]), "outside the Masking tool the key does nothing");
 }
 
+/// A change to one mask's shape makes that mask's thumbnail anew and keeps the others' (fork issue #401).
+#[test]
+fn only_the_changed_mask_gets_a_new_thumbnail() {
+    let mut h = detail("panel.masking");
+    exec(&mut h, "mask.add", json!({"kind": "radial", "center": [0.3, 0.3], "rx": 0.1, "ry": 0.1}));
+    exec(&mut h, "mask.add", json!({"kind": "radial", "center": [0.7, 0.7], "rx": 0.1, "ry": 0.1}));
+    let photo = h.app.session.active().unwrap();
+    let ids: Vec<u32> = develop(&h).masks.iter().map(|m| m.id).collect();
+    let texture = |h: &Headless, id: u32| h.app.mask_list.thumbs.get(photo, id).map(|t| t.id());
+    assert!(h.step_until(SETTLE, |h| ids.iter().all(|id| texture(h, *id).is_some())), "both masks get a thumbnail");
+    let before = (texture(&h, ids[0]), texture(&h, ids[1]));
+    exec(&mut h, "mask.update", json!({"component": 0, "shape": {"kind": "linear", "start": [0.5, 0.2], "end": [0.5, 0.8]}}));
+    assert!(h.step_until(SETTLE, |h| texture(h, ids[1]) != before.1), "the changed mask's thumbnail is made again");
+    assert_eq!(texture(&h, ids[0]), before.0, "the other mask keeps its own");
+}
+
 #[test]
 fn radial_body_drag_moves_rotated_components_and_undoes_once() {
     let mut h = detail("panel.masking");
