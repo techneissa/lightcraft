@@ -89,6 +89,7 @@ fn phrases(dir: &Path, store: &str) -> Vec<String> {
 
 #[test]
 fn stored_text_features_give_the_encoders_mask_on_candle() {
+    let _sam3 = crate::one_sam3_at_a_time();
     let Some(from) = shared_dir().filter(|d| lightcraft_segment::is_model_dir(d)) else {
         lightcraft_testkit::skip!(Model, "SAM 3 is not in the shared models folder (or LIGHTCRAFT_SAM3_DIR)");
         return;
@@ -104,6 +105,7 @@ fn stored_text_features_give_the_encoders_mask_on_candle() {
 /// the same logits.
 #[test]
 fn stored_text_features_give_the_encoders_mask_on_core_ml() {
+    let _sam3 = crate::one_sam3_at_a_time();
     let Some(from) = shared_dir().filter(|d| lightcraft_segment::is_model_dir(d)) else {
         lightcraft_testkit::skip!(Model, "SAM 3 is not in the shared models folder (or LIGHTCRAFT_SAM3_DIR)");
         return;

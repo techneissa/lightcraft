@@ -99,6 +99,7 @@ fn selections(model: &mut Sam3, rgb: &[u8], w: usize, h: usize) -> Vec<(String, 
 
 #[test]
 fn core_ml_gives_candles_masks() {
+    let _sam3 = crate::one_sam3_at_a_time();
     let Some(from) = shared_dir().filter(|d| lightcraft_segment::is_model_dir(d)) else {
         lightcraft_testkit::skip!(Model, "SAM 3 is not in the shared models folder (or LIGHTCRAFT_SAM3_DIR)");
         return;
