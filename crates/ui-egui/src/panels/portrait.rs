@@ -240,6 +240,22 @@ fn title_row(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings) {
     if resp.on_hover_text(tip).clicked() {
         let _ = app.run("develop.sectionEnabled", json!({"section": SWITCH, "enabled": !on}));
     }
+    // ↺ left of the eye: every portrait slider back to its start, for every face (`retouch.reset`; one undo step)
+    let edited = d.retouch != Default::default();
+    let reset = egui::Rect::from_center_size(pos2(eye.left() - 18.0, eye.center().y), vec2(26.0, 26.0));
+    let resp = ui.interact(reset, egui::Id::unique("portrait-reset"), if edited { Sense::click() } else { Sense::hover() });
+    register(ui, "portrait:reset", reset);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, edited, crate::i18n::tr("Reset Portrait")));
+    if edited && resp.hovered() {
+        ui.painter().rect_filled(reset, 4.0, t.chrome.gamma_multiply(1.3));
+    }
+    paint(ui.painter(), reset.shrink(5.0), Icon::Reset, if edited { t.text_label } else { t.text_dim.gamma_multiply(0.5) });
+    if resp.on_hover_text(crate::i18n::tr("Reset Portrait")).clicked()
+        && edited
+        && let Err(e) = app.run("retouch.reset", json!({}))
+    {
+        app.toast(ui.ctx(), e);
+    }
 }
 
 /// "Editing: All Faces" or the picked face, and why there are no faces when there are none.
