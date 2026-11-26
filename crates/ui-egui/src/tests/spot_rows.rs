@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use serde_json::json;
 
-use crate::headless::Headless;
+use crate::headless::{HANG, Headless};
 use crate::state::ToolOverlay;
 use crate::{LightcraftApp, Services};
 
@@ -161,12 +161,13 @@ fn never_covers_nothing_but_a_click_or_a_drag_still_adds_a_spot() {
     let r = h.request("ui.pointer", json!({"events": [{"kind": "up", "x": 0.5, "y": 0.8}]}), T);
     assert_eq!(r["ok"], true, "{r}");
     // (a painted spot is added once its source is found on a worker, issue #97)
-    assert!(h.settle(T));
-    assert_eq!(spots(&h).len(), 2, "the drag added a spot");
+    assert!(h.step_until(HANG, |h| spots(h).len() >= 2), "the drag added a spot");
+    assert!(h.settle_spot_sources());
+    assert_eq!(spots(&h).len(), 2, "the drag added one spot");
     let r = h.request("ui.pointer", json!({"events": [{"kind": "down", "x": 0.6, "y": 0.85}, {"kind": "up", "x": 0.6, "y": 0.85}]}), T);
     assert_eq!(r["ok"], true, "{r}");
-    assert!(h.settle(T));
-    assert_eq!(spots(&h).len(), 3, "a click added one too");
+    assert!(h.step_until(HANG, |h| spots(h).len() >= 3), "a click added one too");
+    assert_eq!(spots(&h).len(), 3, "a click added one spot");
     // Auto still fills while painting
     exec(&mut h, "view.toolOverlay", json!({"mode": "auto"}));
     let r = h.request(

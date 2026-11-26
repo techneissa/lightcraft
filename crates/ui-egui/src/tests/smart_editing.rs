@@ -83,7 +83,8 @@ fn switching_it_on_asks_once_about_the_missing_smart_previews_and_building_fills
     // Build Smart Previews
     let r = h.app.run("library.smartPreviewsForEditing", json!({"build": true})).unwrap();
     assert_eq!(r["building"], 3, "{r}");
-    for _ in 0..200 {
+    let until = std::time::Instant::now() + crate::headless::HANG;
+    while std::time::Instant::now() < until {
         if h.app.session.activity.list().is_empty() {
             break;
         }
@@ -126,7 +127,8 @@ fn the_info_panel_says_the_photo_is_edited_from_its_smart_preview() {
     assert!(h.app.session.media.editing_from_smart_preview(id, &p));
     // (the app checks files off the UI thread: the smart preview is known to be there a moment later)
     let line = |h: &mut Headless| {
-        for _ in 0..200 {
+        let until = std::time::Instant::now() + crate::headless::HANG;
+        while std::time::Instant::now() < until {
             h.step();
             let p = h.app.session.catalog.photo(id).unwrap().clone();
             if let Some(l) = crate::panels::right::smart_line(&h.app, &p) {

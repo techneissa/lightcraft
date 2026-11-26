@@ -798,7 +798,7 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
     let photo_rect = paint_cell_thumbnail(app, p, &t, id, img_rect, ThumbFlags { square, state, onscreen, ppp });
     // labels and badges
     paint_cell_caption(app, p, &t, &photo, r, square);
-    paint_cell_badges(app, p, &t, id, &photo, photo_rect, BadgeFlags { square, selected, hovered: resp.hovered() });
+    paint_cell_badges(app, p, &t, id, &photo, (photo_rect, r), BadgeFlags { square, selected, hovered: resp.hovered() });
     if let Some(name) = &photo.copy_name {
         paint_copy_tag(p, &t, name, img_rect, square);
     }
@@ -907,12 +907,14 @@ fn paint_cell_badges(
     t: &Tokens,
     id: PhotoId,
     photo: &lightcraft_catalog::Photo,
-    photo_rect: Rect,
+    (photo_rect, cell_rect): (Rect, Rect),
     flags: BadgeFlags,
 ) {
     let BadgeFlags { square, selected, hovered } = flags;
+    // (stars, a flag or edits: the bar's shade stays, so its badges read on a light photo)
+    let marked = photo.rating > 0 || photo.flag != Flag::None || photo.is_edited();
     let show_badges = match app.ui.settings.grid_badges {
-        crate::state::GridBadges::Auto => hovered || selected || photo.rating > 0 || photo.flag != Flag::None || photo.label.is_some(),
+        crate::state::GridBadges::Auto => hovered || selected || marked || photo.label.is_some(),
         crate::state::GridBadges::Always => true,
         crate::state::GridBadges::Never => false,
     };
@@ -924,8 +926,10 @@ fn paint_cell_badges(
     }
     if show_badges {
         let bar = badge_bar;
-        if (hovered || selected) && (square || photo.label.is_none()) {
-            p.rect_filled(bar, 0.0, Color32::from_black_alpha(120));
+        if (hovered || selected || marked) && (square || photo.label.is_none()) {
+            // the shade spans the whole cell (a point short of each edge), the badges stay on the photo's own width
+            let shade = if square { Rect::from_x_y_ranges(cell_rect.x_range().shrink(1.0), bar.y_range()) } else { bar };
+            p.rect_filled(shade, 0.0, Color32::from_black_alpha(120));
         }
         let mut x = bar.left() + 6.0;
         x += crate::rating::paint_rating(p, pos2(x, bar.center().y), photo.rating, crate::rating::RatingSize::Medium, t.star) + 4.0;

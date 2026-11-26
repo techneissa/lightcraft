@@ -281,7 +281,7 @@ pub(crate) static HELD_RESOLVES: std::sync::Mutex<Vec<String>> = std::sync::Mute
 fn held_resolve(given: &str) {
     let held = || HELD_RESOLVES.lock().unwrap_or_else(std::sync::PoisonError::into_inner).iter().any(|p| p == given);
     let start = std::time::Instant::now();
-    while held() && start.elapsed() < std::time::Duration::from_secs(30) {
+    while held() && start.elapsed() < crate::headless::HANG {
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
 }

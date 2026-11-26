@@ -21,7 +21,7 @@ fn import_preview_settle_timeout_for_instrumentation(instrumented: bool) -> Dura
 }
 
 fn import_preview_settle_timeout() -> Duration {
-    import_preview_settle_timeout_for_instrumentation(std::env::var_os("LLVM_PROFILE_FILE").is_some())
+    crate::headless::HANG.max(import_preview_settle_timeout_for_instrumentation(std::env::var_os("LLVM_PROFILE_FILE").is_some()))
 }
 
 #[test]

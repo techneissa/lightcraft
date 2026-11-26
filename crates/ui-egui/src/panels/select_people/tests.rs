@@ -76,7 +76,7 @@ pub(super) fn part(h: &Headless) -> (Vec<String>, bool) {
 
 /// Step until `done` (a guard against a hang only).
 pub(super) fn until(h: &mut Headless, what: &str, done: impl Fn(&Headless) -> bool) {
-    let end = Instant::now() + Duration::from_secs(60);
+    let end = Instant::now() + crate::headless::HANG;
     while !done(h) {
         assert!(Instant::now() < end, "never: {what}");
         h.step();

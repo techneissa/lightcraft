@@ -96,7 +96,7 @@ fn the_icon_stays_on_while_the_faces_are_not_known() {
     let r = h.request("ui.clickWidget", json!({"id": "icon:portrait"}), T);
     assert_eq!(r["ok"], true, "{r}");
     assert_eq!(h.app.ui.right, RightPanel::Portrait, "the tab opens and starts the search");
-    let until = std::time::Instant::now() + Duration::from_secs(60);
+    let until = std::time::Instant::now() + crate::headless::HANG;
     while !h.app.session.retouch_no_people(id) {
         assert!(std::time::Instant::now() < until, "the search never finished");
         h.step();

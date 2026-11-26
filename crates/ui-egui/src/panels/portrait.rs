@@ -172,6 +172,8 @@ pub(crate) fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, photo: PhotoId) {
     ui.add_space(6.0);
     divider(ui);
     let keys = app.session.retouch_key_map(photo);
+    // (one slider label column, Edit's: long labels shrink or wrap in it, so no section's sliders get shorter)
+    super::edit::fix_label_column(ui);
     let mut cx = Ctx { app, ui, d: &d, photo, face, input, keys };
     for s in SECTIONS {
         let id = format!("portrait.{}", s.key);
@@ -193,6 +195,7 @@ pub(crate) fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, photo: PhotoId) {
         }
         divider(cx.ui);
     }
+    crate::widgets::label_column::release(cx.ui);
     cx.ui.add_space(40.0);
 }
 
@@ -239,6 +242,22 @@ fn title_row(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings) {
     let tip = if on { crate::i18n::tr("Turn Portrait Off") } else { crate::i18n::tr("Turn Portrait On") };
     if resp.on_hover_text(tip).clicked() {
         let _ = app.run("develop.sectionEnabled", json!({"section": SWITCH, "enabled": !on}));
+    }
+    // ↺ left of the eye: every portrait slider back to its start, for every face (`retouch.reset`; one undo step)
+    let edited = d.retouch != Default::default();
+    let reset = egui::Rect::from_center_size(pos2(eye.left() - 18.0, eye.center().y), vec2(26.0, 26.0));
+    let resp = ui.interact(reset, egui::Id::unique("portrait-reset"), if edited { Sense::click() } else { Sense::hover() });
+    register(ui, "portrait:reset", reset);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, edited, crate::i18n::tr("Reset Portrait")));
+    if edited && resp.hovered() {
+        ui.painter().rect_filled(reset, 4.0, t.chrome.gamma_multiply(1.3));
+    }
+    paint(ui.painter(), reset.shrink(5.0), Icon::Reset, if edited { t.text_label } else { t.text_dim.gamma_multiply(0.5) });
+    if resp.on_hover_text(crate::i18n::tr("Reset Portrait")).clicked()
+        && edited
+        && let Err(e) = app.run("retouch.reset", json!({}))
+    {
+        app.toast(ui.ctx(), e);
     }
 }
 

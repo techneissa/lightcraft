@@ -106,7 +106,12 @@ fn repair(cx: &mut super::Ctx<'_>) {
             let label = |flux: bool| if flux { tr("Repaint (FLUX)") } else { tr("Fill Glints (LaMa)") };
             let r = crate::widgets::combo_box("portrait-glare-method").selected_text(label(choice.flux)).show_ui(ui, |ui| {
                 for flux in [true, false] {
-                    let r = ui.add_enabled(!busy && (!flux || probe.memory.is_none()), egui::Button::selectable(choice.flux == flux, label(flux)));
+                    let mut r =
+                        ui.add_enabled(!busy && (!flux || probe.memory.is_none()), egui::Button::selectable(choice.flux == flux, label(flux)));
+                    // (why Repaint is greyed on a Mac with too little memory: on hover, not as a line under the button)
+                    if flux && let Some(m) = &probe.memory {
+                        r = r.on_disabled_hover_text(m);
+                    }
                     if r.clicked() {
                         choice.flux = flux;
                     }
@@ -172,9 +177,6 @@ fn repair(cx: &mut super::Ctx<'_>) {
         let note = |ui: &mut egui::Ui, text: &str| {
             ui.add(egui::Label::new(egui::RichText::new(text).size(11.5).color(t.text_dim)).wrap());
         };
-        if let Some(m) = &probe.memory {
-            note(ui, m);
-        }
         if here {
             ui.horizontal(|ui| {
                 ui.spinner();

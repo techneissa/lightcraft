@@ -236,14 +236,14 @@ mod import_review {
     fn text(h: &mut Headless, value: &str) {
         let r = h.request("ui.text", json!({"text": value}), T);
         assert_eq!(r["ok"], true, "{r}");
-        assert!(h.settle(SETTLE));
+        assert!(h.settle(crate::headless::HANG));
     }
 
     /// Send a public keyboard event and wait for its resulting UI state.
     fn key(h: &mut Headless, key: &str) {
         let r = h.request("ui.key", json!({"key": key}), T);
         assert_eq!(r["ok"], true, "{r}");
-        assert!(h.settle(SETTLE));
+        assert!(h.settle(crate::headless::HANG));
     }
 
     /// Replace the pending new album name using normal field selection and typing.
@@ -364,7 +364,7 @@ mod import_review {
                 exec(&mut h, "view.theme", json!({"theme": theme}));
                 let r = h.request("ui.set", json!({"language": "de"}), T);
                 assert_eq!(r["ok"], true, "{r}");
-                assert!(h.settle(SETTLE));
+                assert!(h.settle(crate::headless::HANG));
                 let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, h.size);
                 let rect = |h: &Headless, name: &str| h.app.widgets.iter().find(|(id, _)| id == name).unwrap().1;
                 assert!(screen.contains_rect(rect(&h, "albumPicker:import-album")), "{theme} {size:?}: selected long path");
@@ -393,7 +393,7 @@ mod import_review {
         for locale in Locale::ALL {
             let r = h.request("ui.set", json!({"language": locale.code()}), T);
             assert_eq!(r["ok"], true, "{r}");
-            assert!(h.settle(SETTLE));
+            assert!(h.settle(crate::headless::HANG));
             assert!(button_text(&h, "albumPicker:import-album", locale.tr("None")), "{locale:?}: localized empty destination");
             click(&mut h, "albumPicker:import-album");
             assert!(button_text(&h, "importAlbum:new", locale.tr("New album…")), "{locale:?}: localized new-album option");
@@ -411,7 +411,7 @@ mod import_review {
         let app = LightcraftApp::new(lightcraft_engine::Session::new(), Services { png: None, ..Default::default() });
         let mut h = Headless::new(app, [1000.0, 800.0], 1.0);
         h.app.ui.dialog = Some(crate::state::Dialog::Import { opts: Box::new(crate::import::ImportDialog::new(Vec::new())) });
-        assert!(h.settle(SETTLE));
+        assert!(h.settle(crate::headless::HANG));
         click(&mut h, "albumPicker:import-album");
         assert!(h.painted_text().iter().any(|t| t == "No albums yet"));
         click(&mut h, "importAlbum:new");
@@ -455,7 +455,7 @@ mod import_review {
             h.app.ui.dialog = None;
             exec(&mut h, "file.addPhotos", json!({"paths": [fixture.0.to_string_lossy()], "album": album}));
             assert!(h.step_until(SETTLE, |h| matches!(h.app.ui.dialog, Some(crate::state::Dialog::Import { .. }))));
-            assert!(h.settle(SETTLE));
+            assert!(h.settle(crate::headless::HANG));
             assert_eq!(destination(&h).album, Some(album), "album-context import keeps its preselection");
             click(&mut h, "albumPicker:import-album");
             assert!(has(&h, &format!("albumPickerItem:{album}:import-album")), "preselection opens the right ancestors");
@@ -471,7 +471,7 @@ mod import_review {
                 "deleted" => {
                     key(&mut h, "Escape");
                     exec(&mut h, "album.delete", json!({"id": album}));
-                    assert!(h.settle(SETTLE));
+                    assert!(h.settle(crate::headless::HANG));
                     assert_eq!(destination(&h).album, None, "a deleted destination matches the displayed None choice");
                     assert!(button_text(&h, "albumPicker:import-album", "None"));
                 }
@@ -481,7 +481,7 @@ mod import_review {
             let r = h.request("ui.dialog.confirm", json!({}), T);
             assert_eq!(r["ok"], true, "{r}");
             assert!(h.step_until(SETTLE, |h| h.app.import.is_none()));
-            assert!(h.settle(SETTLE));
+            assert!(h.settle(crate::headless::HANG));
             let added: Vec<PhotoId> = h.app.session.catalog.photos().filter(|p| !before.contains(&p.id)).map(|p| p.id).collect();
             assert_eq!(added.len(), 1, "{choice}: exactly the scanned photo is imported");
             let receives = |id| h.app.session.catalog.album(lightcraft_catalog::AlbumId(id)).unwrap().photos.contains(&added[0]);
@@ -497,7 +497,7 @@ mod import_review {
             }
             assert_eq!(h.app.session.undo.len(), undo + 1, "{choice}: one undo step");
             exec(&mut h, "edit.undo", json!({}));
-            assert!(h.settle(SETTLE));
+            assert!(h.settle(crate::headless::HANG));
             assert_eq!(h.app.session.catalog.len(), before.len());
             if choice == "new" {
                 assert!(h.app.session.catalog.albums().all(|a| a.name != "From card"), "undo removes the new album too");

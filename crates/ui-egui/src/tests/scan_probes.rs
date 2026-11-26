@@ -141,7 +141,8 @@ fn a_browse_whose_folder_resolves_slowly_returns_at_once_and_waits() {
     crate::import::HELD_RESOLVES.lock().unwrap().push(given.clone());
     let start = std::time::Instant::now();
     let r = crate::import::browse(&mut h.app, &given, None).unwrap();
-    assert!(start.elapsed() < Duration::from_secs(2), "returned after {:?}", start.elapsed());
+    // (browse resolving the folder itself would sit at the held resolve until its guard ran out)
+    assert!(start.elapsed() < crate::headless::HANG, "browse waited for the held resolve");
     assert_eq!(r["scanning"], true, "{r}");
     assert_eq!(h.app.session.browse.as_ref().map(|b| b.path.clone()), Some(spelled), "shown as spelled meanwhile");
     for _ in 0..5 {

@@ -102,6 +102,6 @@ One agent builds at a time on this Mac. Every agent, in any worktree, uses the m
 
 Write long runs to a log file; never pipe them through `tail` or `head`.
 
-Each push to `custom` runs Fork CI (~23 min) and Fork build (~15 min) on GitHub, so push in batches: commit each working change on `custom`, and push (`git push mine custom`) once the planned batch of changes is done and its checks pass, or when techneissa asks. Never push a change whose checks fail; a test that also fails without the change is not a failure of the change, but say so in the reply.
+Each push to `custom` runs Fork CI (~13 min) and Fork build (~11 min) on GitHub, so push in batches: commit each working change on `custom`, and push (`git push mine custom`) once the planned batch of changes is done and its checks pass, or when techneissa asks. Never push a change whose checks fail; a test that also fails without the change is not a failure of the change, but say so in the reply.
 
 **No timing tests (techneissa, 2026-11-05).** A test never passes or fails on how long something took: no `elapsed() < …`, ms or frame budgets, speed ratios, or sleeps as the assertion. Wait on a condition (a gate, a polled state with a generous timeout that only guards against a hang). Measuring belongs in benches and `xtask bench`.

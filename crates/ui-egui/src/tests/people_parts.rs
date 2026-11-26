@@ -80,7 +80,8 @@ fn a_failed_download_leaves_the_choice_as_it_was() {
     h.app.session.parsing.set_test_fetch(Some(std::sync::Arc::new(|_, _| lightcraft_engine::people_parsing::Download::Failed("no network".into()))));
     click(&mut h, "button:parsing.set-bisenet");
     click(&mut h, "button:parsingDownload");
-    for _ in 0..200 {
+    let until = std::time::Instant::now() + crate::headless::HANG;
+    while std::time::Instant::now() < until {
         let st = h.app.session.execute("parsing.status", &json!({})).unwrap();
         if st["sets"].as_array().unwrap().iter().any(|s| s["download"]["state"] == "failed") {
             break;

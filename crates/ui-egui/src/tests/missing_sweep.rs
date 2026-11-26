@@ -60,7 +60,7 @@ fn answer(h: &mut Headless, rx: &Receiver<Value>) -> Value {
         if let Ok(v) = rx.try_recv() {
             return v;
         }
-        assert!(t0.elapsed() < T, "never answered");
+        assert!(t0.elapsed() < crate::headless::HANG, "never answered");
         std::thread::sleep(Duration::from_millis(1));
     }
 }
@@ -71,7 +71,7 @@ fn missing_rows(h: &Headless) -> Vec<lightcraft_engine::activity::TaskInfo> {
 
 #[test]
 fn library_missing_is_checked_off_the_ui_thread_and_answered_when_done() {
-    let (mut h, share) = app_on_a_slow_share(Duration::from_secs(3));
+    let (mut h, share) = app_on_a_slow_share(crate::headless::HANG);
     let rx = ask(&mut h);
     for _ in 0..3 {
         h.step();
@@ -97,7 +97,7 @@ fn library_missing_is_checked_off_the_ui_thread_and_answered_when_done() {
 /// A request that comes while a check runs gets that check's answer: the share isn't walked twice.
 #[test]
 fn a_second_request_joins_the_check_that_is_running() {
-    let (mut h, share) = app_on_a_slow_share(Duration::from_secs(3));
+    let (mut h, share) = app_on_a_slow_share(crate::headless::HANG);
     let (first, second) = (ask(&mut h), ask(&mut h));
     for _ in 0..3 {
         h.step();
@@ -113,7 +113,7 @@ fn a_second_request_joins_the_check_that_is_running() {
 /// ✕ on the row (or `activity.cancel`) stops the check; the request is told so.
 #[test]
 fn stopping_the_check_answers_the_request_with_an_error() {
-    let (mut h, share) = app_on_a_slow_share(Duration::from_secs(3));
+    let (mut h, share) = app_on_a_slow_share(crate::headless::HANG);
     let rx = ask(&mut h);
     for _ in 0..3 {
         h.step();
@@ -133,7 +133,7 @@ fn stopping_the_check_answers_the_request_with_an_error() {
 /// again after its timeout and is given the answer the check ended with, not another walk.
 #[test]
 fn an_answer_nobody_waited_for_is_given_to_the_next_request() {
-    let (mut h, share) = app_on_a_slow_share(Duration::from_secs(3));
+    let (mut h, share) = app_on_a_slow_share(crate::headless::HANG);
     let gave_up = ask(&mut h);
     for _ in 0..3 {
         h.step();
@@ -157,7 +157,7 @@ fn an_answer_nobody_waited_for_is_given_to_the_next_request() {
 /// A check that panics is a failure told to the caller, not a request left waiting for its timeout.
 #[test]
 fn a_check_that_panics_is_answered_with_an_error() {
-    let (mut h, _share) = app_on_a_slow_share(Duration::from_secs(3));
+    let (mut h, _share) = app_on_a_slow_share(crate::headless::HANG);
     h.app.session.media.availability.set_probe(Arc::new(|_| panic!("a file system that panics")));
     let rx = ask(&mut h);
     let reply = answer(&mut h, &rx);
@@ -180,7 +180,7 @@ fn new_photo(id: u64, path: &str) -> Box<Photo> {
 /// Deleted or relinked since is not reported; one added since was not checked and is not either.
 #[test]
 fn a_check_over_changing_photos_answers_what_still_holds() {
-    let (mut h, share) = app_on_a_slow_share(Duration::from_secs(3));
+    let (mut h, share) = app_on_a_slow_share(crate::headless::HANG);
     let rx = ask(&mut h);
     for _ in 0..3 {
         h.step();
@@ -202,7 +202,7 @@ fn a_check_over_changing_photos_answers_what_still_holds() {
 /// A stop is a stop, whatever the photos did meanwhile.
 #[test]
 fn a_stopped_check_says_stopped_even_if_the_photos_changed() {
-    let (mut h, share) = app_on_a_slow_share(Duration::from_secs(3));
+    let (mut h, share) = app_on_a_slow_share(crate::headless::HANG);
     let rx = ask(&mut h);
     for _ in 0..3 {
         h.step();
@@ -220,7 +220,7 @@ fn a_stopped_check_says_stopped_even_if_the_photos_changed() {
 /// checks afresh (and then sees the photo that came meanwhile).
 #[test]
 fn a_check_over_changed_photos_is_not_kept_for_a_later_request() {
-    let (mut h, share) = app_on_a_slow_share(Duration::from_secs(3));
+    let (mut h, share) = app_on_a_slow_share(crate::headless::HANG);
     drop(ask(&mut h));
     for _ in 0..3 {
         h.step();
@@ -238,7 +238,7 @@ fn a_check_over_changed_photos_is_not_kept_for_a_later_request() {
 /// An edit that leaves the photos' files alone (a rating) does not spoil the check.
 #[test]
 fn an_edit_that_leaves_the_files_alone_does_not_spoil_the_check() {
-    let (mut h, share) = app_on_a_slow_share(Duration::from_secs(3));
+    let (mut h, share) = app_on_a_slow_share(crate::headless::HANG);
     let rx = ask(&mut h);
     for _ in 0..3 {
         h.step();
@@ -265,7 +265,7 @@ fn a_failed_start_fails_only_that_librarys_requests() {
 /// An answer kept for a request that never came is not given once the photos have changed.
 #[test]
 fn a_kept_answer_is_not_given_after_the_photos_changed() {
-    let (mut h, share) = app_on_a_slow_share(Duration::from_secs(3));
+    let (mut h, share) = app_on_a_slow_share(crate::headless::HANG);
     drop(ask(&mut h));
     for _ in 0..3 {
         h.step();

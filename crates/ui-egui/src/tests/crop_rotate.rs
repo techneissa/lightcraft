@@ -30,7 +30,7 @@ fn crop_view(app: LightcraftApp, assert_settle: bool) -> Headless {
         assert_eq!(r["ok"], true, "{r}");
     }
     if assert_settle {
-        assert!(h.settle(SETTLE), "the crop view settles before the snapshot");
+        assert!(h.settle(crate::headless::HANG), "the crop view settles before the snapshot");
     } else {
         h.settle(SETTLE);
     }
@@ -406,7 +406,7 @@ fn rotating_the_crop_dims_nothing_inside_the_box() {
     let plain = h.paint();
     let r = h.request("engine.execute", json!({"command": "develop.set", "params": {"control": "crop.angle", "value": -45.0}}), T);
     assert_eq!(r["ok"], true, "{r}");
-    assert!(h.settle(SETTLE), "the rotated crop view settles before the snapshot");
+    assert!(h.settle(crate::headless::HANG), "the rotated crop view settles before the snapshot");
     assert_eq!(angle(&h), -45.0);
     let rotated = h.paint();
     let img = h.app.image_rect.expect("the photo on screen");

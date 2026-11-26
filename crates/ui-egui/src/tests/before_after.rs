@@ -155,9 +155,9 @@ fn animation_view(mode: BeforeAfter, zoom: Zoom) -> AnimationView {
     h.app.ui.zoom = zoom;
     h.app.ui.pan = (0.5, 0.5);
     h.app.ui.click_zoom = 300;
-    assert!(h.settle(SETTLE), "the single photo's source and Main render settle");
+    assert!(h.settle(crate::headless::HANG), "the single photo's source and Main render settle");
     h.app.ui.before_after = mode;
-    assert!(h.settle(SETTLE), "both pane renders settled");
+    assert!(h.settle(crate::headless::HANG), "both pane renders settled");
     let before_id = h.app.renderer.textures[&Slot::Before].tex.id();
     let before = h
         .view
@@ -233,7 +233,7 @@ fn check_click_animation(mode: BeforeAfter) {
         }
     }
     open.set(true);
-    assert!(h.settle(SETTLE));
+    assert!(h.settle(crate::headless::HANG));
 }
 
 #[test]
@@ -287,7 +287,7 @@ fn check_region_animation(mode: BeforeAfter) {
     assert!((h.app.image_rect.expect("settled image").width() - start.width() * 2.0).abs() < 1.0);
     assert_eq!(keys.len(), 1, "region requests use the final target throughout the animation: {keys:?}");
     open.set(true);
-    assert!(h.settle(SETTLE));
+    assert!(h.settle(crate::headless::HANG));
 }
 
 #[test]

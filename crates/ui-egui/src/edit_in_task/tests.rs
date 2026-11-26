@@ -20,7 +20,7 @@ fn rig(tag: &str) -> (LightcraftApp, Opened, Arc<AtomicBool>, std::path::PathBuf
     let services = Services {
         png: None,
         write_shared: Some(Arc::new(move |path: &str, bytes: &[u8]| {
-            let deadline = Instant::now() + Duration::from_secs(60);
+            let deadline = Instant::now() + crate::headless::HANG;
             while !rel.load(Ordering::SeqCst) && Instant::now() < deadline {
                 std::thread::sleep(Duration::from_millis(5));
             }
