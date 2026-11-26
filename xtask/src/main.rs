@@ -12,6 +12,7 @@ mod ci_quick;
 mod ci_report;
 mod ico;
 mod layers;
+mod mask_score;
 mod parity;
 mod roots;
 mod stats;
@@ -72,6 +73,9 @@ commands:
                   picture and what the decoder's crop keeps beyond the camera frame (any make with a full-size
                   embedded JPEG); print image-area entries for Nikon bodies that record no crop (MEASURED_BODIES in
                   crates/raw/src/vendor/nef.rs)
+  mask-score [--data DIR] [--name RUN | --out DIR] [--job J,…] [--method M,…] [--limit N] [--score-only]
+                  score the app's AI masks (subject, hair, click, sky) against human-drawn truth and write
+                  tables, a chart and 1:1 sheets (fork/mask-score.md); `--compare RUN_A RUN_B` compares two runs
 ";
 
 fn main() -> ExitCode {
@@ -91,6 +95,7 @@ fn main() -> ExitCode {
         Some("corpus") => cmd_corpus(rest.contains(&"--download")),
         Some("stats") => stats::run(&root(), rest.contains(&"--exact")),
         Some("raw-frame") => cmd_raw_frame(&rest),
+        Some("mask-score") => mask_score::run(&rest),
         Some("-h" | "--help" | "help") | None => {
             print!("{USAGE}");
             Ok(())

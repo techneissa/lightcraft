@@ -15,3 +15,8 @@ sha2 = { workspace = true }
 # precompressed web bundle (`cargo xtask web`); pure Rust
 flate2 = "1"
 brotli = { version = "9", default-features = false, features = ["std"] }
+# `cargo xtask mask-score` (fork/mask-score.md): the metrics, the masks' pictures, the chart's text
+lightcraft-maskscore = { workspace = true }
+image = { workspace = true }
+ab_glyph = { workspace = true }
+rayon = { workspace = true }
