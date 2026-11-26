@@ -4515,6 +4515,7 @@ dependencies = [
  "craft-cms",
  "craft-image-codecs",
  "dhat",
+ "half",
  "image",
  "lightcraft-color",
  "lightcraft-develop",

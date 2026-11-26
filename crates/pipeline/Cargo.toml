@@ -18,6 +18,8 @@ lightcraft-raw = { workspace = true }
 lightcraft-inpaint = { workspace = true }
 lightcraft-relight = { workspace = true }
 rayon = { workspace = true }
+# SCRATCH (issue #438, never merged)
+half = "2"
 serde = { workspace = true }
 
 [dev-dependencies]

@@ -144,6 +144,10 @@ fn brush_part(cx: &mut Cx<'_>, env: &BrushEnv<'_>, strokes: &[BrushStroke], inve
             return None;
         }
     }
+    // SCRATCH #438: the part as it would be read back from a smaller store
+    if from < strokes.len() {
+        store_round(cx, &plane, 0, n);
+    }
     if keep && !strokes.is_empty() && from < strokes.len() {
         parts.push(BrushPart { base, chain, plane: Arc::new(cx.copy(&plane)) });
         while parts.len() > BRUSH_ENTRIES {
@@ -266,6 +270,21 @@ fn gradient(p: &mut Vec<u32>, aux: &mut Vec<f32>, grid: Option<&PosGrid>, ramp: 
     p.extend(table);
     *aux = pts;
     true
+}
+
+/// SCRATCH for issue #438: `n` values of `plane` from `at`, packed into `u32` words and read back.
+fn store_round(cx: &mut Cx<'_>, plane: &Buf, at: usize, n: usize) {
+    use lightcraft_pipeline::mask_store::{Format, get};
+    let (pack, unpack, per) = match get() {
+        Format::F32 => return,
+        Format::U16 | Format::U16ButDecontam => ("pack_u16", "unpack_u16", 2),
+        Format::F16 => ("pack_f16", "unpack_f16", 2),
+        Format::U8 => ("pack_u8", "unpack_u8", 4),
+    };
+    let words = cx.gpu.buffer(n.div_ceil(per));
+    let p = [n as u32, at as u32];
+    cx.run(pack, &p, &[Some(&words), Some(plane)], groups1(n.div_ceil(per)));
+    cx.run(unpack, &p, &[Some(&words), Some(plane)], groups1(n));
 }
 
 /// Fork (issue #288): Relight's planes (`relit`, each `n` texels) into the stack `alpha` after its first `from`.
@@ -515,6 +534,10 @@ pub(crate) fn masks(
             let plane = cx.slice(alpha, mi * n, n);
             let refined = guided_cross(cx, &prep.log_l, &plane, w, h, sigma, 0.02, k.sqrt());
             cx.copy_into(&refined, alpha, mi * n);
+        }
+        // SCRATCH #438
+        if !(m.decontaminate > 0.0 && lightcraft_pipeline::mask_store::get() == lightcraft_pipeline::mask_store::Format::U16ButDecontam) {
+            store_round(cx, alpha, mi * n, n);
         }
         // (the mask's Amount scales its effect terms, not its alpha: see `effect_terms`)
         if !used.iter().any(|u| u.key == key) {

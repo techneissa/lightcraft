@@ -95,6 +95,11 @@ const MODULES: &[Module] = &[
         entries: &["shape", "combine", "finalize", "stroke"],
     },
     Module {
+        src: include_str!("wgsl/maskpack.wgsl"),
+        bindings: &[("words", true, "u32"), ("plane", true, "f32")],
+        entries: &["pack_u16", "unpack_u16", "pack_f16", "unpack_f16", "pack_u8", "unpack_u8"],
+    },
+    Module {
         src: include_str!("wgsl/present.wgsl"),
         bindings: &[("px", false, "u32"), ("dst", true, "u32"), ("count", true, "atomic<u32>")],
         entries: &["unwritten", "pad_rows"],

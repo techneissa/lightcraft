@@ -141,6 +141,7 @@ pub fn rasterize(strokes: &[BrushStroke], frame: &Frame, w: usize, h: usize, img
         }
         stamp(s, frame, img, log_l, &mut out, &mut room);
     }
+    crate::mask_store::store(&mut out);
     if !strokes.is_empty() {
         ctx.cache.entries.push(Entry { base, chain, plane: Arc::new(out.clone()) });
         while ctx.cache.entries.len() > BRUSH_ENTRIES {
