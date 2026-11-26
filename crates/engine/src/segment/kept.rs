@@ -188,19 +188,19 @@ mod tests {
     }
 
     /// Photo `id` with a Person mask (its stored selection `seg`) and a brush mask; the Person mask is selected.
-    fn with_a_person_mask(s: &mut crate::Session) -> (lightcraft_catalog::PhotoId, u32, lightcraft_develop::SegMask) {
+    fn with_a_person_mask(s: &mut crate::Session) -> Option<(lightcraft_catalog::PhotoId, u32, lightcraft_develop::SegMask)> {
         use lightcraft_develop::{Mask, MaskComponent, MaskOp, MaskShape, SegMask};
-        let id = s.active().unwrap();
-        s.execute("mask.add", &json!({"kind": "brush"})).unwrap();
+        let id = s.active()?;
+        s.execute("mask.add", &json!({"kind": "brush"})).ok()?;
         let seg = SegMask::from_logits(4, &[3.0; 16]);
-        let mut d = (*s.develop_of(id).unwrap()).clone();
+        let mut d = (*s.develop_of(id)?).clone();
         let person = d.masks.iter().map(|m| m.id).max().unwrap_or(0) + 1;
         let shape = MaskShape::People { person: 0, parts: vec!["person".into()], face: None, seg: Some(seg.clone()), detail: Vec::new(), edge: 0.0 };
         let part = MaskComponent { name: None, op: MaskOp::Add, invert: false, shape };
         d.masks.push(Mask { id: person, name: "Person".into(), components: vec![part], ..Mask::default() });
-        s.apply_silent(lightcraft_catalog::Op::SetDevelop { id, settings: std::sync::Arc::new(d), label: "Masks".into(), edited: None }).unwrap();
-        s.execute("mask.select", &json!({"id": person})).unwrap();
-        (id, person, seg)
+        s.apply_silent(lightcraft_catalog::Op::SetDevelop { id, settings: std::sync::Arc::new(d), label: "Masks".into(), edited: None }).ok()?;
+        s.execute("mask.select", &json!({"id": person})).ok()?;
+        Some((id, person, seg))
     }
 
     /// Issue #407: a Person mask on the open photo holds BiRefNet Matting (its hair edge) while masking; the review found
@@ -208,7 +208,7 @@ mod tests {
     #[test]
     fn a_person_mask_holds_birefnet_matting() {
         let mut s = crate::Session::with_demo();
-        let (id, ..) = with_a_person_mask(&mut s);
+        let (id, ..) = with_a_person_mask(&mut s).unwrap();
         let models = s.mask_models_on(id);
         assert!(models.matting && !models.sam3, "{models:?}");
         s.keep_mask_models(models);
@@ -227,7 +227,7 @@ mod tests {
         };
         let mut s = crate::Session::with_demo();
         s.hair_edges.set_paths(Some(models), None);
-        let (id, person, seg) = with_a_person_mask(&mut s);
+        let (id, person, seg) = with_a_person_mask(&mut s).unwrap();
         s.keep_mask_models(s.mask_models_on(id));
         let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         s.hair_edges.matte(&[128; 64 * 64 * 3], 64, 64, &cancel).unwrap();
