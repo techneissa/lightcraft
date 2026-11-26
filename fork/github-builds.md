@@ -32,12 +32,16 @@ craft-fonts commit, Rust install and cache as `ci.yml`; it reads the packages an
   run, which needs an adapter the runners lack.
 - **The ten jobs** each run `cargo test -p …` for a group of crates, balanced by an estimated time per crate
   (seconds on a runner: its tests plus its lines of Rust over 200, times 0.1; `WEIGHT_OVERRIDES`, `ONEOFF_WEIGHT` and
-  `HEIF_WEIGHT` in `fork/affected.py` hold measured values). `lightcraft-ui-egui`'s tests take about 24 minutes
-  (2438 lib tests), so they are split over the last five jobs (`SHARDS`), one shard each and nothing else: each runs
-  every fifth test of each of the crate's test binaries, by exact name (`FORK_TEST_SHARD`, read by
-  `fork/skip-known-failures.sh`), and the first also runs its doc tests. The other crates share the first five jobs.
-  Compiling is most of a job's time (6 to 8 minutes, and every shard compiles the crate), so a crate next to a shard
-  makes that job the slowest, and more shards buy little.
+  `HEIF_WEIGHT` in `fork/affected.py` hold measured values). `lightcraft-ui-egui`'s tests take 24 to 41 minutes on one
+  machine (about 2800 lib tests), so they are split over the last six jobs (`SHARDS`), one shard each and nothing
+  else: each runs every sixth test of each of the crate's test binaries, by exact name (`FORK_TEST_SHARD`, read by
+  `fork/skip-known-failures.sh`), and the first also runs its doc tests. Group 1 runs the one-off steps, the engine has
+  group 2, and the other crates share groups 3 and 4. Every shard compiles the crate's test binary (5 to 6 minutes):
+  the shared gate caches dependencies and the workspace libraries, but no test binary.
+- **The split needs the runner to recognise a test binary** by where cargo puts it. Rust 1.100 moved test binaries to
+  `target/debug/build/<crate>/<hash>/out/`, and until 2026-11-26 every shard ran the whole crate, which made Fork CI
+  38 to 50 minutes (#386). A group with a shard now fails (step `sharded`) when the runner split nothing, and
+  `python3 -I fork/coverage.py` shows that a change to the split still tests everything once.
   The number of jobs is `GROUPS` in `fork/affected.py` and the matrix in `fork-ci.yml`; a test keeps them equal.
   Group 1 also runs the one-off steps: format, clippy `-D warnings --all-targets` on the tested
   crates, `cargo xtask layers` and `assets`, `parity` when the tracker docs, a command or control crate
@@ -52,7 +56,8 @@ craft-fonts commit, Rust install and cache as `ci.yml`; it reads the packages an
   runner on Linux (`.cargo/config.toml`), so a red run is a new failure.
 
 On this Mac: `git diff --name-only mine/custom | python3 -I fork/affected.py --summary` shows the plan,
-`sh fork/ci.sh --part 1/10 --print` the commands, `python3 fork/test_affected.py` the script's tests. Nothing else of
+`sh fork/ci.sh --part 1/10 --print` the commands, `python3 fork/test_affected.py` the script's tests,
+`python3 -I fork/coverage.py` the comparison with `mine/custom`. Nothing else of
 `fork/ci.sh` runs here. A run by hand (Actions ▸ Fork CI ▸ Run workflow) on `custom` also saves the dependency cache
 that pull requests then restore; other runs only read it.
 

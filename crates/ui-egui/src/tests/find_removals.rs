@@ -93,7 +93,8 @@ fn the_search_buttons_are_in_the_remove_panel() {
     h.settle(Duration::from_secs(10));
     // Find Wires runs on the demo photo and finds nothing in it; the button works and the app does not break
     click(&mut h, "button:findWires");
-    for _ in 0..400 {
+    let until = std::time::Instant::now() + crate::headless::HANG;
+    while std::time::Instant::now() < until {
         if h.app.session.finds.view(h.app.session.active()).running.is_empty() {
             break;
         }

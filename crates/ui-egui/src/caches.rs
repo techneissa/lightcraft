@@ -502,7 +502,7 @@ mod cache_tests {
             if c.album_recount.is_none() {
                 return shown;
             }
-            assert!(t0.elapsed() < std::time::Duration::from_secs(30), "the count is done");
+            assert!(t0.elapsed() < crate::headless::HANG, "the count is done");
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
     }
@@ -613,7 +613,7 @@ mod cache_tests {
         // done counting is said whether or not a frame has taken the count yet (a folded Albums section takes none)
         let t0 = std::time::Instant::now();
         while c.album_recount_running() {
-            assert!(t0.elapsed() < std::time::Duration::from_secs(30), "the count ends");
+            assert!(t0.elapsed() < crate::headless::HANG, "the count ends");
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
         // a photo rated meanwhile: followed from what the count finds

@@ -463,15 +463,6 @@ pub fn panel(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         if r.clicked() {
             let _ = app.run("reflection.reset", json!({}));
         }
-        ui.add_space(10.0);
-        ui.add(
-            egui::Label::new(
-                egui::RichText::new(tr("Local AI · experimental. Start gently and compare clouds and fine details."))
-                    .size(11.0)
-                    .color(crate::theme::Tokens::get(ui.ctx()).text_dim),
-            )
-            .wrap(),
-        );
     });
 }
 /// The Download button, and the question it asks first: nothing is fetched until the second click.
@@ -558,7 +549,6 @@ mod tests {
             "Detail Protection",
             "Limit to area",
             "Percent of the original image, before crop or rotation. Outside this area stays unchanged.",
-            "Local AI · experimental. Start gently and compare clouds and fine details.",
             "Wait for reflection removal to finish",
             "Reflection removal requires the desktop app",
             "The photo changed; calculate reflections again",

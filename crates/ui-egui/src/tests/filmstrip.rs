@@ -44,18 +44,18 @@ fn filmstrip_stack_badge_expands_and_collapses_the_stack() {
     assert_eq!(r["ok"], true, "{r}");
     let r = h.request("ui.set", json!({"view": "detail"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    assert!(h.settle(SETTLE), "the filmstrip settles before clicking its stack badge");
+    assert!(h.settle(crate::headless::HANG), "the filmstrip settles before clicking its stack badge");
     assert!(!h.app.session.visible_cloned().contains(&member), "collapsed: only the top shows");
     let badge = format!("filmstack:{}", top.0);
     let r = h.request("ui.clickWidget", json!({"id": badge}), T);
     assert_eq!(r["ok"], true, "{r}");
-    assert!(h.settle(SETTLE), "the expanded stack settles");
+    assert!(h.settle(crate::headless::HANG), "the expanded stack settles");
     assert!(!h.app.session.catalog.stack(StackId(1)).unwrap().collapsed, "a click on the badge expands the stack");
     assert!(h.app.session.visible_cloned().contains(&member));
     assert_eq!(h.app.session.selection.active, Some(loose), "the loupe keeps its photo");
     let r = h.request("ui.clickWidget", json!({"id": badge}), T);
     assert_eq!(r["ok"], true, "{r}");
-    assert!(h.settle(SETTLE), "the collapsed stack settles");
+    assert!(h.settle(crate::headless::HANG), "the collapsed stack settles");
     assert!(h.app.session.catalog.stack(StackId(1)).unwrap().collapsed, "a second click collapses it");
     assert!(!h.app.session.visible_cloned().contains(&member));
 }

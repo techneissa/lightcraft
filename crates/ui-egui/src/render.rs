@@ -2557,7 +2557,7 @@ mod color_image_tests {
                 Renderer::run_for(|| result, &None)
             }),
         );
-        rx.recv_timeout(std::time::Duration::from_secs(10)).expect("a finished job wakes the window");
+        rx.recv_timeout(crate::headless::HANG).expect("a finished job wakes the window");
         assert!(r.pending_poll() >= std::time::Duration::from_millis(100), "{:?}", r.pending_poll());
         r.set_offload(Box::new(NoWork));
         assert!(r.pending_poll() <= std::time::Duration::from_millis(16), "an offload has no wake-up: polled per frame");
@@ -2597,7 +2597,7 @@ mod color_image_tests {
             };
             r.pool.submit_or(slot, key, 1, job, Renderer::panicked(result(key, id)));
             let t0 = std::time::Instant::now();
-            while r.pending.contains_key(&slot) && t0.elapsed() < std::time::Duration::from_secs(10) {
+            while r.pending.contains_key(&slot) && t0.elapsed() < crate::headless::HANG {
                 r.poll(&ctx, session);
                 std::thread::sleep(std::time::Duration::from_millis(2));
             }
@@ -2646,7 +2646,7 @@ mod color_image_tests {
             r.pending.insert(Slot::Main, (key, 100));
             r.pool.submit(Slot::Main, key, 100, job(key, id, ms));
             let t0 = std::time::Instant::now();
-            while r.pending.contains_key(&Slot::Main) && t0.elapsed() < std::time::Duration::from_secs(10) {
+            while r.pending.contains_key(&Slot::Main) && t0.elapsed() < crate::headless::HANG {
                 r.poll(&ctx, &mut session);
                 std::thread::sleep(std::time::Duration::from_millis(2));
             }

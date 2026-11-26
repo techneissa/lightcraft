@@ -645,6 +645,38 @@ pub struct Plan<'a> {
     pub spots_after_wb: bool,
     /// Fork (issue #288, `fork/relight.md`): Relight's light over the photo ([`relight::lit`]); `None` while it is off.
     pub relight: Option<relight::Lit>,
+    /// The keys of the linear stage a full-quality render of this plan has ([`Self::lin_key`] and the rest are a draft's
+    /// own: they differ while a LaMa spot is drawn). A draft may take a full render's image (issue #372).
+    pub full_keys: LinKeys,
+    /// Of a whole-frame render ([`None`] for a window): the key of [`Self::full_keys`]' linear image at any output size,
+    /// so a draft at another size can be made from the one a full render kept (issue #372).
+    pub shape: Option<u64>,
+}
+
+/// The keys of a render's linear stage ([`Plan::lin_key`], [`Plan::edge_lin_key`], [`Plan::pre_nr_key`],
+/// [`Plan::pre_retouch_key`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LinKeys {
+    pub lin: u64,
+    pub edge_lin: u64,
+    pub pre_nr: u64,
+    pub pre_retouch: u64,
+}
+
+impl LinKeys {
+    /// The keys of an image made from this one's for a draft alone (issue #372: resampled from another size), never
+    /// taken by a full render.
+    pub fn for_draft(self) -> LinKeys {
+        let k = |v: u64| hash_of(("draft from another size", v));
+        LinKeys { lin: k(self.lin), edge_lin: k(self.edge_lin), pre_nr: k(self.pre_nr), pre_retouch: k(self.pre_retouch) }
+    }
+}
+
+impl Plan<'_> {
+    /// Render with the linear stage `k` names (a draft taking a full render's image, or one made for drafts).
+    pub fn use_keys(&mut self, k: LinKeys) {
+        (self.lin_key, self.edge_lin_key, self.pre_nr_key, self.pre_retouch_key) = (k.lin, k.edge_lin, k.pre_nr, k.pre_retouch);
+    }
 }
 
 /// The original's long edge in pixels (an original reported smaller than the source is the source).
@@ -755,15 +787,7 @@ pub fn plan_kept<'a>(
         spots_at.store = Some(store.clone());
         // (the source's fingerprint keeps photos apart: views share the store)
         let source = spots_scale::fingerprint(src);
-        let at_scale = spots_scale::key(
-            info,
-            s,
-            &frame,
-            (full_w, full_h),
-            px_per_long,
-            (src_long, native_long),
-            (req.quality == Quality::Draft, spots_after_wb),
-        );
+        let at_scale = spots_scale::key(info, s, &frame, (full_w, full_h), px_per_long, (src_long, native_long), spots_after_wb);
         spots_at.key = hash_of((at_scale, source));
         if s.spots.iter().any(spots_learned::is_learned) {
             spots_at.fill_base = spots_scale::fill_base(source, s, native_long);
@@ -825,36 +849,46 @@ pub fn plan_kept<'a>(
     let (wb_t, wb_tint) = local::effective_wb(info, s);
     let eyes = redeye::resolve(src, &s.red_eye, s.orientation, &frame, w, h, px_per_long);
     let d = &s.detail;
-    let pre_retouch_key = hash_of((
-        geo,
-        [wb_t, wb_tint, info.as_shot_temp, info.as_shot_tint].map(f64::to_bits),
-        format!("{:?}", s.spots),
-        format!("{eyes:?}"),
-        // defringe runs in this stage (and stops when the Optics eye is off)
-        format!("{:?}", s.optics),
-        spots_keep::pre_spot_sections(s),
-        // and the local tone mapping
-        local_tone::enabled(info, s),
-        src_long,
-        // a draft render may show a LaMa spot with the Classic fill; the full render must not reuse that image
-        req.quality == Quality::Draft && s.spots.iter().any(spots_learned::is_learned),
-        // and the size a learned fill sees its crops at
-        s.spots.iter().any(spots_learned::is_learned).then_some(native_long),
-        // and the order of the Classic spots and the white balance (issue #184)
-        spots_after_wb && !s.spots.is_empty(),
-    ));
-    let pre_nr_key = hash_of((pre_retouch_key, retouch_step::key(s, info)));
-    let nr_key = hash_of((
-        [d.nr_luminance, d.nr_detail, d.nr_contrast, d.nr_color, d.nr_color_detail, d.nr_color_smoothness].map(f64::to_bits),
-        detail_scale.to_bits(),
-        // the process picks the colour filter (Update to Current Process, undo)
-        local::joint_colour_nr(s),
-        // and the lens blur, which runs right after noise reduction (in the image both `lin_key` and `edge_lin_key`
-        // name; left out of `pre_retouch_key`, so a Lens Blur slider keeps the image before the retouching)
-        lens_blur::key(s),
-    ));
-    let lin_key = hash_of((pre_nr_key, nr_key));
-    let edge_lin_key = hash_of((pre_retouch_key, nr_key));
+    let learned = s.spots.iter().any(spots_learned::is_learned);
+    // the keys of the linear stage for the image `place` names (the frame and size, or for `shape` the frame alone),
+    // with red eye as `eyes` gives it, noise reduction at `nr_scale` and, for `draft_lama`, a draft's LaMa spots
+    let keys = |place: u64, eyes: String, nr_scale: u32, draft_lama: bool| {
+        let pre_retouch_key = hash_of((
+            place,
+            [wb_t, wb_tint, info.as_shot_temp, info.as_shot_tint].map(f64::to_bits),
+            format!("{:?}", s.spots),
+            eyes,
+            // defringe runs in this stage (and stops when the Optics eye is off)
+            format!("{:?}", s.optics),
+            spots_keep::pre_spot_sections(s),
+            // and the local tone mapping
+            local_tone::enabled(info, s),
+            src_long,
+            // a draft render may show a LaMa spot with the Classic fill; the full render must not reuse that image
+            draft_lama,
+            // and the size a learned fill sees its crops at
+            learned.then_some(native_long),
+            // and the order of the Classic spots and the white balance (issue #184)
+            spots_after_wb && !s.spots.is_empty(),
+        ));
+        let pre_nr_key = hash_of((pre_retouch_key, retouch_step::key(s, info)));
+        let nr_key = hash_of((
+            [d.nr_luminance, d.nr_detail, d.nr_contrast, d.nr_color, d.nr_color_detail, d.nr_color_smoothness].map(f64::to_bits),
+            nr_scale,
+            // the process picks the colour filter (Update to Current Process, undo)
+            local::joint_colour_nr(s),
+            // and the lens blur, which runs right after noise reduction (in the image both `lin_key` and `edge_lin_key`
+            // name; left out of `pre_retouch_key`, so a Lens Blur slider keeps the image before the retouching)
+            lens_blur::key(s),
+        ));
+        LinKeys { lin: hash_of((pre_nr_key, nr_key)), edge_lin: hash_of((pre_retouch_key, nr_key)), pre_nr: pre_nr_key, pre_retouch: pre_retouch_key }
+    };
+    let draft = req.quality == Quality::Draft;
+    let LinKeys { lin: lin_key, edge_lin: edge_lin_key, pre_nr: pre_nr_key, pre_retouch: pre_retouch_key } =
+        keys(geo, format!("{eyes:?}"), detail_scale.to_bits(), draft && learned);
+    let full_keys = keys(geo, format!("{eyes:?}"), detail_scale.to_bits(), false);
+    // (issue #372: the whole frame at any size, so a draft can tell the image a full render kept at another size)
+    let shape = (req.window.is_none()).then(|| keys(hash_of(("shape", format!("{:?}", full.0))), format!("{:?}", s.red_eye), 0, false).lin);
     // (the noise model leaves the retouching out: a Portrait slider never measures it again; but whether a one-tile
     // frame is measured apart from the retouching, `colour_noise`, is part of it)
     // (issue #176: and it leaves the spots, red eye and the window out, as [`colour_noise`] does: it measures tiles of the
@@ -897,6 +931,8 @@ pub fn plan_kept<'a>(
         edge_lin_key,
         pre_nr_key,
         pre_retouch_key,
+        full_keys,
+        shape,
         noise_key,
         eyes,
         fixed_air,

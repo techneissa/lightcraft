@@ -142,7 +142,7 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
                 if app.ui.settings.film_badges
                     && let Some(ph) = app.session.catalog.photo(*id)
                 {
-                    film_badges(p, &t, lay.bar, ph);
+                    film_badges(p, &t, lay.bar, cr, ph);
                 }
                 if let Some(st) = app.session.catalog.stack_of(*id) {
                     let collapsed = st.collapsed;
@@ -218,15 +218,18 @@ pub(crate) fn film_spoken(file_name: &str, failed: bool) -> String {
     }
 }
 
-/// Rating, flag and edited badges in the cell's `bar` (Settings → Interface).
-fn film_badges(p: &egui::Painter, t: &Tokens, bar: Rect, ph: &lightcraft_catalog::Photo) {
+/// Rating, flag and edited badges in the cell's `bar` (Settings → Interface). The shade behind them spans the whole
+/// cell (`cell`) so they read on a light photo; the badges keep the bar's place, inside the photo's margins.
+fn film_badges(p: &egui::Painter, t: &Tokens, bar: Rect, cell: Rect, ph: &lightcraft_catalog::Photo) {
     use crate::icons::{Icon, paint};
     use lightcraft_catalog::Flag;
     let edited = ph.is_edited();
     if ph.rating == 0 && ph.flag == Flag::None && !edited {
         return;
     }
-    p.rect_filled(bar, super::film_bar::BAR_ROUNDING, Color32::from_black_alpha(130));
+    // (a point short of each edge, so neighbouring cells' shades don't run together)
+    let shade = Rect::from_x_y_ranges(cell.x_range().shrink(1.0), bar.y_range());
+    p.rect_filled(shade, super::film_bar::BAR_ROUNDING, Color32::from_black_alpha(130));
     let y = bar.center().y;
     let mut x = bar.left() + 3.0;
     x += crate::rating::paint_rating(p, pos2(x, y), ph.rating, crate::rating::RatingSize::Small, t.star) + 2.0;

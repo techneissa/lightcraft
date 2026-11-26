@@ -177,7 +177,8 @@ fn zoom_and_pan_save_a_crop_per_cell_as_one_undo_step() {
     }
     h.settle(T);
     // (the zoom settles, then saves once)
-    for _ in 0..40 {
+    let until = std::time::Instant::now() + crate::headless::HANG;
+    while std::time::Instant::now() < until {
         if book(&h).pages[1].crop(0).is_some() {
             break;
         }

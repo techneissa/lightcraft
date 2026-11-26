@@ -38,7 +38,7 @@ fn the_frame_loop_lands_queued_sidecar_writes_and_quit_drains_them() {
     h.app.session.execute("library.select", &json!({"ids": ids})).unwrap();
     let r = h.request("engine.execute", json!({"command": "photo.rate", "params": {"rating": 4}}), T);
     assert_eq!(r["ok"], true, "{r}");
-    assert!(h.settle(T), "the frames run until the queue is empty");
+    assert!(h.settle(crate::headless::HANG), "the frames run until the queue is empty");
     assert!((1..=n).all(|i| rating(&dir.join(format!("IMG_{i}.xmp"))).as_deref() == Some("4")));
     assert_eq!((h.app.session.sidecar_writes_pending(), h.app.session.unsaved_sidecars()), (0, 0));
     assert!(!h.app.session.activity.list().iter().any(|t| t.kind == "xmp"), "the row is gone");

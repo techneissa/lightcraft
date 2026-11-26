@@ -216,7 +216,7 @@ mod tests {
             h.app.run("develop.hdr", json!({"enabled": on})).expect("develop.hdr");
             let (t0, mut trail) = (Instant::now(), Vec::new());
             let mut still = 0;
-            while t0.elapsed() < Duration::from_secs(120) && still < 60 {
+            while t0.elapsed() < crate::headless::HANG && still < 60 {
                 h.step();
                 std::thread::sleep(Duration::from_millis(1));
                 let at = |id| widget(h, id).unwrap_or_else(|| panic!("no widget {id}"));

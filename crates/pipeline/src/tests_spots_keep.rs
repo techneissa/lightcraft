@@ -320,3 +320,66 @@ fn a_spot_does_not_skip_portrait_retouching() {
     let kept = render_cached(&src, &info, &s, &req, &cache).image;
     assert!(kept.data == whole.data, "the cached render with a spot is retouched too");
 }
+
+/// A LaMa spot's fill in these tests: the hole takes a flat grey.
+struct FlatFill;
+
+impl crate::learned_fill::LearnedFill for FlatFill {
+    fn fill(&self, _: &crate::learned_fill::FillRun, rgb: &[f32], hole: &[f32], _: usize, _: usize, _: bool) -> Option<Arc<Vec<f32>>> {
+        let mut out = rgb.to_vec();
+        for (px, m) in out.as_chunks_mut::<3>().0.iter_mut().zip(hole) {
+            if *m > 0.0 {
+                *px = [0.2; 3];
+            }
+        }
+        Some(Arc::new(out))
+    }
+}
+
+/// Runs `f` with `fill` as the learned fill (the installed one is process-wide: tests take turns).
+fn with_fill<T>(fill: Option<Arc<dyn crate::learned_fill::LearnedFill>>, f: impl FnOnce() -> T) -> T {
+    let _turn = crate::tests_learned_fill::TURN.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    crate::learned_fill::install(fill);
+    let out = f();
+    crate::learned_fill::install(None);
+    out
+}
+
+fn lama(x: f64, y: f64) -> Spot {
+    Spot { fill: lightcraft_develop::SpotFill::Lama, ..spot(SpotMode::Remove, x, y, None) }
+}
+
+/// Issue #372: with a LaMa spot on the photo, adding a Heal spot drew every Classic spot again (their key held a flag
+/// per spot, and one more spot changed it): seconds with Content-Aware spots on a large photo.
+#[test]
+fn a_spot_added_beside_a_lama_spot_draws_only_itself() {
+    with_fill(None, || {
+        let (src, cache) = (scene(), StageCache::default());
+        let mut s = DevelopSettings { spots: grid(12), ..Default::default() };
+        s.spots.push(lama(0.5, 0.85));
+        assert_eq!(edit(&cache, &src, &s), (13, true), "the first render draws them all (the LaMa spot with the Classic fill: no model)");
+        s.spots.push(spot(SpotMode::Heal, 0.2, 0.92, Some((0.05, -0.03))));
+        assert_eq!(edit(&cache, &src, &s), (1, true), "the new spot alone");
+    });
+}
+
+/// Issue #372: a LaMa spot added, moved or deleted changes the image under the Classic spots only in its box: only the
+/// Classic spots that read it are drawn again, with the result of drawing every spot.
+#[test]
+fn a_lama_spot_redraws_only_the_classic_spots_it_reaches() {
+    with_fill(Some(Arc::new(FlatFill)), || {
+        let (src, cache) = (scene(), StageCache::default());
+        let mut s = DevelopSettings { spots: grid(24), ..Default::default() };
+        assert_eq!(edit(&cache, &src, &s), (24, true));
+        s.spots.push(lama(0.5, 0.9));
+        assert_eq!(edit(&cache, &src, &s), (0, true), "a LaMa spot apart from the others draws none of them");
+        let last = s.spots.len() - 1;
+        // (onto the grid's first row: the spots there read it)
+        s.spots[last].points[0] = Point::new(0.125, 0.16);
+        let (drawn, same) = edit(&cache, &src, &s);
+        assert!(same && (1..24).contains(&drawn), "moved under a spot: that spot and those reading it, not all ({drawn})");
+        s.spots.remove(last);
+        let (drawn, same) = edit(&cache, &src, &s);
+        assert!(same && (1..24).contains(&drawn), "deleted: the spots it reached ({drawn})");
+    });
+}

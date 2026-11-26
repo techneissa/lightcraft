@@ -13,7 +13,6 @@ use lightcraft_engine::RenderJob;
 use lightcraft_engine::media::RenderResult;
 
 const T: Duration = Duration::from_secs(20);
-const SETTLE: Duration = Duration::from_secs(120);
 
 /// Runs each render on the test's thread when it is asked for, so the pipeline's per-thread counts of masks built and
 /// spots drawn are this test's.
@@ -44,7 +43,7 @@ fn work() -> (usize, usize) {
 
 fn view(h: &mut Headless, zoom: serde_json::Value, pan: [f32; 2]) {
     exec(h, "view.navigate", json!({"zoom": zoom, "pan": pan}));
-    assert!(h.settle(SETTLE), "the view settles");
+    assert!(h.settle(crate::headless::HANG), "the view settles");
 }
 
 // Given a 24 MP photo with a brush, a linear and a radial mask and ten spots (Heal, Clone and Fill), zoomed to 100 %
@@ -52,6 +51,9 @@ fn view(h: &mut Headless, zoom: serde_json::Value, pan: [f32; 2]) {
 // again, then no mask is built again and no spot is drawn again: each view reuses the window already rendered
 #[test]
 fn zooming_and_panning_a_photo_with_masks_and_spots_redoes_none_of_them() {
+    // (tests beside it switch GPU rendering on and off for the whole process, `app.gpu`: renders here keep one
+    // renderer, whose kept masks and spots are counted)
+    lightcraft_engine::gpu::set_enabled_here(Some(true));
     let fixture = RenderFixture::new("zoom-reuse", 1);
     let app = LightcraftApp::new(fixture.session(), Services { png: None, ..Default::default() });
     let mut h = Headless::new(app, [1400.0, 900.0], 1.0);
@@ -71,7 +73,7 @@ fn zooming_and_panning_a_photo_with_masks_and_spots_redoes_none_of_them() {
     }
     let d = h.app.session.develop_of(h.app.session.active().expect("a photo")).expect("settings");
     assert_eq!((d.masks.len(), d.spots.len()), (3, 10));
-    assert!(h.settle(SETTLE), "Fit settles");
+    assert!(h.settle(crate::headless::HANG), "Fit settles");
     view(&mut h, json!({"percent": 100}), [0.5, 0.5]);
     assert!(h.app.region_view.is_some(), "a window at 100 %");
     let first = work();
@@ -96,7 +98,7 @@ fn zooming_and_panning_a_photo_with_masks_and_spots_redoes_none_of_them() {
     view(&mut h, json!("fit"), [0.52, 0.51]);
     let before = work();
     exec(&mut h, "develop.set", json!({"values": {"light.exposure": 0.3}}));
-    assert!(h.settle(SETTLE), "the edit settles");
+    assert!(h.settle(crate::headless::HANG), "the edit settles");
     assert!(!h.app.renderer.textures.contains_key(&Slot::Region), "the held window's old look is not kept to be shown");
     view(&mut h, json!({"percent": 100}), [0.52, 0.51]);
     let after = work();

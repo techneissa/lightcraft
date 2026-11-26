@@ -104,7 +104,7 @@ mod tests {
         let t0 = std::time::Instant::now();
         while app.macos_job.is_some() {
             super::poll(app, ctx);
-            assert!(t0.elapsed() < std::time::Duration::from_secs(30), "the job ends");
+            assert!(t0.elapsed() < crate::headless::HANG, "the job ends");
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
     }

@@ -167,7 +167,7 @@ fn a_backdrop_press_keeps_the_library_window_above_its_dim() {
     let files = SyntheticLibrary::new("library-backdrop-press");
     let mut h = Headless::new(files.app(), [1000.0, 760.0], 1.0);
     h.app.library_problem = Some(LibraryProblem::new("/no/such/library", "a test error"));
-    assert!(h.settle(Duration::from_secs(20)), "the library window settles (pending slots: {:?})", h.app.renderer.pending_slots());
+    assert!(h.settle(crate::headless::HANG), "the library window settles (pending slots: {:?})", h.app.renderer.pending_slots());
     assert!(has(&h, "button:libraryTemporary"), "the window is laid out");
     // Outside the centred window: on the full-screen dim, which egui raises when pressed.
     let at = egui::pos2(10.0, 10.0);
@@ -194,10 +194,10 @@ fn the_library_window_blocks_settings_escape_and_the_backdrop() {
     let mut h = Headless::new(files.app(), [1200.0, 900.0], 1.0);
     h.step();
     assert!(h.app.run("app.settings", json!({})).is_ok(), "Settings opens");
-    assert!(h.settle(Duration::from_secs(20)), "Settings settles (pending slots: {:?})", h.app.renderer.pending_slots());
+    assert!(h.settle(crate::headless::HANG), "Settings settles (pending slots: {:?})", h.app.renderer.pending_slots());
     h.app.ui.settings.close_dialogs_outside = true;
     h.app.library_problem = Some(LibraryProblem::new("/no/such/library", "a test error"));
-    assert!(h.settle(Duration::from_secs(20)), "the library window settles (pending slots: {:?})", h.app.renderer.pending_slots());
+    assert!(h.settle(crate::headless::HANG), "the library window settles (pending slots: {:?})", h.app.renderer.pending_slots());
     assert!(has(&h, "button:libraryRetry"), "the library window is laid out");
     // Escape belongs to the window, not to Settings behind it (the window has no Escape action
     // for this error; the launch list handles its own keys separately).
@@ -388,7 +388,7 @@ fn a_held_background_press_is_released_when_a_library_window_appears_after_raw_i
     let mut h = Headless::new(files.app(), [1200.0, 900.0], 1.0);
     h.step();
     assert!(h.app.run("app.settings", json!({})).is_ok(), "Settings opens");
-    assert!(h.settle(T), "Settings settles (pending slots: {:?})", h.app.renderer.pending_slots());
+    assert!(h.settle(crate::headless::HANG), "Settings settles (pending slots: {:?})", h.app.renderer.pending_slots());
     let id = "check:settings.confirmDelete";
     let at = h.app.widgets.iter().rev().find(|(widget, _)| widget == id).map(|(_, rect)| rect.center()).expect("the checkbox is on screen");
     let before = h.app.ui.settings.confirm_delete;
@@ -742,7 +742,7 @@ fn a_settled_library_window_keeps_a_background_dialogs_text_draft_unchanged() {
     }
     assert!(h.view.ctx.text_edit_focused(), "the dialog's field takes the focus while it is the top modal");
     h.app.library_problem = Some(LibraryProblem::new("/no/such/library", "a test error"));
-    assert!(h.settle(T), "the library window settles over the dialog (pending slots: {:?})", h.app.renderer.pending_slots());
+    assert!(h.settle(crate::headless::HANG), "the library window settles over the dialog (pending slots: {:?})", h.app.renderer.pending_slots());
     assert!(has(&h, "button:libraryRetry"), "the library window is laid out");
     assert!(crate::panels::library_problem::blocks_dialog_input(&h.app), "the library window owns input");
     assert!(!h.view.ctx.text_edit_focused(), "the background dialog's field must not regain the focus behind the library window");
@@ -758,7 +758,11 @@ fn a_settled_library_window_keeps_a_background_dialogs_text_draft_unchanged() {
     assert!(!h.view.ctx.text_edit_focused(), "several settled barrier frames still leave the field unfocused");
     // Positive control: with the library window gone, the same field takes focus and typing again.
     h.app.library_problem = None;
-    assert!(h.settle(T), "the dialog settles once the library window is gone (pending slots: {:?})", h.app.renderer.pending_slots());
+    assert!(
+        h.settle(crate::headless::HANG),
+        "the dialog settles once the library window is gone (pending slots: {:?})",
+        h.app.renderer.pending_slots()
+    );
     assert!(!crate::panels::library_problem::blocks_dialog_input(&h.app), "there is no barrier now");
     assert!(h.view.ctx.text_edit_focused(), "the dialog's field is usable again");
     h.events.push(egui::Event::Text("Holiday".into()));
@@ -860,7 +864,7 @@ fn waiting_files_wait_for_a_running_import_instead_of_being_dropped() {
     // file to a new import (once the first one ends) leaves that import unlisted until its own
     // first tick, and quitting right then still asks
     let t0 = std::time::Instant::now();
-    while !h.app.waiting_import.files.is_empty() && t0.elapsed() < T {
+    while !h.app.waiting_import.files.is_empty() && t0.elapsed() < crate::headless::HANG {
         let ctx = h.view.ctx.clone();
         h.app.logic(&ctx);
         std::thread::sleep(Duration::from_millis(2));
@@ -869,7 +873,7 @@ fn waiting_files_wait_for_a_running_import_instead_of_being_dropped() {
     assert!(h.app.import.as_ref().is_some_and(|t| !t.listed()), "not listed before its first tick");
     assert!(!crate::panels::notices::may_close(&mut h.app), "quitting asks about the import just handed over");
     h.app.quit_prompt = None;
-    while !(h.app.import.is_none() && h.app.session.catalog.len() == 101) && t0.elapsed() < T {
+    while !(h.app.import.is_none() && h.app.session.catalog.len() == 101) && t0.elapsed() < crate::headless::HANG {
         let ctx = h.view.ctx.clone();
         h.app.logic(&ctx);
         std::thread::sleep(Duration::from_millis(2));

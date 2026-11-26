@@ -54,8 +54,8 @@ jobs:
           echo "fonts=$fonts" >> "$GITHUB_OUTPUT"
 
   # Ten machines at once (free for a public repo; techneissa, 2026-11-05): ui-egui's tests split over the last
-  # five (SHARDS in fork/affected.py), the other crates over the first five. Group 1 also runs fmt, clippy, layers, assets, parity
-  # and wasm.
+  # six (SHARDS in fork/affected.py), the other crates over groups 2 to 4. Group 1 runs fmt, clippy, layers, assets,
+  # parity and wasm.
   gate:
     needs: pins
     strategy:

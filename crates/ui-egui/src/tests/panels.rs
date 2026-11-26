@@ -2060,7 +2060,7 @@ fn settling_waits_for_the_missing_photos_count() {
     assert_eq!(widget(&h, "source:libfolder:/lc-missing-count/trip"), settled, "nothing moves the folder rows after settling");
     // the timed refresh of a slow count is not waited for: the fast simulated clock would start
     // the next one before the last finished, and settling would never end
-    assert!(h.settle(Duration::from_secs(30)), "the sidebar settles while a slow count refreshes");
+    assert!(h.settle(crate::headless::HANG), "the sidebar settles while a slow count refreshes");
 }
 
 /// A catalog change while a slow timed refresh of the count runs: its recount starts only when
@@ -2082,7 +2082,7 @@ fn settling_waits_for_a_recount_owed_during_a_timed_refresh() {
     let id = h.app.session.catalog.alloc_photo_id();
     let gone = Photo::new(id, Source::File { path: "/lc-missing-owed/gone.jpg".into() }, "gone.jpg", "JPEG", 60, 40, "2026-01-01T10:00:00");
     h.app.session.catalog.apply(Op::AddPhoto { photo: Box::new(gone) }).unwrap();
-    assert!(h.settle(Duration::from_secs(30)), "the sidebar settles");
+    assert!(h.settle(crate::headless::HANG), "the sidebar settles");
     assert!(has(&h, "source:missing"), "the Missing Photos row is on screen once the sidebar settled");
     let _ = std::fs::remove_dir_all(dir);
 }

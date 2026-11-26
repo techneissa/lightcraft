@@ -234,7 +234,8 @@ fn files_app(tag: &str) -> (Headless, PathBuf, Vec<u64>) {
 }
 
 fn finish_task(h: &mut Headless) {
-    for _ in 0..400 {
+    let until = std::time::Instant::now() + crate::headless::HANG;
+    while std::time::Instant::now() < until {
         h.step();
         if h.app.rename_task.is_none() {
             return;
