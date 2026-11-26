@@ -74,25 +74,33 @@ PARITY_PACKAGES = {"lightcraft-engine", "lightcraft-develop", "lightcraft-ui-egu
 PARITY_DOCS = {"docs/parity-checklist.md", "docs/gaps.md"}
 HEIF_PACKAGES = {"lightcraft-codecs", "lightcraft-heif-depth"}
 
-# Weights are seconds on a GitHub runner (measured on PR 66's runs). A crate's test time is guessed from its size
-# (a test counts 1, 200 lines of Rust count 1, times SECONDS_PER_UNIT: the engine's 1830 tests took 223 s); a crate
-# the guess gets wrong is measured and listed here. ui-egui's 2438 lib tests alone took 1422 s (2026-11-05).
+# Weights are seconds on a GitHub runner. A crate's test time is guessed from its size (a test counts 1, 200 lines
+# of Rust count 1, times SECONDS_PER_UNIT: the engine's 1830 tests took 223 s); a crate the guess gets wrong is
+# measured and listed here (run 45700528162, 2026-11-25: test time of each crate's binaries; the engine's also
+# counts the 226 s its group spent compiling, so that it gets a group to itself).
 SECONDS_PER_UNIT = 0.1
-WEIGHT_OVERRIDES = {"lightcraft-ui-egui": 1500}
+WEIGHT_OVERRIDES = {
+    "lightcraft-ui-egui": 1700,
+    "lightcraft-engine": 500,
+    "lightcraft-retouch": 130,
+    "lightcraft-pipeline": 100,
+    "lightcraft-merge": 36,
+    "lightcraft-look": 28,
+}
 # Crates whose tests are split over several groups: each group runs every Nth test of each of the crate's test
-# binaries (fork/skip-known-failures.sh reads FORK_TEST_SHARD). Without it ui-egui alone held one machine for 32
-# minutes (7.6 of them compiling) while the others finished in 10. A shard gets a group of its own: compiling is
-# most of a group's time (6 to 8 minutes), so a crate put next to a shard costs its compile and doc tests on top
-# (run of 2026-11-05: 20 minutes for those groups, 15 for a shard alone). Each shard still compiles the crate, so
-# more shards than this buy little.
-SHARDS = {"lightcraft-ui-egui": 5}
+# binaries (fork/skip-known-failures.sh reads FORK_TEST_SHARD). ui-egui's tests alone run 24 to 41 minutes. A shard
+# gets a group of its own: each shard compiles the crate's test binary (5 to 6 minutes, which no cache holds), and a
+# crate next to it would add its own compile on top. With six shards a shard takes about as long as the other groups.
+SHARDS = {"lightcraft-ui-egui": 6}
 # Groups (machines) a run uses when --part gives no total; .github/workflows/fork-ci.yml's matrix must match.
 # The shards take the last groups, the other crates and the one-off steps share the first ones.
 GROUPS = 10
-# The heif extras (clippy and tests with the feature) count as a crate for the balance: 139 s warm, 350 s cold.
-HEIF_WEIGHT = 250
-# The one-off steps of group 1 (clippy on the planned crates, layers, assets, parity, wasm): 216 s warm, 750 s cold.
-ONEOFF_WEIGHT = 400
+# The heif extras (clippy and tests with the feature, which build the engine again: 244 s) count as a crate for the
+# balance. The one-off steps of group 1 (clippy on the planned crates, layers, assets, parity, wasm) took 370 s; its
+# weight also counts the 230 s a group with crates spends compiling them, so group 1 gets no crate (both measured in
+# run 45700528162).
+HEIF_WEIGHT = 244
+ONEOFF_WEIGHT = 600
 
 TEST_ATTR = re.compile(r"#\[(?:\w+::)*test\b")
 
