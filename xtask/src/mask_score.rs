@@ -147,21 +147,26 @@ fn size_of(path: &Path) -> u64 {
     std::fs::read_dir(path).map(|d| d.flatten().map(|e| size_of(&e.path())).sum()).unwrap_or(0)
 }
 
-/// The Core ML packages a job's method loads, below the models folder.
-fn packages(job: &str, method: &str) -> &'static [&'static str] {
+/// The Core ML packages a job's method needs, below the models folder.
+fn packages(job: &str, method: &str, models: &Path) -> Vec<&'static str> {
     const BIREFNET: &str = "birefnet/coreml/birefnet.mlpackage";
     const MATTING: &str = "birefnet-matting/coreml/birefnet-matting.mlpackage";
+    const ENCODER: &str = "sam3-coreml/sam3-encoder.mlpackage";
     match (job, method) {
-        (_, "birefnet" | "vision") => &[BIREFNET],
-        (_, "matting") => &[BIREFNET, MATTING],
-        ("click", "sam3") => &["sam3-coreml/sam3-encoder.mlpackage", "sam3-coreml/sam3-clickfeat.mlpackage", "sam3-coreml/sam3-clickdec.mlpackage"],
-        ("sky", "sam3") => &[
-            "sam3-coreml/sam3-encoder.mlpackage",
-            "sam3-coreml/sam3-textfeat.mlpackage",
-            "sam3-coreml/sam3-textscore.mlpackage",
-            "sam3-coreml/sam3-textmask.mlpackage",
-        ],
-        _ => &[],
+        (_, "birefnet" | "vision") => vec![BIREFNET],
+        (_, "matting") => vec![BIREFNET, MATTING],
+        ("click", "sam3") => vec![ENCODER, "sam3-coreml/sam3-clickfeat.mlpackage", "sam3-coreml/sam3-clickdec.mlpackage"],
+        ("sky", "sam3") => {
+            let mut parts = vec![ENCODER, "sam3-coreml/sam3-textfeat.mlpackage", "sam3-coreml/sam3-textmask.mlpackage"];
+            // (the prompt's scorer is one package, or since #437 a text encoder and a detector)
+            if models.join("sam3-coreml/sam3-textdet.mlpackage").is_dir() {
+                parts.extend(["sam3-coreml/sam3-textenc.mlpackage", "sam3-coreml/sam3-textdet.mlpackage"]);
+            } else {
+                parts.push("sam3-coreml/sam3-textscore.mlpackage");
+            }
+            parts
+        }
+        _ => Vec::new(),
     }
 }
 
@@ -170,7 +175,7 @@ fn disk_bytes(job: &str, method: &str) -> Result<u64, String> {
         Some(d) if !d.is_empty() => PathBuf::from(d),
         _ => artcraft()?.join("models"),
     };
-    Ok(packages(job, method).iter().map(|p| size_of(&models.join(p))).sum())
+    Ok(packages(job, method, &models).iter().map(|p| size_of(&models.join(p))).sum())
 }
 
 /// Build the engine example and give its path.
