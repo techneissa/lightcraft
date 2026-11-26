@@ -17,7 +17,7 @@ use crate::{LightcraftApp, Services};
 const T: Duration = Duration::from_secs(60);
 const PHOTOS: u64 = 8;
 /// How long a read waits for a drive that isn't opened (only a hang guard).
-const GUARD: Duration = Duration::from_secs(20);
+const GUARD: Duration = crate::headless::HANG;
 
 /// An app whose photos' files wait for `open` (a slow drive); reads made on the UI thread are counted.
 fn app_on_a_slow_drive() -> (Headless, Arc<AtomicBool>, Arc<AtomicUsize>) {
@@ -61,7 +61,7 @@ fn a_run_from_the_menu_reads_off_the_ui_thread() {
     h.step();
     assert!(h.app.session.catalog.photos().all(|p| p.analysis.is_none()), "nothing filed before the files are read");
     let waited = Instant::now();
-    while rows(&h).first().is_some_and(|r| r.total == 0) && waited.elapsed() < T {
+    while rows(&h).first().is_some_and(|r| r.total == 0) && waited.elapsed() < crate::headless::HANG {
         h.step();
         std::thread::sleep(Duration::from_millis(1));
     }
@@ -84,7 +84,7 @@ fn a_stopped_run_changes_nothing() {
     let (mut h, open, _) = app_on_a_slow_drive();
     h.app.run("photo.analyze", json!({"ids": ids()})).unwrap();
     let waited = Instant::now();
-    while rows(&h).is_empty() && waited.elapsed() < T {
+    while rows(&h).is_empty() && waited.elapsed() < crate::headless::HANG {
         h.step();
     }
     h.app.session.activity.cancel(rows(&h)[0].id).unwrap();
@@ -106,7 +106,7 @@ fn a_control_request_is_answered_when_the_run_ends() {
         if let Ok(v) = rx.try_recv() {
             break v;
         }
-        assert!(t0.elapsed() < T, "never answered");
+        assert!(t0.elapsed() < crate::headless::HANG, "never answered");
         std::thread::sleep(Duration::from_millis(1));
     };
     assert_eq!(answer["result"]["photos"].as_array().map(Vec::len), Some(PHOTOS as usize), "{answer}");

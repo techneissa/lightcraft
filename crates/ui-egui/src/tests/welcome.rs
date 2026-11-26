@@ -114,12 +114,12 @@ fn the_first_frame_opens_the_tour_for_a_window_host_only() {
     // exit while the driver is still initializing, racing driver teardown (issue #620).
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let deadline = std::time::Instant::now() + crate::headless::HANG;
         while !lightcraft_engine::gpu::ready() && lightcraft_engine::gpu::enabled() && std::time::Instant::now() < deadline {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         assert!(lightcraft_engine::gpu::ready() || !lightcraft_engine::gpu::enabled(), "GPU warm-up did not finish");
-        assert!(lightcraft_engine::gpu::wait_idle(std::time::Duration::from_secs(30)), "GPU work did not finish");
+        assert!(lightcraft_engine::gpu::wait_idle(crate::headless::HANG), "GPU work did not finish");
     }
 }
 

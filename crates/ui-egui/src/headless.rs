@@ -269,6 +269,10 @@ impl HeadlessView {
     }
 }
 
+/// How long a test waits before it calls a wait hung: far longer than the busiest CI runner needs. A wait
+/// on it only guards against a hang, so a test never fails because the machine is busy (issue #389).
+pub const HANG: Duration = Duration::from_secs(600);
+
 /// A windowless app session: the app's `logic` + `ui` driven frame by frame into a
 /// [`HeadlessView`], with control-protocol requests answered by the shared handler.
 pub struct Headless {
@@ -448,14 +452,12 @@ impl Headless {
             || !self.events.is_empty()
     }
 
-    /// Run frames until nothing is pending (renders finished, input consumed) for a few frames in
-    /// a row, or `timeout` passes. Returns whether it settled.
     /// Step until every spot asked for in the background has been added with its source (`spot.add` with
-    /// `background`, what the Remove tool sends: issue #97). Whether they were, within 30 s (a hang guard).
+    /// `background`, what the Remove tool sends: issue #97). Whether they were, within [`HANG`].
     pub fn settle_spot_sources(&mut self) -> bool {
         let t0 = Instant::now();
         while self.app.session.spot_sources.pending() > 0 {
-            if t0.elapsed() > Duration::from_secs(30) {
+            if t0.elapsed() > HANG {
                 return false;
             }
             std::thread::sleep(Duration::from_millis(1));
@@ -465,6 +467,9 @@ impl Headless {
         true
     }
 
+    /// Run frames until nothing is pending (renders finished, input consumed) for a few frames in
+    /// a row, or `timeout` passes. Returns whether it settled. A test that asserts the result passes
+    /// [`HANG`]; one that only moves on keeps a short `timeout`, since something may never go quiet.
     pub fn settle(&mut self, timeout: Duration) -> bool {
         let t0 = Instant::now();
         let mut quiet = 0;
@@ -488,7 +493,18 @@ impl Headless {
 
     /// Run frames until `done` holds or `timeout` passes (a render that finishes on a busy machine
     /// after a quiet spell, where [`Self::settle`] alone would stop too early). Returns `done`.
+    ///
+    /// In this crate's tests `timeout` is never shorter than [`HANG`]: the wait ends as soon as `done`
+    /// holds, so only a hang runs it out.
     pub fn step_until(&mut self, timeout: Duration, done: impl Fn(&Self) -> bool) -> bool {
+        #[cfg(test)]
+        let timeout = timeout.max(HANG);
+        self.step_up_to(timeout, done)
+    }
+
+    /// [`Self::step_until`] that gives up after `timeout` itself, in tests too: for a test that then
+    /// tries again (a click that missed), never for one that fails.
+    pub(crate) fn step_up_to(&mut self, timeout: Duration, done: impl Fn(&Self) -> bool) -> bool {
         let t0 = Instant::now();
         while !done(self) {
             if t0.elapsed() > timeout {
@@ -533,7 +549,11 @@ impl Headless {
 
     /// Send a control-protocol request (see [`crate::control`]) and run frames until it is
     /// answered, then until its input has been consumed. Returns `{"ok": …, "result"|"error": …}`.
+    ///
+    /// In this crate's tests `timeout` is never shorter than [`HANG`], as in [`Self::step_until`].
     pub fn request(&mut self, method: &str, params: Value, timeout: Duration) -> Value {
+        #[cfg(test)]
+        let timeout = timeout.max(HANG);
         let rx = match self.send(method, params) {
             Ok(rx) => rx,
             Err(e) => return e,

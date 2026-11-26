@@ -608,7 +608,7 @@ fn slow_checks() -> (
         let (lock, cv) = &*g;
         let open = lock.lock().unwrap();
         // (bounded: a test that forgets to release still ends)
-        let _unused = cv.wait_timeout_while(open, Duration::from_secs(10), |open| !*open).unwrap();
+        let _unused = cv.wait_timeout_while(open, crate::headless::HANG, |open| !*open).unwrap();
         (!Path::new(p).exists()).then_some(crate::panels::library_problem::Unavailable::NotFound)
     });
     (checks, gate, calls)
@@ -747,7 +747,7 @@ fn one_hung_drive_doesnt_hold_the_other_libraries() {
         if p == h_path {
             let (lock, cv) = &*g;
             let open = lock.lock().unwrap();
-            let _unused = cv.wait_timeout_while(open, Duration::from_secs(10), |open| !*open).unwrap();
+            let _unused = cv.wait_timeout_while(open, crate::headless::HANG, |open| !*open).unwrap();
         }
         None
     });
@@ -793,7 +793,7 @@ fn opening_a_library_clears_an_old_missing_answer() {
     app.recent_checks = crate::panels::library_problem::RecentChecks::with_check(|_| Some(crate::panels::library_problem::Unavailable::NotFound));
     let ctx = egui::Context::default();
     crate::panels::library_problem::logic(&mut app, &ctx);
-    assert!(crate::tasks::wait(&mut app, &ctx, T), "checked");
+    assert!(crate::tasks::wait(&mut app, &ctx, crate::headless::HANG), "checked");
     assert_eq!(app.recent_checks.exists(&a), Some(false), "found missing (the drive was disconnected)");
     let mut h = Headless::new(app, [1300.0, 900.0], 1.0);
     h.app.run("app.openLibrary", json!({"path": a})).unwrap();

@@ -1088,7 +1088,7 @@ fn a_click_on_a_control_under_a_nonmodal_overlay_is_refused_without_activating_t
     assert_eq!(h.request("engine.execute", serde_json::json!({"command": "library.select", "params": {"ids": [photo.0]}}), t)["ok"], true);
     assert_eq!(h.request("ui.set", serde_json::json!({"view": "detail", "right": "edit"}), t)["ok"], true);
     h.app.ui.open_sections = vec!["light".to_string()];
-    assert!(h.settle(Duration::from_secs(60)), "the edit panel settles (pending slots: {:?})", h.app.renderer.pending_slots());
+    assert!(h.settle(crate::headless::HANG), "the edit panel settles (pending slots: {:?})", h.app.renderer.pending_slots());
     let id = "slider:light.exposure";
     assert!(h.app.widgets.iter().any(|(widget, _)| widget == id), "{id} is on screen");
     let before = h.app.session.develop_of(photo).expect("its develop settings").light.exposure;
@@ -1126,7 +1126,7 @@ fn an_unobstructed_click_on_a_subrect_reaches_the_widget() {
     let t = Duration::from_secs(20);
     assert_eq!(h.request("engine.execute", serde_json::json!({"command": "library.select", "params": {"ids": [photo.0]}}), t)["ok"], true);
     assert_eq!(h.request("ui.set", serde_json::json!({"view": "detail", "right": "edit"}), t)["ok"], true);
-    assert!(h.settle(Duration::from_secs(60)), "the detail view settles (pending slots: {:?})", h.app.renderer.pending_slots());
+    assert!(h.settle(crate::headless::HANG), "the detail view settles (pending slots: {:?})", h.app.renderer.pending_slots());
     let id = "star:bottom:2";
     assert!(h.app.widgets.iter().any(|(widget, _)| widget == id), "{id} is on screen");
     assert!(h.app.widget_hits.iter().any(|(widget, _)| widget == id), "{id} has a probe");
@@ -1145,7 +1145,7 @@ fn an_overlay_that_appears_after_the_press_cancels_the_release() {
     h.step();
     let t = Duration::from_secs(20);
     assert_eq!(h.request("ui.key", serde_json::json!({"key": ",", "cmd": true}), t)["ok"], true);
-    assert!(h.settle(Duration::from_secs(60)), "the Settings dialog settles (pending slots: {:?})", h.app.renderer.pending_slots());
+    assert!(h.settle(crate::headless::HANG), "the Settings dialog settles (pending slots: {:?})", h.app.renderer.pending_slots());
     let id = "check:settings.confirmDelete";
     let target = h.app.widgets.iter().rev().find(|(widget, _)| widget == id).map(|(_, rect)| *rect).expect("the checkbox is on screen");
     let before = h.app.ui.settings.confirm_delete;
@@ -1179,7 +1179,7 @@ fn an_overlay_that_appears_after_the_press_cancels_the_release() {
     assert!(h.app.quit_prompt.is_some(), "the prompt was not activated");
     // Remove the overlay: the same target is clickable again (a positive control after refusal).
     h.app.quit_prompt = None;
-    assert!(h.settle(Duration::from_secs(60)), "the Settings dialog settles after the overlay");
+    assert!(h.settle(crate::headless::HANG), "the Settings dialog settles after the overlay");
     let r = h.request("ui.clickWidget", serde_json::json!({"id": id}), t);
     assert_eq!(r["ok"], true, "{r}");
     h.step();
@@ -1197,7 +1197,7 @@ fn canceling_a_pressed_slider_releases_it_without_dragging_it() {
     assert_eq!(h.request("engine.execute", serde_json::json!({"command": "library.select", "params": {"ids": [photo.0]}}), t)["ok"], true);
     assert_eq!(h.request("ui.set", serde_json::json!({"view": "detail", "right": "edit"}), t)["ok"], true);
     h.app.ui.open_sections = vec!["light".to_string()];
-    assert!(h.settle(Duration::from_secs(60)), "the edit panel settles (pending slots: {:?})", h.app.renderer.pending_slots());
+    assert!(h.settle(crate::headless::HANG), "the edit panel settles (pending slots: {:?})", h.app.renderer.pending_slots());
     let id = "slider:light.exposure";
     let target = h.app.widgets.iter().rev().find(|(widget, _)| widget == id).map(|(_, rect)| *rect).expect("the slider is on screen");
     let before = h.app.session.develop_of(photo).expect("its develop settings").light.exposure;
@@ -1236,7 +1236,7 @@ fn a_nonprompt_overlay_that_appears_after_the_press_cancels_the_release() {
     h.step();
     let t = Duration::from_secs(20);
     assert_eq!(h.request("ui.key", serde_json::json!({"key": ",", "cmd": true}), t)["ok"], true);
-    assert!(h.settle(Duration::from_secs(60)), "the Settings dialog settles (pending slots: {:?})", h.app.renderer.pending_slots());
+    assert!(h.settle(crate::headless::HANG), "the Settings dialog settles (pending slots: {:?})", h.app.renderer.pending_slots());
     let id = "check:settings.confirmDelete";
     let target = h.app.widgets.iter().rev().find(|(widget, _)| widget == id).map(|(_, rect)| *rect).expect("the checkbox is on screen");
     let before = h.app.ui.settings.confirm_delete;
@@ -1268,7 +1268,7 @@ fn a_nonprompt_overlay_that_appears_after_the_press_cancels_the_release() {
     );
     assert!(h.app.library_problem.is_some(), "the overlay was not activated");
     h.app.library_problem = None;
-    assert!(h.settle(Duration::from_secs(60)), "Settings settles after the overlay");
+    assert!(h.settle(crate::headless::HANG), "Settings settles after the overlay");
     let r = h.request("ui.clickWidget", serde_json::json!({"id": id}), t);
     assert_eq!(r["ok"], true, "{r}");
     h.step();
@@ -1285,11 +1285,11 @@ fn a_library_problem_overlay_blocks_a_control_click_in_settings() {
     let t = Duration::from_secs(20);
     h.step();
     assert!(h.app.run("app.settings", serde_json::json!({})).is_ok(), "Settings opens");
-    assert!(h.settle(Duration::from_secs(60)), "Settings settles (pending slots: {:?})", h.app.renderer.pending_slots());
+    assert!(h.settle(crate::headless::HANG), "Settings settles (pending slots: {:?})", h.app.renderer.pending_slots());
     let id = "check:settings.confirmDelete";
     let before = h.app.ui.settings.confirm_delete;
     h.app.library_problem = Some(crate::panels::library_problem::LibraryProblem::new("/no/such/library", "test error"));
-    assert!(h.settle(Duration::from_secs(60)), "the library problem window settles");
+    assert!(h.settle(crate::headless::HANG), "the library problem window settles");
     assert!(h.app.widgets.iter().any(|(widget, _)| widget == "button:libraryRetry"), "the library window is laid out");
     let r = h.request("ui.clickWidget", serde_json::json!({"id": id}), t);
     assert_eq!(r["ok"], false, "{r}");
@@ -1300,7 +1300,7 @@ fn a_library_problem_overlay_blocks_a_control_click_in_settings() {
     assert!(h.app.library_problem.is_some(), "the overlay was not activated");
     // Positive control: the same control works once the covering window is gone.
     h.app.library_problem = None;
-    assert!(h.settle(Duration::from_secs(60)), "Settings settles after the overlay");
+    assert!(h.settle(crate::headless::HANG), "Settings settles after the overlay");
     let r = h.request("ui.clickWidget", serde_json::json!({"id": id}), t);
     assert_eq!(r["ok"], true, "{r}");
     h.step();
@@ -1578,7 +1578,7 @@ fn a_synthetic_press_already_delivered_is_canceled_by_a_prompt_created_after_raw
     h.step();
     assert!(h.app.run("app.settings", serde_json::json!({})).is_ok(), "Settings opens");
     assert!(
-        h.settle(Duration::from_secs(60)),
+        h.settle(crate::headless::HANG),
         "the Settings dialog settles before its target rect is captured (pending slots: {:?})",
         h.app.renderer.pending_slots()
     );
@@ -1621,7 +1621,7 @@ fn raw_background_gestures_at_a_settled_prompt_do_not_reach_the_covered_view() {
     assert_eq!(h.request("engine.execute", serde_json::json!({"command": "library.select", "params": {"ids": [photo.0]}}), t)["ok"], true);
     assert_eq!(h.request("ui.set", serde_json::json!({"view": "detail", "right": "edit"}), t)["ok"], true);
     assert!(h.app.run("app.settings", serde_json::json!({})).is_ok(), "Settings opens");
-    assert!(h.settle(Duration::from_secs(60)), "the detail view and Settings settle (pending slots: {:?})", h.app.renderer.pending_slots());
+    assert!(h.settle(crate::headless::HANG), "the detail view and Settings settle (pending slots: {:?})", h.app.renderer.pending_slots());
     let image = h.app.image_rect.expect("the detail image is on screen");
     let at = image.min + egui::vec2(12.0, 12.0);
     let before = h.app.ui.settings.confirm_delete;
@@ -1689,7 +1689,7 @@ fn a_prompt_aborts_an_in_progress_synthetic_drag() {
     assert_eq!(h.request("engine.execute", serde_json::json!({"command": "library.select", "params": {"ids": [photo.0]}}), t)["ok"], true);
     assert_eq!(h.request("ui.set", serde_json::json!({"view": "detail", "right": "edit"}), t)["ok"], true);
     h.app.ui.open_sections = vec!["light".to_string()];
-    assert!(h.settle(Duration::from_secs(60)), "the edit panel settles (pending slots: {:?})", h.app.renderer.pending_slots());
+    assert!(h.settle(crate::headless::HANG), "the edit panel settles (pending slots: {:?})", h.app.renderer.pending_slots());
     let id = "slider:light.exposure";
     let before = h.app.session.develop_of(photo).expect("its develop settings").light.exposure;
     let (tx, rx) = reply_channel();
@@ -1846,7 +1846,7 @@ fn clipping_changed_between_the_move_and_press_is_seen_in_the_latest_registry() 
     let t = Duration::from_secs(20);
     assert_eq!(h.request("engine.execute", serde_json::json!({"command": "library.select", "params": {"ids": [photo.0]}}), t)["ok"], true);
     assert_eq!(h.request("ui.set", serde_json::json!({"view": "detail", "right": "edit"}), t)["ok"], true);
-    assert!(h.settle(Duration::from_secs(60)), "the detail view settles (pending slots: {:?})", h.app.renderer.pending_slots());
+    assert!(h.settle(crate::headless::HANG), "the detail view settles (pending slots: {:?})", h.app.renderer.pending_slots());
     let id = "star:bottom:2";
     let (tx, rx) = reply_channel();
     h.app.admit_gesture(&h.view.ctx.clone(), "ui.clickWidget".into(), serde_json::json!({"id": id}), tx).expect("the click is admitted");
@@ -1922,7 +1922,7 @@ fn a_moved_widget_cancels_before_its_first_event_and_leaves_a_later_gesture_queu
     let t = Duration::from_secs(20);
     let r = h.request("ui.key", serde_json::json!({"key": ",", "cmd": true}), t);
     assert_eq!(r["ok"], true, "{r}");
-    assert!(h.settle(Duration::from_secs(60)), "the Settings dialog settles (pending slots: {:?})", h.app.renderer.pending_slots());
+    assert!(h.settle(crate::headless::HANG), "the Settings dialog settles (pending slots: {:?})", h.app.renderer.pending_slots());
     assert!(h.app.widgets.iter().any(|(id, _)| id == "check:settings.confirmDelete"));
     assert!(h.app.widgets.iter().any(|(id, _)| id == "button:settingsStartup-2"));
 
@@ -1974,7 +1974,7 @@ fn a_click_whose_target_vanishes_after_the_press_fails_and_releases_the_pointer(
     let t = Duration::from_secs(20);
     let r = h.request("ui.key", serde_json::json!({"key": ",", "cmd": true}), t);
     assert_eq!(r["ok"], true, "{r}");
-    assert!(h.settle(Duration::from_secs(60)), "the Settings dialog settles (pending slots: {:?})", h.app.renderer.pending_slots());
+    assert!(h.settle(crate::headless::HANG), "the Settings dialog settles (pending slots: {:?})", h.app.renderer.pending_slots());
     let before = h.app.ui.settings.confirm_delete;
 
     let (tx, rx) = reply_channel();
@@ -2172,7 +2172,7 @@ fn hover_widget_refuses_clipped_and_covered_targets() {
     let t = Duration::from_secs(20);
     h.step();
     assert!(h.app.run("app.settings", serde_json::json!({})).is_ok(), "Settings opens");
-    assert!(h.settle(Duration::from_secs(60)), "Settings settles (pending slots: {:?})", h.app.renderer.pending_slots());
+    assert!(h.settle(crate::headless::HANG), "Settings settles (pending slots: {:?})", h.app.renderer.pending_slots());
     let id = "check:settings.confirmDelete";
     assert!(h.app.widget_hits.iter().any(|(widget, _)| widget == id), "{id} has a probe");
 
@@ -2201,13 +2201,13 @@ fn hover_widget_refuses_clipped_and_covered_targets() {
     // The library window is a non-modal overlay (its dim is the modal layer). A target below it
     // must be refused before a pointer move is queued, then work again after the window closes.
     h.app.library_problem = Some(crate::panels::library_problem::LibraryProblem::new("/no/such/library", "test error"));
-    assert!(h.settle(Duration::from_secs(60)), "the library window settles");
+    assert!(h.settle(crate::headless::HANG), "the library window settles");
     assert!(h.app.widgets.iter().any(|(widget, _)| widget == "button:libraryRetry"), "the library window is laid out");
     let r = h.request("ui.hoverWidget", serde_json::json!({"id": id}), t);
     assert_eq!(r["ok"], false, "{r}");
     assert!(r["error"].as_str().unwrap_or_default().contains(id), "{r}");
     h.app.library_problem = None;
-    assert!(h.settle(Duration::from_secs(60)), "Settings settles after the overlay");
+    assert!(h.settle(crate::headless::HANG), "Settings settles after the overlay");
     let r = h.request("ui.hoverWidget", serde_json::json!({"id": id}), t);
     assert_eq!(r["ok"], true, "the same hover works once the overlay is gone: {r}");
 }

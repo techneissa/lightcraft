@@ -13,7 +13,6 @@ use lightcraft_engine::RenderJob;
 use lightcraft_engine::media::RenderResult;
 
 const T: Duration = Duration::from_secs(20);
-const SETTLE: Duration = Duration::from_secs(120);
 
 /// Runs each render on the test's thread when it is asked for, so the pipeline's per-thread counts of masks built and
 /// spots drawn are this test's.
@@ -44,7 +43,7 @@ fn work() -> (usize, usize) {
 
 fn view(h: &mut Headless, zoom: serde_json::Value, pan: [f32; 2]) {
     exec(h, "view.navigate", json!({"zoom": zoom, "pan": pan}));
-    assert!(h.settle(SETTLE), "the view settles");
+    assert!(h.settle(crate::headless::HANG), "the view settles");
 }
 
 // Given a 24 MP photo with a brush, a linear and a radial mask and ten spots (Heal, Clone and Fill), zoomed to 100 %
@@ -71,7 +70,7 @@ fn zooming_and_panning_a_photo_with_masks_and_spots_redoes_none_of_them() {
     }
     let d = h.app.session.develop_of(h.app.session.active().expect("a photo")).expect("settings");
     assert_eq!((d.masks.len(), d.spots.len()), (3, 10));
-    assert!(h.settle(SETTLE), "Fit settles");
+    assert!(h.settle(crate::headless::HANG), "Fit settles");
     view(&mut h, json!({"percent": 100}), [0.5, 0.5]);
     assert!(h.app.region_view.is_some(), "a window at 100 %");
     let first = work();
@@ -96,7 +95,7 @@ fn zooming_and_panning_a_photo_with_masks_and_spots_redoes_none_of_them() {
     view(&mut h, json!("fit"), [0.52, 0.51]);
     let before = work();
     exec(&mut h, "develop.set", json!({"values": {"light.exposure": 0.3}}));
-    assert!(h.settle(SETTLE), "the edit settles");
+    assert!(h.settle(crate::headless::HANG), "the edit settles");
     assert!(!h.app.renderer.textures.contains_key(&Slot::Region), "the held window's old look is not kept to be shown");
     view(&mut h, json!({"percent": 100}), [0.52, 0.51]);
     let after = work();

@@ -86,7 +86,7 @@ fn toast(h: &Headless) -> String {
 /// Wait for the import the review started to finish.
 fn finish_import(h: &mut Headless) {
     let t0 = std::time::Instant::now();
-    while h.app.import.is_some() && t0.elapsed() < Duration::from_secs(60) {
+    while h.app.import.is_some() && t0.elapsed() < crate::headless::HANG {
         h.step();
     }
     assert!(h.app.import.is_none(), "the import finished");

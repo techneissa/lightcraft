@@ -3,7 +3,7 @@ fn settle_timeout_for_instrumentation(instrumented: bool) -> std::time::Duration
 }
 
 fn ui_settle_timeout() -> std::time::Duration {
-    settle_timeout_for_instrumentation(std::env::var_os("LLVM_PROFILE_FILE").is_some())
+    crate::headless::HANG.max(settle_timeout_for_instrumentation(std::env::var_os("LLVM_PROFILE_FILE").is_some()))
 }
 
 #[test]

@@ -20,7 +20,7 @@ use crate::{LightcraftApp, Services};
 const T: Duration = Duration::from_secs(60);
 const PHOTOS: u64 = 12;
 /// How long a read waits for a drive that isn't opened (only a hang guard).
-const GUARD: Duration = Duration::from_secs(20);
+const GUARD: Duration = crate::headless::HANG;
 
 /// The photos' files: a read waits for `open` (a slow drive), at most `guard`, and is counted, as
 /// are the reads made on the UI thread.
@@ -124,7 +124,7 @@ fn answer(h: &mut Headless, rx: &Receiver<Value>) -> Value {
         if let Ok(v) = rx.try_recv() {
             return v;
         }
-        assert!(t0.elapsed() < T, "never answered");
+        assert!(t0.elapsed() < crate::headless::HANG, "never answered");
         std::thread::sleep(Duration::from_millis(1));
     }
 }
@@ -144,7 +144,7 @@ fn a_search_from_the_menu_reads_off_the_ui_thread_and_the_window_goes_on() {
     assert_eq!(h.app.session.filter, Default::default(), "no answer before the files are read");
     // the worker sets the row's total when it starts, which a loaded machine can leave for later
     let waited = Instant::now();
-    while rows(&h)[0].total == 0 && waited.elapsed() < T {
+    while rows(&h)[0].total == 0 && waited.elapsed() < crate::headless::HANG {
         h.step();
         std::thread::sleep(Duration::from_millis(1));
     }
@@ -185,7 +185,7 @@ fn a_photo_the_grid_is_already_reading_is_not_read_again_for_the_search() {
         std::thread::Builder::new().name("grid-thumbnail".into()).spawn(move || source.load_source().map(|_| ())).expect("a thread")
     };
     let until = |what: &str, done: &dyn Fn() -> bool| {
-        let by = Instant::now() + T;
+        let by = Instant::now() + crate::headless::HANG;
         while !done() && Instant::now() < by {
             std::thread::sleep(Duration::from_millis(1));
         }
@@ -298,12 +298,12 @@ fn a_photo_that_cannot_be_read_says_so() {
     // GPU enabled, but do not let this one-test process exit while driver work is in flight.
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let deadline = Instant::now() + Duration::from_secs(30);
+        let deadline = Instant::now() + crate::headless::HANG;
         while !lightcraft_engine::gpu::ready() && lightcraft_engine::gpu::enabled() && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(10));
         }
         assert!(lightcraft_engine::gpu::ready() || !lightcraft_engine::gpu::enabled(), "GPU warm-up did not finish");
-        assert!(lightcraft_engine::gpu::wait_idle(Duration::from_secs(30)), "GPU work did not finish");
+        assert!(lightcraft_engine::gpu::wait_idle(crate::headless::HANG), "GPU work did not finish");
     }
 }
 

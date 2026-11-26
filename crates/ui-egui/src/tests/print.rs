@@ -407,7 +407,7 @@ fn the_print_preview_does_not_rebuild_thumbnails_every_frame() {
     // Keep the demo's twelve-photo contact sheet with real files that decode cheaply.
     let library = SyntheticLibrary::with_photos("print-thumbnail-reuse", 12);
     let mut h = Headless::new(library.app(), [1400.0, 900.0], 1.0);
-    assert!(h.settle(T), "the print thumbnail fixture settles");
+    assert!(h.settle(crate::headless::HANG), "the print thumbnail fixture settles");
     assert_eq!(h.app.session.catalog.len(), 12, "the contact sheet retains twelve photos");
     let before = h.app.renderer.thumb_jobs_built;
     assert!(before > 0, "the fixture exercises actual thumbnail jobs");
@@ -419,7 +419,7 @@ fn the_print_preview_does_not_rebuild_thumbnails_every_frame() {
             cmd(&mut h, "print.cell.add", json!({"width": 2.0, "height": 2.5}));
             cmd(&mut h, "print.cell.add", json!({"width": 5.0, "height": 7.0}));
         }
-        assert!(h.settle(Duration::from_secs(5)), "{style}: the dialog settles");
+        assert!(h.settle(crate::headless::HANG), "{style}: the dialog settles");
         let built = h.app.renderer.thumb_jobs_built;
         for _ in 0..60 {
             h.step();

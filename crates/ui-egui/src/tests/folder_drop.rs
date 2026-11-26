@@ -351,7 +351,7 @@ fn dont_ask_again_moves_the_next_drop_at_once() {
     // the next drop goes at once
     let dunes = id_of(&h, "dunes.png");
     h.app.session.selection = lightcraft_engine::Selection::single(lightcraft_catalog::PhotoId(dunes));
-    assert!(h.settle(std::time::Duration::from_secs(120)), "the sidebar settles after the move");
+    assert!(h.settle(crate::headless::HANG), "the sidebar settles after the move");
     let target = folder_row(&h, &home).unwrap();
     // nothing moves the folder rows once settled, however long the count takes
     let t0 = std::time::Instant::now();

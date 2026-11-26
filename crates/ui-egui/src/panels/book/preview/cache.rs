@@ -220,7 +220,7 @@ mod tests {
         assert_eq!(counter.load(Ordering::Relaxed), 3);
         drop(release);
         let t = std::time::Instant::now();
-        while counter.load(Ordering::Relaxed) > 0 && t.elapsed().as_secs() < 10 {
+        while counter.load(Ordering::Relaxed) > 0 && t.elapsed() < crate::headless::HANG {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         assert_eq!(counter.load(Ordering::Relaxed), 0, "every slot is given back");
@@ -238,7 +238,7 @@ mod tests {
         })
         .unwrap();
         let t = std::time::Instant::now();
-        while counter.load(Ordering::Relaxed) > 0 && t.elapsed().as_secs() < 10 {
+        while counter.load(Ordering::Relaxed) > 0 && t.elapsed() < crate::headless::HANG {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         assert_eq!(counter.load(Ordering::Relaxed), 0);

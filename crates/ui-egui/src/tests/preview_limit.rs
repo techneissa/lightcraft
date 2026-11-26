@@ -932,7 +932,7 @@ mod in_the_loupe {
     #[test]
     fn pinch_display_fit_keeps_edits_live_and_refits_changed_crop_geometry() {
         let (mut h, _) = demo_detail_in([1400.0, 900.0]);
-        assert!(h.settle(SETTLE));
+        assert!(h.settle(crate::headless::HANG));
         let initial_fit = drawn_fit(&h);
         let initial_key = h.app.renderer.wanted(Slot::Main).unwrap();
         let work = std::rc::Rc::new(std::cell::RefCell::new(PinchWork::default()));
