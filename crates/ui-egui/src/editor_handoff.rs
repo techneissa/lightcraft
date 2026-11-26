@@ -106,7 +106,7 @@ mod tests {
         super::poll(&mut app, &ctx);
         assert!(opened.lock().unwrap().is_empty() && app.ui.toast.is_none(), "still waiting on the editor");
         release.store(true, Ordering::SeqCst);
-        let deadline = Instant::now() + Duration::from_secs(30);
+        let deadline = Instant::now() + crate::headless::HANG;
         while !app.handoffs.is_empty() {
             super::poll(&mut app, &ctx);
             assert!(Instant::now() < deadline);

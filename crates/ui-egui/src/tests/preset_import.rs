@@ -9,13 +9,12 @@ use crate::headless::Headless;
 use crate::{LightcraftApp, Services};
 
 const T: Duration = Duration::from_secs(20);
-const SETTLE: Duration = Duration::from_secs(120);
 
 fn app() -> Headless {
     // Profile import needs no photos. Avoid unrelated demo renders while testing its notice.
     let app = LightcraftApp::new(lightcraft_engine::Session::new(), Services { png: None, ..Default::default() });
     let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
-    assert!(h.settle(SETTLE), "the empty library settles before importing profiles");
+    assert!(h.settle(crate::headless::HANG), "the empty library settles before importing profiles");
     h
 }
 

@@ -144,11 +144,12 @@ fn synchronize(h: &mut Headless) {
 /// clicked again (at the box's current place) until it lands.
 fn tick_remove_missing(h: &mut Headless) {
     let ticked = |h: &Headless| matches!(h.app.ui.dialog, Some(Dialog::SynchronizeFolder { remove_missing: true, .. }));
-    for _ in 0..5 {
+    let until = std::time::Instant::now() + crate::headless::HANG;
+    while std::time::Instant::now() < until {
         h.step();
         let r = h.request("ui.clickWidget", json!({"id": "syncRemoveMissing"}), T);
         assert_eq!(r["ok"], true, "{r}");
-        if h.step_until(Duration::from_secs(3), ticked) {
+        if h.step_up_to(Duration::from_secs(3), ticked) {
             return;
         }
     }

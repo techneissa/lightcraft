@@ -94,7 +94,7 @@ fn slideshow_advances_pauses_and_ends() {
     // is exercised separately by next_slides_are_prepared_before_they_are_due.
     let library = SyntheticLibrary::with_photos("slideshow-automatic-controls", 3);
     let mut h = Headless::new(library.app(), [1000.0, 700.0], 1.0);
-    assert!(h.settle(SETTLE), "the automatic playback fixture settles");
+    assert!(h.settle(crate::headless::HANG), "the automatic playback fixture settles");
     let first = h.app.session.visible_cloned()[0];
     // The fixture selects its first imported photo; newest-first view order differs.
     // Establish the same first-in-view starting selection as the original demo test.
@@ -166,7 +166,7 @@ fn next_slides_are_prepared_before_they_are_due() {
     assert!(h.time() - start < 60.0, "before the first is due");
     assert_eq!(photo_up(&h), current, "still on the first slide");
     assert!(play(&h).remaining(h.time()) > 59.0, "renders are accepted before the first slide is due");
-    assert!(h.settle(SETTLE), "enabled-prefetch renders settle");
+    assert!(h.settle(crate::headless::HANG), "enabled-prefetch renders settle");
     drop(h);
     drop(fx);
 
@@ -186,7 +186,7 @@ fn next_slides_are_prepared_before_they_are_due() {
     open.set(true);
     assert!(h.step_until(SETTLE, |h| has_slide(h, current)), "the current slide renders once allowed");
     assert!(!has_slide(&h, next) && !h.app.renderer.is_pending(Slot::Slide(next)), "still not prepared");
-    assert!(h.settle(SETTLE), "disabled-prefetch renders settle");
+    assert!(h.settle(crate::headless::HANG), "disabled-prefetch renders settle");
 }
 
 #[test]
@@ -196,7 +196,7 @@ fn a_fade_only_runs_between_rendered_slides() {
     run(&mut h, "view.slideshow", json!({"interval": 0.5, "fadeDuration": 0.4, "preparePreviews": false}));
     let mut fades = 0;
     let t0 = std::time::Instant::now();
-    while fades < 20 && t0.elapsed() < SETTLE {
+    while fades < 20 && t0.elapsed() < crate::headless::HANG {
         h.step();
         let f = play(&h).frame(h.time());
         if let Some(from) = f.from {
@@ -429,7 +429,7 @@ fn a_click_on_a_control_scrolled_out_of_the_settings_page_is_refused() {
     // scrolled page room, but they are still laid out and registered.
     let mut h = grid_sized([1000.0, 560.0]);
     run(&mut h, "view.slideshowOptions", json!({}));
-    assert!(h.settle(SETTLE), "the settings page settles");
+    assert!(h.settle(crate::headless::HANG), "the settings page settles");
     let target = latest_widget_rect(&h, "check:settings.slideshowRandom").expect("the checkbox is registered");
     let hit = crate::control::widget_hit(&h.app, "check:settings.slideshowRandom").expect("the checkbox has an egui hit owner");
     assert!(
@@ -651,7 +651,7 @@ fn settings_shows_the_slide_layout_and_a_live_preview() {
         let rect = h.app.widgets.iter().find(|(id, _)| id == "slideshow:preview").map(|(_, r)| *r).unwrap();
         let img = h.paint();
         let c = painted(&img, (rect.left() + 3.0) as usize, (rect.center().y) as usize);
-        if (c[1] > 200 && c[0] < 60) || t0.elapsed() > T {
+        if (c[1] > 200 && c[0] < 60) || t0.elapsed() > crate::headless::HANG {
             break c;
         }
         h.step();
@@ -829,7 +829,7 @@ fn titles_survive_deleting_the_only_photo_and_need_photos_to_start() {
         if !seen.contains(&r.play.current()) {
             seen.push(r.play.current());
         }
-        assert!(t0.elapsed() < SETTLE, "the show plays on to its end: {seen:?}");
+        assert!(t0.elapsed() < crate::headless::HANG, "the show plays on to its end: {seen:?}");
         h.step();
     }
     assert_eq!(seen, vec![Item::INTRO, Item::Photo(photos[0]), Item::ENDING], "intro, the (gone) photo, ending");

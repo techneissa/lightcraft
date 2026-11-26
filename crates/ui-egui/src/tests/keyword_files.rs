@@ -9,11 +9,10 @@ use crate::headless::Headless;
 use crate::tests_fixtures::SyntheticLibrary;
 
 const T: Duration = Duration::from_secs(20);
-const SETTLE: Duration = Duration::from_secs(120);
 
 fn app(library: &SyntheticLibrary) -> Headless {
     let mut h = Headless::new(library.app(), [1200.0, 800.0], 1.0);
-    assert!(h.settle(SETTLE), "keyword fixture did not settle");
+    assert!(h.settle(crate::headless::HANG), "keyword fixture did not settle");
     h
 }
 

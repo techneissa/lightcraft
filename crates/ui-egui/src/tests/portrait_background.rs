@@ -51,7 +51,7 @@ fn the_background_section_sets_the_photos_sliders_and_what_swap_uses() {
         assert!(shown(&mut h, &format!("slider:{id}")), "{id} is in the Background section");
     }
     // a face picked: the slider still writes the photo's one setting
-    let until = std::time::Instant::now() + Duration::from_secs(60);
+    let until = std::time::Instant::now() + crate::headless::HANG;
     while h.app.session.retouch_faces_of(photo).found.is_none() {
         assert!(std::time::Instant::now() < until, "the faces were never found");
         h.step();

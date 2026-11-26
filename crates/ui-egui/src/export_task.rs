@@ -412,7 +412,7 @@ mod contact_sheet_tests {
         app.session.activity.cancel(rows[0].id).unwrap();
         assert!(app.export.as_ref().unwrap().cancel.load(Ordering::Relaxed), "the stack's ✕ stops the sheet");
         let task = app.export.take().unwrap();
-        assert!(task.rx.recv_timeout(Duration::from_secs(20)).unwrap().is_err(), "a stopped sheet is not written");
+        assert!(task.rx.recv_timeout(crate::headless::HANG).unwrap().is_err(), "a stopped sheet is not written");
         drop(task);
         assert!(app.session.activity.list().is_empty(), "the row goes with the export");
     }
@@ -427,7 +427,7 @@ mod contact_sheet_tests {
         start_contact_sheet(&mut app, &json!({"path": "Cancelled.pdf", "ids": ids})).unwrap();
         app.export.as_ref().unwrap().cancel.store(true, Ordering::Relaxed);
         let task = app.export.take().unwrap();
-        assert!(task.rx.recv_timeout(Duration::from_secs(20)).unwrap().is_err());
+        assert!(task.rx.recv_timeout(crate::headless::HANG).unwrap().is_err());
     }
 }
 

@@ -247,7 +247,7 @@ mod tests {
             .start(&dir, vec!["http://127.0.0.1:1/db".into()], lightcraft_engine::lensfun_download::FILES, &activity)
             .expect("started");
         let t0 = std::time::Instant::now();
-        while app.session.lensfun.running() && t0.elapsed() < std::time::Duration::from_secs(60) {
+        while app.session.lensfun.running() && t0.elapsed() < crate::headless::HANG {
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
         assert!(matches!(app.session.lensfun.state(), lightcraft_engine::lensfun_download::State::Failed(_)), "{:?}", app.session.lensfun.state());

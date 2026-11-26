@@ -25,7 +25,7 @@ fn offline() -> Vec<String> {
 
 fn wait_idle(app: &LightcraftApp) {
     let t0 = std::time::Instant::now();
-    while app.session.lensfun.running() && t0.elapsed() < std::time::Duration::from_secs(60) {
+    while app.session.lensfun.running() && t0.elapsed() < crate::headless::HANG {
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
 }

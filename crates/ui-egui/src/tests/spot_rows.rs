@@ -5,14 +5,11 @@ use std::time::Duration;
 
 use serde_json::json;
 
-use crate::headless::Headless;
+use crate::headless::{HANG, Headless};
 use crate::state::ToolOverlay;
 use crate::{LightcraftApp, Services};
 
 const T: Duration = Duration::from_secs(20);
-/// A hang guard only: a spot's source is found on a worker, which waits its turn behind every other test's work on a
-/// busy CI runner (it took over 20 s there once). Each wait below is on the spot itself.
-const HANG: Duration = Duration::from_secs(600);
 
 fn remove_panel(spots: usize) -> Headless {
     let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });

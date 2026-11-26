@@ -125,7 +125,7 @@ fn an_idle_window_wakes_for_the_disk_check() {
     let wait = Mutex::new(wait);
     let mut session = lightcraft_engine::Session::with_demo().with_fs();
     session.set_disk_space_reader(Some(Arc::new(move |_: &std::path::Path| {
-        let _ = wait.lock().unwrap().recv_timeout(Duration::from_secs(10));
+        let _ = wait.lock().unwrap().recv_timeout(crate::headless::HANG);
         Some(DiskSpace { available: GB, total: 500 * GB })
     })));
     let mut app = LightcraftApp::new(session, Services::default());
@@ -140,7 +140,7 @@ fn an_idle_window_wakes_for_the_disk_check() {
     };
     assert!(pass(&mut app) <= Duration::from_millis(250), "a pass soon while the read runs");
     release.send(()).unwrap();
-    let until = std::time::Instant::now() + T;
+    let until = std::time::Instant::now() + crate::headless::HANG;
     while app.notices.is_empty() {
         assert!(std::time::Instant::now() < until, "the answer was never taken");
         pass(&mut app);

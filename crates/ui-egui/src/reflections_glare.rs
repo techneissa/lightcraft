@@ -874,7 +874,7 @@ mod tests {
     /// Run the app's finished tasks until the reflection run ends (a generous bound guards only against a hang).
     fn join(app: &mut LightcraftApp) {
         let ctx = egui::Context::default();
-        assert!(crate::tasks::wait_for(app, &ctx, crate::reflections::TASK, std::time::Duration::from_secs(120)));
+        assert!(crate::tasks::wait_for(app, &ctx, crate::reflections::TASK, crate::headless::HANG));
     }
 
     fn other_photo(app: &LightcraftApp) -> PhotoId {

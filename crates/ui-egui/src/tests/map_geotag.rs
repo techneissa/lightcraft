@@ -7,7 +7,7 @@ use lightcraft_map::{LatLon, MAX_LATITUDE, Viewport};
 use serde_json::{Value, json};
 
 use crate::headless::Headless;
-use crate::tests::map::{SETTLE, T, clusters, demo, fake, frames, ids_of, run, state, widget};
+use crate::tests::map::{T, clusters, demo, fake, frames, ids_of, run, state, widget};
 
 fn gps(h: &Headless, id: u64) -> Option<(f64, f64)> {
     h.app.session.catalog.photo(lightcraft_catalog::PhotoId(id)).and_then(|p| p.meta.gps)
@@ -252,7 +252,7 @@ fn hostile_drops_never_crash() {
         let r = h.request("engine.execute", json!({"command": "photo.setGps", "params": bad}), T);
         assert_eq!(r["ok"], false, "{r}");
     }
-    assert!(h.settle(SETTLE));
+    assert!(h.settle(crate::headless::HANG));
 }
 
 #[test]

@@ -28,7 +28,7 @@ fn masking() -> Headless {
         let r = h.request("engine.execute", json!({"command": command, "params": params}), T);
         assert_eq!(r["ok"], true, "{command}: {r}");
     }
-    assert!(h.settle(SETTLE), "the renders settle");
+    assert!(h.settle(crate::headless::HANG), "the renders settle");
     h
 }
 
@@ -46,7 +46,7 @@ fn photo_renders(h: &Headless) -> u64 {
 fn during(h: &mut Headless, change: impl FnOnce(&mut Headless)) -> (u64, usize) {
     let (renders, planes) = (photo_renders(h), h.app.renderer.tints.delivered);
     change(h);
-    assert!(h.settle(SETTLE), "the renders settle");
+    assert!(h.settle(crate::headless::HANG), "the renders settle");
     (photo_renders(h) - renders, h.app.renderer.tints.delivered - planes)
 }
 
@@ -114,7 +114,7 @@ fn planes_are_made_only_while_the_overlay_is_shown() {
     let mut h = masking();
     key(&mut h, "o");
     assert!(!h.app.ui.mask_overlay);
-    assert!(h.settle(SETTLE));
+    assert!(h.settle(crate::headless::HANG));
     let off = (h.app.renderer.tints.answers, h.app.renderer.tints.delivered);
     // edits and a slider drag while it is hidden
     for (command, params) in [
@@ -213,7 +213,7 @@ fn a_hidden_selected_mask_still_shows_its_overlay() {
     let id = h.app.session.active_mask.expect("a selected mask");
     let r = h.request("engine.execute", json!({"command": "mask.visible", "params": {"id": id, "visible": false}}), T);
     assert_eq!(r["ok"], true, "{r}");
-    assert!(h.settle(SETTLE));
+    assert!(h.settle(crate::headless::HANG));
     assert!(h.app.ui.mask_overlay);
     let (photo, k) = main_tex(&h);
     let held = h.app.renderer.tints.planes(Slot::Main).expect("planes");
@@ -235,7 +235,7 @@ fn with_a_monitor_profile_the_overlay_still_starts_no_render() {
     std::fs::write(&path, lightcraft_codecs::icc::write_named(lightcraft_codecs::NamedSpace::DisplayP3)).expect("profile written");
     let r = h.request("engine.execute", json!({"command": "app.displayProfile", "params": {"path": path.to_string_lossy()}}), T);
     assert_eq!(r["ok"], true, "{r}");
-    assert!(h.settle(SETTLE));
+    assert!(h.settle(crate::headless::HANG));
     assert!(h.app.renderer.display_id().is_some(), "the profile is in use");
     let (photo, k) = main_tex(&h);
     assert!(h.app.renderer.tints.drawn(Slot::Main, photo, k), "the tint is drawn over the photo");
@@ -277,7 +277,10 @@ fn the_planes_are_asked_for_once_the_photos_render_is_in() {
     let r = h.request("engine.execute", json!({"command": "develop.set", "params": {"control": "light.exposure", "value": 0.6}}), T);
     assert_eq!(r["ok"], true, "{r}");
     let mut rendered = false;
-    for frame in 0..400 {
+    let until = std::time::Instant::now() + crate::headless::HANG;
+    let mut frame = 0;
+    while std::time::Instant::now() < until {
+        frame += 1;
         h.step();
         let (main, planes) = (h.app.renderer.is_pending(Slot::Main), h.app.renderer.is_pending(Slot::Alpha));
         assert!(!(main && planes), "frame {frame}: the planes were asked for while the photo's render was on its way");
@@ -288,7 +291,7 @@ fn the_planes_are_asked_for_once_the_photos_render_is_in() {
         std::thread::sleep(Duration::from_millis(5));
     }
     assert!(rendered, "the edit rendered the photo");
-    assert!(h.settle(SETTLE));
+    assert!(h.settle(crate::headless::HANG));
     assert!(h.app.renderer.tints.answers > asks, "the planes were asked for after it");
     let (photo, k) = main_tex(&h);
     assert!(h.app.renderer.tints.drawn(Slot::Main, photo, k), "and the tint is drawn");

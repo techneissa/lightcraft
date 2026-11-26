@@ -126,7 +126,7 @@ fn errors_are_shown_and_the_dialog_stays_open() {
         Some(Dialog::CaptureTime { time, .. }) => *time = "yesterday".into(),
         other => panic!("Edit Capture Time is not open: {other:?}"),
     }
-    assert!(h.settle(SETTLE), "capture-time dialog renders settled");
+    assert!(h.settle(crate::headless::HANG), "capture-time dialog renders settled");
     assert_eq!(h.request("ui.clickWidget", json!({"id": "button:dialogOk"}), T)["ok"], true);
     // The request consumes the click. Inspect its short-lived notification before waiting
     // for unrelated rendering: settling advances the simulated clock and can expire the toast.
@@ -141,7 +141,7 @@ fn errors_are_shown_and_the_dialog_stays_open() {
         }
         other => panic!("Edit Capture Time is not open: {other:?}"),
     }
-    assert!(h.settle(SETTLE), "capture-time dialog renders settled");
+    assert!(h.settle(crate::headless::HANG), "capture-time dialog renders settled");
     let r = h.request("ui.dialog.confirm", json!({}), T);
     assert_ne!(r["ok"], true, "the shift is refused: {r}");
     assert!(r.to_string().contains("9999"), "{r}");

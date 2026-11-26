@@ -27,11 +27,11 @@ fn filter(h: &mut Headless, mode: &str) -> Value {
     r
 }
 
-/// Run frames until `done` holds (with the session at hand) or [`T`] passes.
+/// Run frames until `done` holds (with the session at hand) or a hang guard passes.
 fn until(h: &mut Headless, mut done: impl FnMut(&mut Headless) -> bool) -> bool {
     let t0 = std::time::Instant::now();
     while !done(h) {
-        if t0.elapsed() > T {
+        if t0.elapsed() > crate::headless::HANG {
             return false;
         }
         h.step();

@@ -15,7 +15,6 @@ use crate::tests_render_fixtures::RenderFixture;
 use crate::{LightcraftApp, Services};
 
 const T: Duration = Duration::from_secs(20);
-const SETTLE: Duration = Duration::from_secs(120);
 
 /// Whether `slot`'s texture is drawn in the last frame.
 fn drawn(h: &Headless, slot: Slot) -> bool {
@@ -32,7 +31,7 @@ fn zoomed_in_a_new_spot_keeps_the_sharp_window_until_its_own_arrives() {
     assert_eq!(r["ok"], true, "{r}");
     h.app.ui.zoom = Zoom::Percent(300.0);
     h.app.ui.pan = (0.5, 0.5);
-    assert!(h.settle(SETTLE), "the zoomed view settles");
+    assert!(h.settle(crate::headless::HANG), "the zoomed view settles");
     assert!(drawn(&h, Slot::Region), "zoomed in, the sharp window is drawn");
     let old = h.app.renderer.textures[&Slot::Region].key;
     // renders wait from now on
@@ -48,7 +47,7 @@ fn zoomed_in_a_new_spot_keeps_the_sharp_window_until_its_own_arrives() {
     assert_eq!(h.app.renderer.textures[&Slot::Region].key, old);
     assert!(drawn(&h, Slot::Region), "the sharp window stays on screen meanwhile");
     open.set(true);
-    assert!(h.settle(SETTLE), "the new window renders");
+    assert!(h.settle(crate::headless::HANG), "the new window renders");
     assert_ne!(h.app.renderer.textures[&Slot::Region].key, old, "and replaces the old one");
     assert!(drawn(&h, Slot::Region));
 }
@@ -77,7 +76,7 @@ fn a_press_held_still_adds_no_points_to_the_painted_spot() {
     pointer(&mut h, "drag", 0.50);
     pointer(&mut h, "up", 0.50);
     // (a painted spot is added once its source is found on a worker, issue #97)
-    assert!(h.settle(T));
+    assert!(h.settle(crate::headless::HANG));
     let r = h.request("engine.execute", json!({"command": "develop.get", "params": {}}), T);
     let spots = r["result"]["spots"].as_array().cloned().unwrap_or_default();
     assert_eq!(spots.len(), 1, "{r}");

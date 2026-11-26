@@ -53,7 +53,7 @@ fn the_portrait_tab_has_a_section_per_feature_and_shows_the_face_picker() {
     assert!(crate::menus::UI_COMMANDS.iter().any(|c| c.0 == "panel.portrait" && c.2 == Some("T")), "shortcut T");
     // opening the tab finds the faces, in the background
     let photo = h.app.session.active().unwrap();
-    let until = std::time::Instant::now() + Duration::from_secs(60);
+    let until = std::time::Instant::now() + crate::headless::HANG;
     while h.app.session.retouch_faces_of(photo).found.is_none() {
         assert!(std::time::Instant::now() < until, "the faces were never found");
         h.step();
@@ -266,7 +266,7 @@ fn the_blemishes_section_has_amount_the_switch_and_the_report() {
     click(&mut h, "section:portrait.blemish");
     let photo = h.app.session.active().unwrap();
     // (a hang guard, not a timing check)
-    let until = std::time::Instant::now() + T;
+    let until = std::time::Instant::now() + crate::headless::HANG;
     while h.app.session.retouch_faces_of(photo).found.is_none() {
         assert!(std::time::Instant::now() < until, "the faces were never found");
         h.step();
@@ -328,7 +328,7 @@ impl FaceProvider for GatedFaces {
     }
     fn faces(&self, img: &lightcraft_raster::Rgba8) -> Result<Vec<Face>, String> {
         // (a hang guard, not a timing check)
-        let until = std::time::Instant::now() + T;
+        let until = std::time::Instant::now() + crate::headless::HANG;
         while !self.open.load(std::sync::atomic::Ordering::SeqCst) && std::time::Instant::now() < until {
             std::thread::sleep(Duration::from_millis(1));
         }
@@ -354,7 +354,7 @@ fn the_sections_do_not_move_when_the_face_search_finishes() {
     let before = rect_of(&mut h, "slider:retouch.reshape.slimFace").expect("the slider shows while the search runs");
     open.store(true, std::sync::atomic::Ordering::SeqCst);
     // (a hang guard, not a timing check)
-    let until = std::time::Instant::now() + T;
+    let until = std::time::Instant::now() + crate::headless::HANG;
     while h.app.session.retouch_faces_of(photo).found.is_none() {
         assert!(std::time::Instant::now() < until, "the faces were never found");
         h.step();

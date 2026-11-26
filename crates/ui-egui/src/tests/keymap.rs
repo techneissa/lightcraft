@@ -262,7 +262,7 @@ fn opening_numeric_release_keeps_keys_in_the_editor() {
         h.app.run("app.setShortcut", json!({"id": "photo.increaseRating", "shortcut": "Enter"})).unwrap();
         let r = h.request("ui.set", json!({"view": "detail", "right": "edit", "openSections": ["light"], "histogram": false}), T);
         assert_eq!(r["ok"], true, "{r}");
-        assert!(h.settle(SETTLE));
+        assert!(h.settle(crate::headless::HANG));
         assert!(h.app.fonts_ready);
         assert!(h.app.recording_shortcut.is_none() && h.app.ui.name_edit.is_none());
         assert!(h.app.native_shortcuts.is_empty() && h.app.synthetic.is_empty() && h.events.is_empty());

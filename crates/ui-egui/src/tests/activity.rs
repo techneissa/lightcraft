@@ -298,7 +298,7 @@ fn gated_import(tag: &str, n: usize, gate: Option<std::sync::Arc<std::sync::atom
             && index >= lightcraft_engine::import::batch_size()
         {
             let t0 = std::time::Instant::now();
-            while !gate.load(std::sync::atomic::Ordering::Acquire) && t0.elapsed() < Duration::from_secs(60) {
+            while !gate.load(std::sync::atomic::Ordering::Acquire) && t0.elapsed() < crate::headless::HANG {
                 std::thread::sleep(Duration::from_millis(1));
             }
         }
@@ -507,7 +507,7 @@ fn batch_merge_runs_each_set_in_turn() {
     // the merge ordering does not need the grid's nine thumbnails; one Detail render is enough
     let r = h.request("ui.set", json!({"view": "detail", "filmstrip": false}), T);
     assert_eq!(r["ok"], true, "{r}");
-    assert!(h.settle(T), "the imported photos and the active preview settle");
+    assert!(h.settle(crate::headless::HANG), "the imported photos and the active preview settle");
     let r = crate::menus::run_ui_command(&mut h.app, "merge.hdrBatch", &json!({})).unwrap().unwrap();
     assert_eq!(r["sets"], 3);
     assert_eq!(h.app.merge.batch.len(), 2, "one running, two queued");
