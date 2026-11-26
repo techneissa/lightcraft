@@ -170,7 +170,7 @@ fn answered_with(result: Result<Option<SegMask>, String>, detail: Vec<SegMask>, 
 fn not_found(shape: &MaskShape) -> String {
     match shape {
         MaskShape::Object { .. } => "The object was not found in this photo.".into(),
-        MaskShape::Prompt { text, .. } => format!("Nothing matching “{text}” was found in this photo."),
+        MaskShape::Prompt { text, region, .. } => crate::segment::describe_messages::not_found(text, region.is_some()),
         _ => crate::cmd::concepts::of(shape).map_or_else(|| "Nothing was found in this photo.".into(), |c| crate::cmd::concepts::not_found(c.kind)),
     }
 }

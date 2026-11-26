@@ -154,9 +154,12 @@ fn resolve_ai(s: &mut Session, shape: &mut MaskShape, c: &str) -> Result<Later> 
             return Ok(Later::Text(text.clone(), *region));
         }
         MaskShape::Prompt { text, seg, region, .. } => {
-            let found = segment(s, |s| s.segment_text_in(id, text, *region))?;
-            let where_ = if region.is_some() { "the zoomed area" } else { "this photo" };
-            *seg = Some(found.ok_or_else(|| ai_err(format!("nothing matching “{text}” was found in {where_}")))?);
+            use crate::segment::describe_messages;
+            if text.trim().is_empty() {
+                return Err(ai_err("describe what to select"));
+            }
+            let found = segment(s, |s| s.segment_text_in(id, text, *region).map_err(|e| describe_messages::failed(text, &e)))?;
+            *seg = Some(found.ok_or_else(|| ai_err(describe_messages::not_found(text, region.is_some())))?);
         }
         MaskShape::Subject { seg: None, .. } | MaskShape::Sky { seg: None, .. } | MaskShape::Background { seg: None, .. }
             if super::concepts::wanted(s, id, shape) =>

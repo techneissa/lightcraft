@@ -279,6 +279,11 @@ impl Detector {
         let logits = (pq.matmul(&pt.unsqueeze(2)?)? / (HIDDEN as f64).sqrt())?.clamp(-12f32, 12f32)?;
         let logits_vec = to_vec(&logits)?;
         let presence_val = to_vec(&presence)?.first().copied().unwrap_or(-10.0);
+        log::debug!(
+            "SAM 3 prompt on candle: best score {:.3}, presence {:.3}",
+            best_score(&logits_vec, presence_val),
+            1.0 / (1.0 + (-presence_val).exp())
+        );
         if let Some(thresh) = threshold
             && !any_above(&logits_vec, presence_val, thresh)
         {
@@ -349,6 +354,12 @@ pub const MAIN_AREA: f32 = 1.0 / 3.0;
 pub fn main_instances(areas: &[usize]) -> Vec<bool> {
     let largest = areas.iter().copied().max().unwrap_or(0);
     areas.iter().map(|a| *a as f32 >= largest as f32 * MAIN_AREA).collect()
+}
+
+/// The best query's score (sigmoid(logit) × sigmoid(presence)), 0 with no queries.
+pub fn best_score(logits: &[f32], presence: f32) -> f32 {
+    let s = |x: f32| 1.0 / (1.0 + (-x).exp());
+    logits.iter().map(|l| s(*l) * s(presence)).fold(0.0, f32::max)
 }
 
 /// Whether any query scores above `threshold` (sigmoid(logit) × sigmoid(presence)): when none does, the masks are not
