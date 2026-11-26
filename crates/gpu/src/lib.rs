@@ -68,7 +68,7 @@ mod vram;
 #[cfg(not(target_arch = "wasm32"))]
 pub use dirty::{FrameNote, HostData, TILE, host_of, keep_host, take_frame_note, tiles_rendered};
 #[cfg(not(target_arch = "wasm32"))]
-pub use render::{DisplayFrame, GpuStages, Output, device_fits};
+pub use render::{DisplayFrame, GpuStages, Output, StageParts, device_fits};
 /// The wgpu the renderer is built on (the same crate eframe uses: hosts hand over its device).
 #[cfg(not(target_arch = "wasm32"))]
 pub use wgpu;
@@ -442,6 +442,8 @@ pub struct GpuMemory {
     pub allocated: u64,
     pub pooled: u64,
     pub retired: u64,
+    /// The most bytes allocated at once since launch.
+    pub peak: u64,
 }
 
 /// Device memory held by the renderer's buffers (zero without a device).
@@ -503,6 +505,19 @@ pub fn source_uploads() -> u64 {
     #[cfg(target_arch = "wasm32")]
     {
         0
+    }
+}
+
+/// [`stage_bytes`] by part.
+pub fn stage_parts(stages: &StageCache) -> StageParts {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        stages.peek_extension::<GpuStages>().map(|g| g.parts()).unwrap_or_default()
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = stages;
+        StageParts::default()
     }
 }
 

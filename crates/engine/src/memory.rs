@@ -252,6 +252,8 @@ pub struct GpuUsage {
     pub pooled: u64,
     /// Of which buffers released since their thread's last submit.
     pub retired: u64,
+    /// The most device bytes allocated at once since launch.
+    pub peak: u64,
 }
 
 /// What the engine's caches hold.
@@ -312,7 +314,7 @@ pub fn heap_stats() -> Option<HeapUsage> {
 /// The GPU renderer's device buffers.
 pub fn gpu_usage() -> GpuUsage {
     let g = lightcraft_gpu::memory();
-    GpuUsage { allocated: g.allocated, pooled: g.pooled, retired: g.retired }
+    GpuUsage { allocated: g.allocated, pooled: g.pooled, retired: g.retired, peak: g.peak }
 }
 
 impl crate::Session {
