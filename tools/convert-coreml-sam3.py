@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Convert SAM 3 to six Core ML models that run on the GPU in float32 (issue #268, fork/coreml.md).
+"""Convert SAM 3 to seven Core ML models that run on the GPU in float32 (issue #268, fork/coreml.md).
 
 Run once on a Mac, by hand. The app never runs Python: it finds the `.mlpackage`s this writes in
 `<models>/sam3-coreml/`, compiles each once with Core ML and runs them through `crates/coreml`
@@ -19,9 +19,9 @@ into the parts the app runs at different times:
     clickdec    per click               image, s0, s1, points [1,1,65,2], labels [1,1,65] (int32)
                                           -> masks [1,4,288,288], iou [1,4], obj [1,1]
     textfeat    once per photo          backbone -> l0 [1,256,288,288], l1 [1,256,144,144], l2 [1,256,72,72]
-    textscore   per prompt              l2, ids [1,32] (int32), mask [1,32] (int32)
-                                          -> logits [1,200], presence [1,1], boxes [1,200,4] (x0,y0,x1,y1),
-                                             queries [1,200,256], memory [1,5184,256], text [1,32,256]
+    textenc     per Describe prompt     ids [1,32] (int32), mask [1,32] (int32) -> text [1,32,256]
+    textdet     per prompt              l2, text, mask -> logits [1,200], presence [1,1], boxes [1,200,4] (x0,y0,x1,y1),
+                                          queries [1,200,256], memory [1,5184,256]
     textmask    per prompt that matches l0, l1, memory, text, mask, queries -> masks [1,200,288,288], semantic [1,1,288,288]
 
 Clicks: one fixed list of 65 slots (the app's 64 clicks and the "not a point" that closes the list). `points` are
@@ -31,8 +31,12 @@ attention and the image's attention to them); every other step works on each tok
 masks of the clicks alone. Padding with "not a point" tokens instead changed masks badly (IoU down to 0.0), and one
 model per click count would plan the GPU again for every new count.
 
-Prompts: `textscore` scores the 200 queries; the app runs `textmask` only when one scores above its threshold, as
-candle skips its pixel decoder.
+Prompts: `textenc` is CLIP's text encoder (354 M parameters, about 1.4 GB of the 1.5 GB the old single `textscore`
+part held, issue #437); `textdet` scores the 200 queries against its text features. Subject, Sky and Background ask
+for fixed phrases: the app keeps their text features beside the model after their first run
+(`crates/segment/src/stored.rs`) and loads `textenc` only for Describe. The app runs `textmask` only when one query
+scores above its threshold, as candle skips its pixel decoder. A Core ML folder from before #437 (`textscore` instead
+of `textenc` and `textdet`) still works the old way; `--parts textenc,textdet` adds the split parts to it.
 
 Converter gaps patched here (coremltools 9.0 with torch 2.15 and numpy 2.5):
   1. `new_ones` has no Core ML rule (transformers' attention-mask builders call it): a constant of ones.
@@ -65,7 +69,7 @@ torch.set_grad_enabled(False)
 SIDE = 1008
 SLOTS = 65  # 64 clicks (crates/engine/src/segment.rs MAX_CLICKS) + the "not a point" that closes the list
 PAD, NOT_A_POINT = -10, -1
-PARTS = ["encoder", "clickfeat", "clickdec", "textfeat", "textscore", "textmask"]
+PARTS = ["encoder", "clickfeat", "clickdec", "textfeat", "textenc", "textdet", "textmask"]
 LICENSE = "SAM License (facebook/sam3): not on LightCraft's allowlist, never published"
 
 
@@ -296,19 +300,29 @@ def position(det, side):
     return det.vision_encoder.neck.position_encoding((1, 256, side, side), torch.device("cpu"), torch.float32)
 
 
-class TextScore(torch.nn.Module):
-    """CLIP text encoder, DETR encoder and decoder, box head and dot-product scoring for one prompt (no masks)."""
+class TextEncoder(torch.nn.Module):
+    """CLIP text encoder and its projection: a prompt's text features."""
+
+    def __init__(self, det):
+        super().__init__()
+        self.det = det
+
+    def forward(self, ids, mask):
+        return self.det.get_text_features(input_ids=ids.long(), attention_mask=mask.long(), return_dict=True).pooler_output
+
+
+class TextDetector(torch.nn.Module):
+    """DETR encoder and decoder, box head and dot-product scoring for one prompt's text features (no masks)."""
 
     def __init__(self, det):
         super().__init__()
         self.det = det
         self.register_buffer("pos2", position(det, 72))
 
-    def forward(self, l2, ids, mask):
+    def forward(self, l2, text, mask):
         from transformers.models.sam3.modeling_sam3 import box_cxcywh_to_xyxy, inverse_sigmoid
 
         det = self.det
-        text = det.get_text_features(input_ids=ids.long(), attention_mask=mask.long(), return_dict=True).pooler_output
         text_mask = mask.bool()
         enc = det.detr_encoder(vision_features=[l2], text_features=text, vision_pos_embeds=[self.pos2], text_mask=text_mask)
         dec = det.detr_decoder(
@@ -322,7 +336,7 @@ class TextScore(torch.nn.Module):
         offsets = det.detr_decoder.box_head(hidden)
         boxes = box_cxcywh_to_xyxy((inverse_sigmoid(dec.reference_boxes) + offsets).sigmoid())
         logits = det.dot_product_scoring(decoder_hidden_states=hidden, text_features=enc.text_features, text_mask=text_mask).squeeze(-1)
-        return logits[-1], dec.presence_logits[-1], boxes[-1], hidden[-1], enc.last_hidden_state, text
+        return logits[-1], dec.presence_logits[-1], boxes[-1], hidden[-1], enc.last_hidden_state
 
 
 class TextMask(torch.nn.Module):
@@ -339,7 +353,7 @@ class TextMask(torch.nn.Module):
 
 
 class TextWhole(torch.nn.Module):
-    """transformers' own detector for one prompt (the check of `TextScore` + `TextMask`)."""
+    """transformers' own detector for one prompt (the check of `TextEncoder` + `TextDetector` + `TextMask`)."""
 
     def __init__(self, det):
         super().__init__()
@@ -404,7 +418,8 @@ def check_torch(det, trk, model_dir):
     l0, l1, l2 = TextFeatures(det)(backbone)
     ids, mask = tokens(model_dir, "person")
     whole = TextWhole(det)(l0, l1, l2, ids, mask)
-    logits, presence, boxes, queries, memory, text = TextScore(det)(l2, ids, mask)
+    text = TextEncoder(det)(ids, mask)
+    logits, presence, boxes, queries, memory = TextDetector(det)(l2, text, mask)
     masks, semantic = TextMask(det)(l0, l1, memory, text, mask, queries)
     for name, a, b in [("masks", masks, whole[0]), ("logits", logits, whole[1]), ("presence", presence, whole[2]), ("boxes", boxes, whole[3]), ("semantic", semantic, whole[4])]:
         d = float((a - b).abs().max())
@@ -426,14 +441,16 @@ def examples(det, trk, model_dir):
     image, s0, s1 = ClickFeatures(trk)(backbone)
     l0, l1, l2 = TextFeatures(det)(backbone)
     ids, mask = tokens(model_dir, "person")
-    _, _, _, queries, memory, text = TextScore(det)(l2, ids, mask)
+    text = TextEncoder(det)(ids, mask)
+    _, _, _, queries, memory = TextDetector(det)(l2, text, mask)
     p, lab = clicks([(0.4, 0.5, True), (0.7, 0.2, False)])
     return {
         "encoder": (lambda: Encoder(det), (torch.randn(1, 3, SIDE, SIDE, generator=g).clamp(-1, 1),), ["pixels"], ["backbone"], "export"),
         "clickfeat": (lambda: ClickFeatures(trk), (backbone,), ["backbone"], ["image", "s0", "s1"], "export"),
         "clickdec": (lambda: ClickDecoder(trk), (image, s0, s1, p, lab), ["image", "s0", "s1", "points", "labels"], ["masks", "iou", "obj"], "export"),
         "textfeat": (lambda: TextFeatures(det), (backbone,), ["backbone"], ["l0", "l1", "l2"], "export"),
-        "textscore": (lambda: TextScore(det), (l2, ids, mask), ["l2", "ids", "mask"], ["logits", "presence", "boxes", "queries", "memory", "text"], "trace"),
+        "textenc": (lambda: TextEncoder(det), (ids, mask), ["ids", "mask"], ["text"], "trace"),
+        "textdet": (lambda: TextDetector(det), (l2, text, mask), ["l2", "text", "mask"], ["logits", "presence", "boxes", "queries", "memory"], "trace"),
         "textmask": (lambda: TextMask(det), (l0, l1, memory, text, mask, queries), ["l0", "l1", "memory", "text", "mask", "queries"], ["masks", "semantic"], "trace"),
     }
 

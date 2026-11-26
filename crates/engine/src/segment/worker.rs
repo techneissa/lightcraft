@@ -26,7 +26,7 @@ use std::time::Duration;
 use lightcraft_develop::SegMask;
 use lightcraft_segment::{
     Encoded, Sam3,
-    remote::{self, CONCEPT_THRESHOLD, Operation, Request, TEXT_THRESHOLD, text_logits},
+    remote::{self, Operation, Request, TEXT_THRESHOLD, concept_logits, text_logits},
 };
 
 mod birefnet;
@@ -48,7 +48,7 @@ pub enum Kind {
     /// Clicks that remove an object (fork, `fork/object-remove.md`): one click takes the whole object.
     ObjectClicks(Vec<lightcraft_segment::Click>),
     Text(String),
-    /// Subject, Sky or Background: like `Text`, with the looser score ([`CONCEPT_THRESHOLD`]); `true`: only the main
+    /// Subject, Sky or Background: like `Text`, with the looser score ([`remote::CONCEPT_THRESHOLD`]); `true`: only the main
     /// subject's instances (Subject and Background).
     Concept(String, bool),
     /// Subject or Background by BiRefNet (fork feature, issue #48): `model` says whether SAM 3 (asked for `text`;
@@ -740,7 +740,7 @@ fn run_job(state: &mut State, shared: &Shared, job: &mut Job, placement: Placeme
         }
         Kind::Concept(text, main) => {
             let (m, enc) = encoded(state, shared, job, placement)?;
-            Ok(text_logits(m, enc, &text, CONCEPT_THRESHOLD, main)?.map(|l| SegMask::from_logits(side, &l)))
+            Ok(concept_logits(m, enc, &text, main)?.map(|l| SegMask::from_logits(side, &l)))
         }
         Kind::BiRefNet { .. } => Err("BiRefNet is run before this point".into()),
         Kind::Release(_) => Ok(None),
@@ -786,7 +786,7 @@ fn run_job(state: &mut State, shared: &Shared, job: &mut Job, placement: Placeme
                     Some(m.segment_clicks(&mut enc, &inside)?.logits)
                 }
                 Prompt::Text(text) => text_logits(m, &mut enc, &text, TEXT_THRESHOLD, false)?,
-                Prompt::Concept(text, main) => text_logits(m, &mut enc, &text, CONCEPT_THRESHOLD, main)?,
+                Prompt::Concept(text, main) => concept_logits(m, &mut enc, &text, main)?,
             };
             log::info!("SAM 3 detail pass ({}×{}) in {:?}", input.w, input.h, t.elapsed());
             Ok(logits.map(|l| SegMask::from_logits_in(side, &l, region)))
@@ -814,7 +814,7 @@ mod tests {
     fn core_mls_warm_up_shows_in_the_ring_until_it_ends() {
         use lightcraft_segment::coreml;
         let dir = std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Library/Application Support/ArtCraft/models/sam3"));
-        let compiled = |d: &PathBuf| coreml::folder(d).is_some_and(|f| coreml::Part::ALL.iter().all(|p| coreml::paths(&f, *p).1.is_dir()));
+        let compiled = |d: &PathBuf| coreml::folder(d).is_some_and(|f| coreml::used_parts(d).iter().all(|p| coreml::paths(&f, *p).1.is_dir()));
         let Some(dir) = dir.filter(|d| lightcraft_coreml::available() && lightcraft_segment::is_model_dir(d) && compiled(d)) else {
             lightcraft_testkit::skip!(Model, "SAM 3 and its compiled Core ML copy are not in the shared models folder");
             return;

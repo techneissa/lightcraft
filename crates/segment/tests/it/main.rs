@@ -3,3 +3,4 @@
 mod coreml;
 mod reference;
 mod remote;
+mod stored;

@@ -12,6 +12,8 @@ Lookup order (`default_sam3_dir`):
 
 `sam3-mirrors.txt` stays in `<config>/models/`.
 
+The text features of Subject, Sky and Background's fixed phrases are stored in the sibling folder `sam3-text-features/` (issue #437, `fork/coreml.md`). Like the compiled Core ML copies, they are made by the app; the `sam3` folder itself is never written to.
+
 Rules (techneissa, 2026-11-01):
 1. Never move the model back, delete the ArtCraft folder, or replace the symlink with a real folder.
 2. Any new model both apps could use goes in `ArtCraft/models/<model-id>/`.

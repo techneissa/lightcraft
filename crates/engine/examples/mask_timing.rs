@@ -7,7 +7,9 @@
 //! `LIGHTCRAFT_CONFIG_DIR=<scratch> cargo run --release -p lightcraft-engine --features sam --example mask_timing -- sam3+birefnet 0,0,75 PHOTO1 PHOTO2 PHOTO3`
 //!
 //! `LIGHTCRAFT_CONFIG_DIR` keeps the model choice out of the user's settings. `MASKING_PANEL=1` keeps the models
-//! loaded as the app does while the Masking panel is open (`Session::keep_mask_models`).
+//! loaded as the app does while the Masking panel is open (`Session::keep_mask_models`). `MASK_KIND=sky` (or
+//! `background`) makes that kind of mask instead of Subject; `/usr/bin/time -l` before the command gives the peak
+//! memory (issue #437).
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
@@ -59,6 +61,7 @@ fn main() -> Result<(), String> {
     let [model, gaps, photos @ ..] = args.as_slice() else {
         return Err("usage: mask_timing sam3|birefnet|sam3+birefnet GAPS PHOTO...".into());
     };
+    let kind = std::env::var("MASK_KIND").unwrap_or_else(|_| "subject".into());
     let gaps: Vec<u64> = gaps.split(',').map(|g| g.trim().parse().map_err(|_| "GAPS is whole seconds, comma-separated")).collect::<Result<_, _>>()?;
     let mut s = Session::new().with_fs().with_default_sam3_model().with_default_parsing_models();
     s.segmenter.background = false;
@@ -79,9 +82,13 @@ fn main() -> Result<(), String> {
         s.execute("mask.deleteAll", &json!({})).ok();
         let (t, c) = (wall(), cpu());
         println!("{t:8.2} s wall {c:8.2} s CPU  -- mask {} starts ({})", i + 1, photos.get(i).map_or("", String::as_str));
-        let made = s.execute("mask.add", &json!({"kind": "subject"}));
+        let made = s.execute("mask.add", &json!({"kind": kind}));
         let grid = s.develop_of(*id).and_then(|d| d.masks.first().cloned()).and_then(|m| match m.components.first().map(|c| c.shape.clone()) {
-            Some(lightcraft_develop::MaskShape::Subject { seg: Some(g), .. }) => Some(format!("{}² {}", g.side, g.model.unwrap_or_default())),
+            Some(
+                lightcraft_develop::MaskShape::Subject { seg: Some(g), .. }
+                | lightcraft_develop::MaskShape::Sky { seg: Some(g), .. }
+                | lightcraft_develop::MaskShape::Background { seg: Some(g), .. },
+            ) => Some(format!("{}² {}", g.side, g.model.unwrap_or_default())),
             _ => None,
         });
         println!(

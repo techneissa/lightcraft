@@ -1,15 +1,16 @@
-//! The CLIP text encoder (24 layers, 1024 wide, causal) that turns a prompt into the token
-//! features SAM 3's detector attends to.
+//! The CLIP text encoder (24 layers, 1024 wide, causal) and its projection, which turn a prompt
+//! into the token features SAM 3's detector attends to. Loaded apart from the detector (issue
+//! #437): fixed phrases read their stored features instead ([`crate::stored`]).
 //!
 //! Modified work (Apache License 2.0, §4(b)): ported by the LightCraft contributors in 2026 from
 //! the Python/PyTorch SAM 3 code of Hugging Face Transformers (`models/sam3/modeling_sam3.py`, CLIP text model), Copyright The HuggingFace
 //! Team and Meta Platforms, Inc.; translated to Rust on candle and restructured. See NOTICE.
 
 use candle_core::{Device, Module, Tensor};
-use candle_nn::{Embedding, LayerNorm, VarBuilder};
+use candle_nn::{Embedding, LayerNorm, Linear, VarBuilder};
 
 use crate::Result;
-use crate::nn::{Attention, Mlp, ln};
+use crate::nn::{Attention, Mlp, linear, ln};
 use crate::tokenizer::CONTEXT;
 
 const HIDDEN: usize = 1024;
@@ -29,12 +30,13 @@ pub struct TextEncoder {
     positions: Tensor,
     layers: Vec<Layer>,
     final_ln: LayerNorm,
+    proj: Linear,
     device: Device,
 }
 
 impl TextEncoder {
-    /// `vb` at `detector_model.text_encoder.text_model`.
-    pub fn new(vb: VarBuilder) -> Result<Self> {
+    /// `vb` at `detector_model.text_encoder.text_model`, `proj` at `detector_model.text_projection`.
+    pub fn new(vb: VarBuilder, proj: VarBuilder) -> Result<Self> {
         let e = vb.pp("embeddings");
         let mut layers = Vec::with_capacity(LAYERS);
         for i in 0..LAYERS {
@@ -51,11 +53,12 @@ impl TextEncoder {
             positions: e.get((CONTEXT, HIDDEN), "position_embedding.weight")?.unsqueeze(0)?,
             layers,
             final_ln: ln(HIDDEN, EPS, vb.pp("final_layer_norm"))?,
+            proj: linear(HIDDEN, crate::neck::FPN, proj)?,
             device: vb.device().clone(),
         })
     }
 
-    /// `[1, 32, 1024]` features for token `ids` (`valid` marks real tokens).
+    /// `[1, 32, 256]` features for token `ids` (`valid` marks real tokens), projected for the detector.
     pub fn forward(&self, ids: &[u32], valid: &[bool]) -> Result<Tensor> {
         let ids = Tensor::from_slice(ids, (1, ids.len()), &self.device)?;
         let mut x = self.tokens.forward(&ids)?.broadcast_add(&self.positions)?;
@@ -76,6 +79,6 @@ impl TextEncoder {
             let h = l.ln2.forward(&x)?;
             x = (&x + l.mlp.forward(&h)?)?;
         }
-        Ok(self.final_ln.forward(&x)?)
+        Ok(self.proj.forward(&self.final_ln.forward(&x)?)?)
     }
 }

@@ -9,7 +9,6 @@
 use candle_core::{D, Device, IndexOp, Module, Tensor};
 use candle_nn::{Conv2d, Conv2dConfig, GroupNorm, LayerNorm, Linear, VarBuilder};
 
-use crate::clip::TextEncoder;
 use crate::neck::{FPN, Neck};
 use crate::nn::{Attention, DecoderMlp, Mlp, TORCH_LN_EPS, cxcywh_to_xyxy, inverse_sigmoid, linear, ln, padding_bias, sine_grid, to_vec};
 use crate::{Error, Prediction, Result};
@@ -69,8 +68,6 @@ struct DecoderLayer {
 pub struct Detector {
     device: Device,
     neck: Neck,
-    text: TextEncoder,
-    text_proj: Linear,
     encoder: Vec<EncoderLayer>,
     decoder: Vec<DecoderLayer>,
     out_ln: LayerNorm,
@@ -136,8 +133,6 @@ impl Detector {
         Ok(Self {
             device: vb.device().clone(),
             neck: Neck::new(vb.pp("vision_encoder.neck"))?,
-            text: TextEncoder::new(vb.pp("text_encoder.text_model"))?,
-            text_proj: linear(1024, HIDDEN, vb.pp("text_projection"))?,
             encoder,
             decoder,
             out_ln: ln(HIDDEN, TORCH_LN_EPS, d.pp("output_layer_norm"))?,
@@ -208,9 +203,9 @@ impl Detector {
         Ok(Tensor::cat(&[one(1)?, one(0)?, one(2)?, one(3)?], D::Minus1)?)
     }
 
-    /// Run the detector for one tokenized prompt.
-    pub fn predict(&self, f: &Features, ids: &[u32], valid: &[bool]) -> Result<Output> {
-        self.predict_cancellable(f, ids, valid, None, None)?.ok_or_else(|| Error::Model("detector skipped without threshold".into()))
+    /// Run the detector for one prompt's text features `[1, 32, 256]` (`valid` marks its real tokens).
+    pub fn predict(&self, f: &Features, text: &Tensor, valid: &[bool]) -> Result<Output> {
+        self.predict_cancellable(f, text, valid, None, None)?.ok_or_else(|| Error::Model("detector skipped without threshold".into()))
     }
 
     /// Run the detector with an optional score `threshold` (when no query exceeds `threshold`, the
@@ -219,7 +214,7 @@ impl Detector {
     pub fn predict_cancellable(
         &self,
         f: &Features,
-        ids: &[u32],
+        text: &Tensor,
         valid: &[bool],
         threshold: Option<f32>,
         cancel: Option<&std::sync::atomic::AtomicBool>,
@@ -231,7 +226,7 @@ impl Detector {
             Ok(())
         };
         check()?;
-        let text = self.text_proj.forward(&self.text.forward(ids, valid)?)?; // [1, 32, 256]
+        let text = text.clone();
         let text_bias = padding_bias(valid, &self.device)?;
 
         // DETR encoder: image tokens attend to themselves and to the prompt

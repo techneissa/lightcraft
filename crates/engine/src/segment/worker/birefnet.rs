@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use lightcraft_birefnet::{BiRefNet, Matte, combine};
 use lightcraft_develop::SegMask;
-use lightcraft_segment::remote::{CONCEPT_THRESHOLD, text_logits};
+use lightcraft_segment::remote::concept_logits;
 
 use super::{Failure, Flag, Job, Placement, Shared, State, encoded, render};
 use crate::segment::birefnet::SelectionModel;
@@ -116,7 +116,7 @@ struct Models<'a> {
 impl Steps for Models<'_> {
     fn sam(&mut self, job: &mut Job) -> Result<Option<Vec<f32>>, Failure> {
         let (m, enc) = encoded(self.state, self.shared, job, self.placement)?;
-        Ok(text_logits(m, enc, self.req.text, CONCEPT_THRESHOLD, self.req.main)?)
+        Ok(concept_logits(m, enc, self.req.text, self.req.main)?)
     }
 
     fn matte(&mut self, job: &mut Job) -> Result<Matte, Failure> {
@@ -180,7 +180,7 @@ fn decide(state: &mut State, shared: &Shared, job: &mut Job, placement: Placemen
         SelectionModel::Combined => combined(&mut Models { state, shared, placement, req }, job)?,
         SelectionModel::Sam3 => {
             let (m, enc) = encoded(state, shared, job, placement)?;
-            text_logits(m, enc, req.text, CONCEPT_THRESHOLD, req.main)?.map(|l| SegMask::from_logits(lightcraft_segment::MASK_SIDE, &l))
+            concept_logits(m, enc, req.text, req.main)?.map(|l| SegMask::from_logits(lightcraft_segment::MASK_SIDE, &l))
         }
     };
     // (the edge read now, not when the job was queued: set back to Current meanwhile, the part keeps its own edge)

@@ -3,7 +3,9 @@
 //! - **Point prompts** ([`Sam3::segment_clicks`]): positive and negative clicks select one
 //!   object, via SAM 3's interactive (SAM 2 style) prompt encoder and mask decoder.
 //! - **Text prompts** ([`Sam3::segment_text`]): a noun phrase ("the red car", "sky") selects
-//!   every instance of that concept, via the CLIP text encoder and the DETR detector.
+//!   every instance of that concept, via the CLIP text encoder and the DETR detector. The fixed
+//!   phrases of Subject, Sky and Background ([`Sam3::segment_concept`]) keep their text features
+//!   beside the model ([`stored`], issue #437), so the text encoder loads only for Describe.
 //!
 //! The expensive part, the 32-layer ViT over the 1008 × 1008 input, runs once per image
 //! ([`Sam3::encode`]); each click or prompt then reuses the [`Encoded`] features.
@@ -42,6 +44,8 @@ mod neck;
 mod nn;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod remote;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod stored;
 pub mod tokenizer;
 #[cfg(not(target_arch = "wasm32"))]
 mod tracker;
@@ -136,7 +140,13 @@ pub struct Sam3 {
     tracker_neck: Option<neck::Neck>,
     tracker: Option<tracker::Tracker>,
     detector: Option<detector::Detector>,
+    /// candle's text encoder: loaded for prompts without stored features, let go after a fixed phrase's run.
+    text_encoder: Option<clip::TextEncoder>,
     tokenizer: Option<tokenizer::Tokenizer>,
+    /// The stored text features of the engine that runs prompts now ([`stored`]).
+    store: Option<stored::Store>,
+    /// The key of candle's encoder (the weights' size and time).
+    weights_key: String,
     cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
     /// Core ML's parts (issue #268); `None`: candle runs everything.
     coreml: Option<Arc<coreml::Parts>>,
@@ -246,7 +256,10 @@ impl Sam3 {
             tracker_neck: None,
             tracker: None,
             detector: None,
+            text_encoder: None,
             tokenizer: None,
+            store: None,
+            weights_key: stored::weights_key(&dir.join(WEIGHTS_FILE)),
             cancel: None,
             coreml,
             runtime,
@@ -466,9 +479,73 @@ impl Sam3 {
         self.tokenizer.as_ref().map(|t| t.encode(text)).ok_or_else(|| Error::Model("the tokenizer did not load".into()))
     }
 
+    /// Whether a text encoder (Core ML's or candle's) is in memory (tests and measurements).
+    pub fn text_encoder_loaded(&self) -> bool {
+        self.text_encoder.is_some() || self.coreml.as_ref().is_some_and(|p| p.text_encoder_loaded())
+    }
+
+    /// The stored text features of the engine that runs prompts now: Core ML's when it runs them, else candle's on
+    /// its device.
+    fn store(&mut self) -> &mut stored::Store {
+        let (name, key) = match &self.coreml {
+            Some(p) => (format!("coreml-{:?}", p.units()).to_lowercase(), p.text_key()),
+            None => (if self.device.is_metal() { "candle-metal" } else { "candle-cpu" }.to_string(), self.weights_key.clone()),
+        };
+        let path = stored::path(&self.dir, &name);
+        if !self.store.as_ref().is_some_and(|s| s.is(path.as_deref(), &key)) {
+            self.store = None;
+        }
+        self.store.get_or_insert_with(|| stored::Store::open(path, &key))
+    }
+
+    /// `phrase`'s text features on Core ML's split prompt model: with `keep` (a fixed phrase), the stored ones, or the
+    /// encoder's, then stored, and the encoder let go when it was loaded for them.
+    fn coreml_text_features(
+        &mut self,
+        parts: &coreml::Parts,
+        phrase: &str,
+        ids: &[u32],
+        valid: &[bool],
+        keep: bool,
+    ) -> lightcraft_coreml::Result<Vec<f32>> {
+        if keep && let Some(v) = self.store().get(phrase) {
+            return Ok(v);
+        }
+        let had = parts.text_encoder_loaded();
+        let v = parts.text_encode(ids, valid)?;
+        if keep {
+            self.store().put(phrase, &v);
+            if !had {
+                parts.release_text_encoder();
+            }
+        }
+        Ok(v)
+    }
+
+    /// `phrase`'s text features `[1, 32, 256]` on candle, as [`Sam3::coreml_text_features`].
+    fn candle_text_features(&mut self, phrase: &str, ids: &[u32], valid: &[bool], keep: bool) -> Result<Tensor> {
+        if keep && let Some(v) = self.store().get(phrase) {
+            return Ok(Tensor::from_vec(v, (1, tokenizer::CONTEXT, neck::FPN), &self.device)?);
+        }
+        let had = self.text_encoder.is_some();
+        if !had {
+            let vb = Self::vb(&self.weights, &self.device).pp("detector_model");
+            self.text_encoder = Some(clip::TextEncoder::new(vb.pp("text_encoder.text_model"), vb.pp("text_projection"))?);
+        }
+        let t = self.text_encoder.as_ref().ok_or_else(|| Error::Model("the text encoder did not load".into()))?.forward(ids, valid)?;
+        if keep {
+            let v = nn::to_vec(&t)?;
+            self.store().put(phrase, &v);
+            if !had {
+                self.text_encoder = None;
+            }
+        }
+        Ok(t)
+    }
+
     /// The prompt `text` on Core ML: `Some(None)` when nothing scores above `threshold` (no masks are made); `None`
-    /// when candle runs it.
-    fn coreml_text(&mut self, enc: &mut Encoded, text: &str, threshold: f32, main_only: bool) -> Result<Option<Option<Prediction>>> {
+    /// when candle runs it. `keep`: a fixed phrase, whose text features are stored.
+    fn coreml_text(&mut self, enc: &mut Encoded, text: &str, threshold: f32, main_only: bool, keep: bool) -> Result<Option<Option<Prediction>>> {
         if self.coreml.is_none() || enc.coreml.is_none() {
             return Ok(None);
         }
@@ -483,7 +560,17 @@ impl Sam3 {
         }
         let f = cm.text.as_ref().ok_or_else(|| Error::Model("prompt features".into()))?;
         self.check_cancel()?;
-        let scores = match parts.text_score(f, &ids, &valid) {
+        let scores = if parts.split() {
+            let features = match self.coreml_text_features(&parts, text, &ids, &valid, keep) {
+                Ok(t) => t,
+                Err(e) => return self.coreml_failed("text encoder", e).map(|()| None),
+            };
+            self.check_cancel()?;
+            parts.text_detect(f, features, &valid)
+        } else {
+            parts.text_score(f, &ids, &valid)
+        };
+        let scores = match scores {
             Ok(s) => s,
             Err(e) => return self.coreml_failed("prompt", e).map(|()| None),
         };
@@ -500,17 +587,20 @@ impl Sam3 {
         Ok(Some(detector::merge_with(&scores.logits, scores.presence, &masks.semantic, threshold, main_only, one)))
     }
 
-    fn detector_parts(&mut self) -> Result<(&detector::Detector, &tokenizer::Tokenizer)> {
+    fn detector(&mut self) -> Result<&detector::Detector> {
         if self.detector.is_none() {
             self.detector = Some(detector::Detector::new(Self::vb(&self.weights, &self.device).pp("detector_model"))?);
         }
-        if self.tokenizer.is_none() {
-            self.tokenizer = Some(tokenizer::Tokenizer::load(&self.dir)?);
+        self.detector.as_ref().ok_or_else(|| Error::Model("detector failed to load".into()))
+    }
+
+    /// candle's detector features of `enc`, computed when missing.
+    fn candle_detector_features(&mut self, enc: &mut Encoded) -> Result<()> {
+        if enc.detector.is_none() {
+            let backbone = self.candle_backbone(enc)?;
+            enc.detector = Some(self.detector()?.features(&backbone)?);
         }
-        match (&self.detector, &self.tokenizer) {
-            (Some(d), Some(t)) => Ok((d, t)),
-            _ => Err(Error::Model("detector failed to load".into())),
-        }
+        Ok(())
     }
 
     /// Segment every instance of the concept `text` names. Instances scoring above
@@ -523,19 +613,28 @@ impl Sam3 {
     /// [`Sam3::segment_text`]; with `main_only`, only the main subject's instances (the largest and any of at
     /// least a third of its area, [`detector::main_instances`]) are merged.
     pub fn segment_text_with(&mut self, enc: &mut Encoded, text: &str, threshold: f32, main_only: bool) -> Result<Option<Prediction>> {
+        self.segment_phrase(enc, text, threshold, main_only, false)
+    }
+
+    /// [`Sam3::segment_text_with`] for a fixed phrase (Subject, Sky and Background): its text features are stored
+    /// beside the model after its first run and read from there after, so the text encoder is not loaded for it
+    /// ([`stored`], issue #437). The mask is the one [`Sam3::segment_text_with`] gives.
+    pub fn segment_concept(&mut self, enc: &mut Encoded, text: &str, threshold: f32, main_only: bool) -> Result<Option<Prediction>> {
+        self.segment_phrase(enc, text, threshold, main_only, true)
+    }
+
+    fn segment_phrase(&mut self, enc: &mut Encoded, text: &str, threshold: f32, main_only: bool, keep: bool) -> Result<Option<Prediction>> {
         self.check_cancel()?;
-        if let Some(done) = self.coreml_text(enc, text, threshold, main_only)? {
+        if let Some(done) = self.coreml_text(enc, text, threshold, main_only, keep)? {
             return Ok(done);
         }
         let cancel = self.cancel.clone();
-        let backbone = if enc.detector.is_none() { Some(self.candle_backbone(enc)?) } else { None };
-        let (det, tok) = self.detector_parts()?;
-        if let Some(backbone) = backbone {
-            enc.detector = Some(det.features(&backbone)?);
-        }
+        self.candle_detector_features(enc)?;
+        let (ids, valid) = self.tokens(text)?;
+        let features = self.candle_text_features(text, &ids, &valid, keep)?;
+        let det = self.detector()?;
         let f = enc.detector.as_ref().ok_or_else(|| Error::Model("detector features".into()))?;
-        let (ids, valid) = tok.encode(text);
-        let Some(out) = det.predict_cancellable(f, &ids, &valid, Some(threshold), cancel.as_deref())? else {
+        let Some(out) = det.predict_cancellable(f, &features, &valid, Some(threshold), cancel.as_deref())? else {
             return Ok(None);
         };
         Ok(detector::merge(&out, threshold, main_only))
@@ -546,20 +645,23 @@ impl Sam3 {
     /// without it the most prominent, with whoever is about as large. `None` when the subject is
     /// neither (a focus on something else, or nobody in the photo): select what is at the point.
     pub fn segment_subject(&mut self, enc: &mut Encoded, focus: Option<(f32, f32)>, threshold: f32) -> Result<Option<Prediction>> {
-        let outs = SUBJECT_CONCEPTS.iter().map(|c| self.detect(enc, c)).collect::<Result<Vec<_>>>()?;
+        let outs = SUBJECT_CONCEPTS.iter().map(|c| self.detect_with(enc, c, true)).collect::<Result<Vec<_>>>()?;
         Ok(detector::subject(&outs, threshold, focus))
     }
 
     /// Raw detector outputs for `text` (tests and tools).
     pub fn detect(&mut self, enc: &mut Encoded, text: &str) -> Result<detector::Output> {
-        let backbone = if enc.detector.is_none() { Some(self.candle_backbone(enc)?) } else { None };
-        let (det, tok) = self.detector_parts()?;
-        if let Some(backbone) = backbone {
-            enc.detector = Some(det.features(&backbone)?);
-        }
+        self.detect_with(enc, text, false)
+    }
+
+    /// [`Sam3::detect`] on candle; `keep`: a fixed phrase, whose text features are stored.
+    fn detect_with(&mut self, enc: &mut Encoded, text: &str, keep: bool) -> Result<detector::Output> {
+        self.candle_detector_features(enc)?;
+        let (ids, valid) = self.tokens(text)?;
+        let features = self.candle_text_features(text, &ids, &valid, keep)?;
+        let det = self.detector()?;
         let f = enc.detector.as_ref().ok_or_else(|| Error::Model("detector features".into()))?;
-        let (ids, valid) = tok.encode(text);
-        det.predict(f, &ids, &valid)
+        det.predict(f, &features, &valid)
     }
 }
 
@@ -637,7 +739,7 @@ mod tests {
             assert!(matches!(e, Error::CoreMl(_)), "{what}, Core ML only: {e}");
         };
         check("no packages");
-        // six folders that are not models
+        // folders that are not models
         for part in coreml::Part::ALL {
             let (package, _) = coreml::paths(&root.join(coreml::FOLDER), part);
             std::fs::create_dir_all(package.join("Data/com.apple.CoreML")).unwrap();
