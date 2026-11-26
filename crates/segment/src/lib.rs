@@ -620,6 +620,11 @@ impl Sam3 {
             Ok(s) => s,
             Err(e) => return self.coreml_failed("prompt", e).map(|()| None),
         };
+        log::debug!(
+            "SAM 3 prompt “{text}” on Core ML: best score {:.3}, presence {:.3}, threshold {threshold}",
+            detector::best_score(&scores.logits, scores.presence),
+            sigmoid(scores.presence)
+        );
         if !detector::any_above(&scores.logits, scores.presence, threshold) {
             return Ok(Some(None));
         }

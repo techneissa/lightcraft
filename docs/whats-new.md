@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Describe says what to try when it finds nothing
+- When Describe finds nothing for your words, it now says what to try: other or fewer words, zooming in on something
+  small, or clicking it with Object. When it can't run, it says what went wrong instead of only that it failed.
+
 ### Brush Feather works on strokes (process V10)
 - A brush stroke's edge now fades over the Feather you set. Overlapping dabs used to pile their soft edges up into an
   almost hard one: at Feather 100 and Flow 100, halfway out from a stroke's centre line was 90 % covered, and is

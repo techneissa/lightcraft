@@ -18,6 +18,7 @@
 pub(crate) mod adaptive_jobs;
 pub mod birefnet;
 pub(crate) mod clicks_request;
+pub(crate) mod describe_messages;
 #[cfg(feature = "sam")]
 pub(crate) mod download;
 mod kept;
@@ -1128,9 +1129,8 @@ impl Session {
             Tag::NewPrompt { photo, mask, op, name, text, region } => {
                 let seg = match o.result {
                     Ok(Some(seg)) => seg,
-                    Ok(None) if region.is_some() => return polled.messages.push(format!("Nothing matching “{text}” was found in the zoomed area.")),
-                    Ok(None) => return polled.messages.push(format!("Nothing matching “{text}” was found in this photo.")),
-                    Err(e) => return polled.messages.push(e),
+                    Ok(None) => return polled.messages.push(describe_messages::not_found(&text, region.is_some())),
+                    Err(e) => return polled.messages.push(describe_messages::failed(&text, &e)),
                 };
                 if self.active() != Some(photo) {
                     return polled.messages.push(format!("The photo changed before “{text}” was found; try again."));
