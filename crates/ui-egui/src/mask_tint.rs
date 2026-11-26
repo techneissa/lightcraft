@@ -203,9 +203,13 @@ impl MaskTints {
                 self.built.remove(&slot);
                 continue;
             };
-            let tint = ctx.load_texture(format!("{slot:?} tint"), image, TextureOptions::LINEAR);
+            // the tint made before goes into the same texture (issue #436): a new texture each time left the old one to be
+            // freed after the next frame shown, and while the window shows none (covered, hidden) every old tint stayed in GPU
+            // memory
+            let (old_tint, old_grey) = self.built.remove(&slot).map_or((None, None), |b| (Some(b.tint), b.grey));
+            let tint = reuse(ctx, old_tint, format!("{slot:?} tint"), image);
             let grey = (sel.view == MaskView::ColorOnBw)
-                .then(|| tex.pixels.as_ref().map(|p| ctx.load_texture(format!("{slot:?} grey"), grey_of(p), TextureOptions::LINEAR)))
+                .then(|| tex.pixels.as_ref().map(|p| reuse(ctx, old_grey, format!("{slot:?} grey"), grey_of(p))))
                 .flatten();
             #[cfg(test)]
             {
@@ -213,6 +217,12 @@ impl MaskTints {
             }
             self.built.insert(slot, Built { signature, pick: sel.pick, view: sel.view, color: sel.color, tint, grey });
         }
+    }
+
+    /// The texture `slot`'s tint is drawn from.
+    #[cfg(test)]
+    pub(crate) fn tint_id(&self, slot: Slot) -> Option<egui::TextureId> {
+        self.built.get(&slot).map(|b| b.tint.id())
     }
 
     /// Whether `slot`'s texture (the render `key`, of `photo`) has its tint drawn by [`Self::paint`]. The whole frame takes the
@@ -247,6 +257,17 @@ impl MaskTints {
             _ => 255,
         };
         p.image(b.tint.id(), dst, uv, Color32::from_white_alpha(alpha));
+    }
+}
+
+/// `image` in `old`'s texture when there is one, else in a new texture named `name`.
+fn reuse(ctx: &egui::Context, old: Option<TextureHandle>, name: String, image: ColorImage) -> TextureHandle {
+    match old {
+        Some(mut t) => {
+            t.set(image, TextureOptions::LINEAR);
+            t
+        }
+        None => ctx.load_texture(name, image, TextureOptions::LINEAR),
     }
 }
 

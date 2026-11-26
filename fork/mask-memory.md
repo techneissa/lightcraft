@@ -7,6 +7,7 @@ List: masks, brushing and zoom hold each mask's alpha once, a zoom window's GPU 
 - **Each mask's alpha is held once.** A GPU render evaluates its masks into one stack of planes (the buffer the finish stage reads). The alphas a view keeps for the next render (`masks::AlphaStore`) are now ranges of that stack (`Kept { stack, at, len }`), not a copy of each one: a render no longer holds every alpha twice while it runs, and a render that keeps nothing (the full-size picture, export) copies none out. One copy is left: a render with Decontaminate on a mask copies the whole stack once more to append the edges after it, because the finish stage reads both from one buffer. A brush part's plane is copied for keeping only when the render has a store (`brush_part(…, keep)`).
 - **Earlier windows' alphas** (pan back, zoom back, issue #175) keep the same caps (`KEPT_ALPHAS`, `KEPT_ALPHA_BYTES` = 384 MB, the current render's alphas counted in), but an earlier render's stack is kept whole or not at all: it costs its whole size the first time one of its alphas is kept. A kept stack also holds planes no kept alpha points at: the chromaticity planes of local Moiré / Noise (3 planes), Relight's planes, and a second mask with the same alpha (1 plane each). Estimate from the plane sizes: on a 2560 × 2048 window a plane is 21 MB, so 21–84 MB a kept stack.
 - **A zoom window's stages go with the idle trim.** When the idle trim runs and no zoom window is on screen (30 s without renders while a zoom window is kept at Fit, as its texture or, after an edit at Fit dropped the texture, as its stages only; 3 s otherwise), the `Region` and `RegionBefore` stage caches are dropped with the GPU copy of the original they are cut from. Before, they stayed until the next zoom (about 1 GB at 1:1 on a 33 MP raw with 12 masks). The loupe's own stages stay, for the next edit.
+- **The overlay's tint keeps its texture (issue #436).** A tint made again (another mask, colour, view, a pan or a new zoom window) goes into the texture the slot had (`MaskTints::show`, `reuse`), not a new one. egui frees a dropped texture only once a frame reaches the screen, so while the window was covered every old tint stayed in GPU memory: after the session below, 1.8 GB of the 3.3 GB at rest. The general cause, frees that wait for a shown frame, is in egui-wgpu (issue #379).
 - **Diagnostics.** `ui.inspect` → `memory.stageCaches.views` lists each view's GPU stages by part (`images`, `planes`, `source`, `alphas`, `otherAlphas`, `brushes`, `host`, `other`; `GpuStages::parts`, `lightcraft_gpu::stage_parts`), and `memory.gpu.peak` is the most device bytes allocated at once since launch.
 
 ## How it was measured
@@ -24,6 +25,26 @@ Release builds on a test Mac, one run each, other lanes building. The app ran wi
 
 What the views held at 200 % (before): the zoom window's stages 0.9–1.0 GB (alphas 222, earlier windows' alphas 148, brush parts 89, images 281, planes 187 MB) and the loupe's 0.53 GB (alphas 166, brush parts 66, images 216, planes 83 MB), the GPU copy of the original 374 MB, the CPU original 374 MB, preview sources 200 MB.
 
+### The session script (issue #436)
+
+`fork/rest-memory.py` runs the session and reports what the app holds and does at rest: it starts the app with a fresh profile and library, makes 12 masks (5 brush masks, 2 linear, 2 radial, a luminance range, a colour range, and Subject, which uses BiRefNet and BiRefNet Matting; `--no-ai` leaves it out), zooms to 100 % and 200 % with 4 pans and a stroke each, 12 more pans with a stroke, mask slider ticks, back to Fit. After `--idle` seconds alone it records the CPU and GPU time over 30 s, `footprint -v` and `vmmap --summary` by category, `ui.inspect` → `memory`, the AI mask's loaded models, and the footprint again after a windowed screenshot (what waited for a shown frame). The file's docstring says how to run it.
+
+Release builds on a test Mac, the window covered by others, one run each, other builds running; rest = 60 s idle at Fit:
+
+| | `custom` 9856fd773 | Tint keeps its texture |
+| --- | ---: | ---: |
+| Rest footprint, with the Subject mask | 3.31 GB | 1.52 GB |
+| of which owned GPU memory (graphics) | 2.46 GB | 0.59 GB |
+| of which Malloc Large (CPU original 374 MB, previews 200 MB, renders and thumbnails 112 MB) | 0.69 GB | 0.69 GB |
+| Rest footprint, without it (the full-size picture's 234 MB of tiles built) | 3.77 GB | 1.86 GB |
+| Still waiting for a shown frame | | 64 / 49 MB |
+| GPU stages kept at Fit (alphas 200, images 100, brush parts 66, planes 33 MB) | 400 MB | 400 MB |
+| AI models loaded at rest | none | none |
+| CPU at rest | 0.11–0.16 % | 0.09–0.13 % |
+| Highest footprint, with the Subject mask / without | 10.2 / 5.2 GB | 8.6 / 5.2 GB |
+
+The app's threads all sleep at rest. Its GPU time read 0 % in one run and 13–28 % in two runs while macOS's screen capture (`replayd`) used 22 % of the GPU: time the system charged to the window, not work the app submitted (no render started, every thread asleep in `sample`).
+
 ## Not done
 
 - The full-size picture (`ui-egui/src/full_picture.rs`) renders the whole 33 MP frame at once after each pause past Fit, and every mask's alpha is a full-size plane in it (4 bytes a pixel a mask: 132 MB each, 2.2 GB for 17). That render is the remaining peak (5.2 GB of GPU buffers). Evaluating masks and the finish stage band by band would bound it.
@@ -35,12 +56,12 @@ What the views held at 200 % (before): the zoom window's stages 0.9–1.0 GB (al
 
 ## Own files
 
-`fork/mask-memory.md`, `fork/tests.d/mask-memory.txt`
+`fork/mask-memory.md`, `fork/tests.d/mask-memory.txt`, `fork/rest-memory.py`
 
 ## Hooks in official files
 
-`crates/gpu/src/masks.rs` (`Kept`, `AlphaPart`, `with_earlier`, `brush_part`'s `keep`, `masks` returns the stack as `Arc<Buf>`, a test), `crates/gpu/src/render.rs` (`StageParts`, `GpuStages::parts`, `Cx::copy_range`, `masks.as_deref()`), `crates/gpu/src/decontam.rs` (`with_edges` takes and returns `Arc<Buf>`), `crates/gpu/src/lib.rs` (`stage_parts`, `GpuMemory::peak`), `crates/gpu/src/ctx.rs` (`HIGH`), `crates/engine/src/memory.rs` (`GpuUsage::peak`), `crates/ui-egui/src/render.rs` (`trim_when_idle`, `memory`), `docs/control-protocol.md`.
+`crates/gpu/src/masks.rs` (`Kept`, `AlphaPart`, `with_earlier`, `brush_part`'s `keep`, `masks` returns the stack as `Arc<Buf>`, a test), `crates/gpu/src/render.rs` (`StageParts`, `GpuStages::parts`, `Cx::copy_range`, `masks.as_deref()`), `crates/gpu/src/decontam.rs` (`with_edges` takes and returns `Arc<Buf>`), `crates/gpu/src/lib.rs` (`stage_parts`, `GpuMemory::peak`), `crates/gpu/src/ctx.rs` (`HIGH`), `crates/engine/src/memory.rs` (`GpuUsage::peak`), `crates/ui-egui/src/render.rs` (`trim_when_idle`, `memory`), `crates/ui-egui/src/mask_tint.rs` (`reuse`, `tint_id`), `docs/control-protocol.md`.
 
 ## Tests
 
-`fork/tests.d/mask-memory.txt`: a render's kept alphas share its one stack, after a slider tick too (`masks::tests`); a zoom window's stage caches go with the idle trim and the loupe's stay (`render::stage_budget_tests`).
+`fork/tests.d/mask-memory.txt`: a render's kept alphas share its one stack, after a slider tick too (`masks::tests`); a zoom window's stage caches go with the idle trim and the loupe's stay (`render::stage_budget_tests`); a tint made again keeps its texture (`tests::mask_tint::a_tint_made_again_keeps_its_texture`).

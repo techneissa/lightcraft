@@ -107,6 +107,23 @@ fn the_overlay_toggle_and_its_opacity_start_no_render() {
     assert_eq!(planes, 0, "an effect changes no plane");
 }
 
+// Given a mask overlay, a tint made again (another colour, another mask's planes) goes into the texture it had: a new texture
+// each time left the old one to be freed after the next frame shown, and while the window showed none (covered, hidden) the
+// old tints stayed in GPU memory, 0.3 GB after a masking session (issue #436)
+#[test]
+fn a_tint_made_again_keeps_its_texture() {
+    let mut h = masking();
+    let id = h.app.renderer.tints.tint_id(Slot::Main).expect("the tint is made");
+    let builds = h.app.renderer.tints.builds;
+    during(&mut h, |h| h.app.ui.mask_overlay_color = [30, 200, 60]);
+    during(&mut h, |h| {
+        let r = h.request("engine.execute", json!({"command": "mask.select", "params": {"id": 1}}), T);
+        assert_eq!(r["ok"], true, "{r}");
+    });
+    assert!(h.app.renderer.tints.builds >= builds + 2, "the colour and the other mask made the tint again");
+    assert_eq!(h.app.renderer.tints.tint_id(Slot::Main), Some(id), "the tint went into a new texture");
+}
+
 // Given the overlay hidden, nothing is asked of the masks: edits, drags and strokes make no plane; showing it asks once,
 // and what a slider drag does not change is not made again
 #[test]

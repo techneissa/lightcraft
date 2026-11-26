@@ -2,3 +2,4 @@
 cargo test -p lightcraft-gpu --lib -- masks::tests
 cargo test -p lightcraft-gpu --test it -- mask_cache decontam masks dirty_render
 cargo test -p lightcraft-ui-egui --lib -- render::stage_budget_tests
+cargo test -p lightcraft-ui-egui --lib -- tests::mask_tint
