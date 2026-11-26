@@ -15,7 +15,7 @@
 //! | clickfeat | once per photo | backbone → image, s0, s1 |
 //! | clickdec | per click | image, s0, s1, points, labels → masks, iou, obj |
 //! | textfeat | first prompt on a photo | backbone → l0, l1, l2 |
-//! | textenc | per Describe prompt | ids, mask → text |
+//! | textenc | per prompt without stored text features (Describe, a fixed phrase's first run) | ids, mask → text |
 //! | textdet | per prompt | l2, text, mask → logits, presence, boxes, queries, memory |
 //! | textmask | per prompt that matches | l0, l1, memory, text, mask, queries → masks, semantic |
 //!
@@ -209,7 +209,7 @@ pub struct Parts {
     /// The prompt model is split (`textenc` and `textdet`) rather than the old `textscore`.
     split: bool,
     /// The key of the text encoder's numbers ([`Parts::text_key`]).
-    text_key: String,
+    text_key: Option<String>,
     slots: [Slot; 8],
 }
 
@@ -276,7 +276,13 @@ impl Parts {
         }
         let dir = folder(model_dir).ok_or_else(|| Error::Missing(model_dir.to_path_buf()))?;
         if let Some(missing) = used(&dir).iter().find(|p| !present(&dir, **p)) {
-            return Err(Error::Missing(paths(&dir, *missing).0));
+            // half the split prompt model and no old one: name the half that is missing
+            let missing = match (*missing, present(&dir, Part::TextEnc), present(&dir, Part::TextDet)) {
+                (Part::TextScore, true, false) => Part::TextDet,
+                (Part::TextScore, false, true) => Part::TextEnc,
+                (p, _, _) => p,
+            };
+            return Err(Error::Missing(paths(&dir, missing).0));
         }
         let split = split_in(&dir);
         if !split {
@@ -286,7 +292,7 @@ impl Parts {
         }
         let (package, compiled) = paths(&dir, Part::TextEnc);
         let key = lightcraft_coreml::package_key(&package).ok().or_else(|| std::fs::read_to_string(format!("{}.key", compiled.display())).ok());
-        let text_key = format!("{units:?}-{}", key.unwrap_or_default());
+        let text_key = key.map(|k| format!("{units:?}-{k}"));
         let parts = Self { dir, units, split, text_key, slots: std::array::from_fn(|_| Slot { state: Mutex::new(SlotState::default()) }) };
         for part in [Part::Encoder, Part::ClickFeat, Part::ClickDec] {
             let mut held = parts.lock(part);
@@ -300,8 +306,9 @@ impl Parts {
         self.split
     }
 
-    /// The key of the text encoder's numbers: its package (or compiled copy) and the units it runs on.
-    pub fn text_key(&self) -> String {
+    /// The key of the text encoder's numbers: its package (or compiled copy) and the units it runs on; `None` when
+    /// neither can be read (its features are not stored then).
+    pub fn text_key(&self) -> Option<String> {
         self.text_key.clone()
     }
 

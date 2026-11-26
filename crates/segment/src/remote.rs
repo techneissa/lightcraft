@@ -133,6 +133,17 @@ pub fn concept_logits(model: &mut Sam3, enc: &mut Encoded, text: &str, main_only
 }
 
 fn phrase_logits(model: &mut Sam3, enc: &mut Encoded, text: &str, threshold: f32, main_only: bool, fixed: bool) -> crate::Result<Option<Vec<f32>>> {
+    // (a fixed text lists several phrases: an encoder loaded for the first stays for the rest, then goes)
+    if !fixed {
+        return groups_logits(model, enc, text, threshold, main_only, false);
+    }
+    model.hold_text_encoder(true);
+    let out = groups_logits(model, enc, text, threshold, main_only, true);
+    model.hold_text_encoder(false);
+    out
+}
+
+fn groups_logits(model: &mut Sam3, enc: &mut Encoded, text: &str, threshold: f32, main_only: bool, fixed: bool) -> crate::Result<Option<Vec<f32>>> {
     let mut best_group: Option<(f32, Vec<f32>)> = None;
     for group in text.split('|').map(str::trim).filter(|g| !g.is_empty()) {
         let mut merged: Option<Vec<f32>> = None;

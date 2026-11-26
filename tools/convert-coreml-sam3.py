@@ -36,7 +36,9 @@ part held, issue #437); `textdet` scores the 200 queries against its text featur
 for fixed phrases: the app keeps their text features beside the model after their first run
 (`crates/segment/src/stored.rs`) and loads `textenc` only for Describe. The app runs `textmask` only when one query
 scores above its threshold, as candle skips its pixel decoder. A Core ML folder from before #437 (`textscore` instead
-of `textenc` and `textdet`) still works the old way; `--parts textenc,textdet` adds the split parts to it.
+of `textenc` and `textdet`) still works the old way; `--parts textenc,textdet` adds the split parts to it (and drops
+`textscore` from the manifest). The app then uses the split parts; `sam3-textscore.mlpackage`, `sam3-textscore.mlmodelc`
+and `sam3-textscore.mlmodelc.key` can be deleted.
 
 Converter gaps patched here (coremltools 9.0 with torch 2.15 and numpy 2.5):
   1. `new_ones` has no Core ML rule (transformers' attention-mask builders call it): a constant of ones.
@@ -563,6 +565,8 @@ def main():
         if not a.no_check:
             entry["coreml_vs_torch_max_diff"] = check_coreml(path, make().eval(), inputs, outs)
         manifest["parts"][part] = entry
+    if {"textenc", "textdet"} <= set(manifest["parts"]):
+        manifest["parts"].pop("textscore", None)  # the app uses the split parts from now on
         print(f"{part}: {entry['bytes'] / 1e6:.0f} MB in {time.time() - t:.0f} s, check {entry.get('coreml_vs_torch_max_diff')}", flush=True)
     manifest["tools"] = {
         "python": platform.python_version(),

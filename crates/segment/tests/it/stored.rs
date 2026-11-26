@@ -6,7 +6,7 @@
 //! Bit for bit because the stored features are the numbers the same engine's encoder gave, read back exactly, and
 //! the detector runs on the same photo features: nothing else differs between the two paths.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use lightcraft_segment::remote::CONCEPT_THRESHOLD;
 use lightcraft_segment::{Device, Runtime, Sam3, coreml, stored};
@@ -69,21 +69,39 @@ fn sky_three_ways(dir: &Path, runtime: Runtime, device: Device, store: &str) -> 
     describe
 }
 
+/// Removes a temporary models folder when the test ends, passed or failed.
+struct Cleanup(PathBuf);
+
+impl Drop for Cleanup {
+    fn drop(&mut self) {
+        if let Some(root) = self.0.parent() {
+            let _ = std::fs::remove_dir_all(root);
+        }
+    }
+}
+
+/// The phrases a stored-features file holds (none when there is no file).
+fn phrases(dir: &Path, store: &str) -> Vec<String> {
+    let Ok(bytes) = std::fs::read(stored::path(dir, store).unwrap()) else { return Vec::new() };
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    v["phrases"].as_object().map(|o| o.keys().cloned().collect()).unwrap_or_default()
+}
+
 #[test]
 fn stored_text_features_give_the_encoders_mask_on_candle() {
     let Some(from) = shared_dir().filter(|d| lightcraft_segment::is_model_dir(d)) else {
         lightcraft_testkit::skip!(Model, "SAM 3 is not in the shared models folder (or LIGHTCRAFT_SAM3_DIR)");
         return;
     };
-    let dir = linked_without(&from, "stored-candle", &coreml::Part::ALL);
+    let dir = Cleanup(linked_without(&from, "stored-candle", &coreml::Part::ALL));
     let device = lightcraft_segment::best_device();
     let store = if device.is_metal() { "candle-metal" } else { "candle-cpu" };
-    sky_three_ways(&dir, Runtime::Candle, device, store);
-    let _ = std::fs::remove_dir_all(dir.parent().unwrap());
+    sky_three_ways(&dir.0, Runtime::Candle, device, store);
 }
 
-/// Core ML's split prompt model, and against the old single `textscore` part when that is there too (the masks
-/// before #437): the same cells selected.
+/// Core ML's split prompt model; Find Subject (which runs candle's detector) keeps its features in candle's file,
+/// never in Core ML's; and against the old single `textscore` part when that is there too (the masks before #437):
+/// the same logits.
 #[test]
 fn stored_text_features_give_the_encoders_mask_on_core_ml() {
     let Some(from) = shared_dir().filter(|d| lightcraft_segment::is_model_dir(d)) else {
@@ -103,22 +121,30 @@ fn stored_text_features_give_the_encoders_mask_on_core_ml() {
         );
         return;
     }
-    let dir = linked_without(&from, "stored-coreml", &[coreml::Part::TextScore]);
+    let dir = Cleanup(linked_without(&from, "stored-coreml", &[coreml::Part::TextScore]));
     let store = format!("coreml-{:?}", coreml::DEFAULT_UNITS).to_lowercase();
-    let new = sky_three_ways(&dir, Runtime::CoreMl, Device::Cpu, &store);
-    let _ = std::fs::remove_dir_all(dir.parent().unwrap());
+    let new = sky_three_ways(&dir.0, Runtime::CoreMl, Device::Cpu, &store);
+
+    let (rgb, w, h) = landscape();
+    let mut m = Sam3::load_with(&dir.0, lightcraft_segment::best_device(), Runtime::CoreMl).unwrap();
+    let mut enc = m.encode(&rgb, w, h).unwrap();
+    m.segment_subject(&mut enc, None, 0.5).unwrap();
+    assert!(!m.text_encoder_loaded(), "the encoder loaded for Find Subject is let go");
+    let candle = if m.device().is_metal() { "candle-metal" } else { "candle-cpu" };
+    let (cm, cd) = (phrases(&dir.0, &store), phrases(&dir.0, candle));
+    assert!(!cm.iter().any(|p| p == "person" || p == "animal"), "candle's features never go in Core ML's file: {cm:?}");
+    assert!(cd.iter().any(|p| p == "person") && cd.iter().any(|p| p == "animal"), "they go in candle's: {cd:?}");
+    drop(m);
 
     if !has(coreml::Part::TextScore) {
         return;
     }
-    let dir = linked_without(&from, "stored-coreml-old", &[coreml::Part::TextEnc, coreml::Part::TextDet]);
-    let (rgb, w, h) = landscape();
-    let mut m = Sam3::load_with(&dir, Device::Cpu, Runtime::CoreMl).unwrap();
+    let old_dir = Cleanup(linked_without(&from, "stored-coreml-old", &[coreml::Part::TextEnc, coreml::Part::TextDet]));
+    let mut m = Sam3::load_with(&old_dir.0, Device::Cpu, Runtime::CoreMl).unwrap();
     let mut enc = m.encode(&rgb, w, h).unwrap();
     let old = m.segment_concept(&mut enc, "sky", CONCEPT_THRESHOLD, false).unwrap().expect("the sky is found").logits;
     let flipped = old.iter().zip(&new).filter(|(a, b)| (**a > 0.0) != (**b > 0.0)).count();
     let most = old.iter().zip(&new).map(|(a, b)| (a - b).abs()).fold(0f32, f32::max);
     eprintln!("old textscore against textenc + textdet: {flipped} cells flipped, logits differ by at most {most}");
-    assert_eq!(flipped, 0, "the split prompt model selects what the old one did");
-    let _ = std::fs::remove_dir_all(dir.parent().unwrap());
+    assert_eq!(bits(&old), bits(&new), "the split prompt model gives the old one's logits");
 }

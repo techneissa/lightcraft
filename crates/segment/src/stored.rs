@@ -24,9 +24,14 @@ pub const LEN: usize = 32 * 256;
 const MAX_FILE: u64 = 16 << 20;
 /// Most phrases one file keeps.
 const MAX_PHRASES: usize = 64;
+/// The file's format and what its features are (the encoder's projected output): a file of another version is
+/// written again, so a change to either needs only a new number here.
+const VERSION: u32 = 1;
 
 #[derive(Serialize, Deserialize, Default)]
 struct File {
+    #[serde(default)]
+    version: u32,
     key: String,
     /// Each phrase's features as the bits of its `f32`s, so they read back exactly.
     phrases: BTreeMap<String, Vec<u32>>,
@@ -53,7 +58,11 @@ impl Store {
             }
             serde_json::from_slice(&std::fs::read(p).ok()?).ok()
         };
-        let file = path.as_deref().and_then(read).filter(|f| f.key == key).unwrap_or_else(|| File { key: key.into(), phrases: BTreeMap::new() });
+        let file = path.as_deref().and_then(read).filter(|f| f.key == key && f.version == VERSION).unwrap_or_else(|| File {
+            version: VERSION,
+            key: key.into(),
+            phrases: BTreeMap::new(),
+        });
         Self { path, file }
     }
 
@@ -90,8 +99,8 @@ impl Store {
             std::fs::create_dir_all(dir)?;
         }
         let part = path.with_extension(format!("json.{}.part", std::process::id()));
-        std::fs::write(&part, serde_json::to_vec(&self.file).map_err(std::io::Error::other)?)?;
-        std::fs::rename(&part, path).inspect_err(|_| {
+        let bytes = serde_json::to_vec(&self.file).map_err(std::io::Error::other)?;
+        std::fs::write(&part, bytes).and_then(|()| std::fs::rename(&part, path)).inspect_err(|_| {
             let _ = std::fs::remove_file(&part);
         })
     }

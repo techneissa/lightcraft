@@ -143,8 +143,14 @@ pub struct Sam3 {
     /// candle's text encoder: loaded for prompts without stored features, let go after a fixed phrase's run.
     text_encoder: Option<clip::TextEncoder>,
     tokenizer: Option<tokenizer::Tokenizer>,
-    /// The stored text features of the engine that runs prompts now ([`stored`]).
-    store: Option<stored::Store>,
+    /// The stored text features of Core ML's encoder and of candle's ([`stored`]): each engine reads and writes only
+    /// its own, whichever runs prompts.
+    coreml_store: Option<stored::Store>,
+    candle_store: Option<stored::Store>,
+    /// The text encoder was loaded for fixed phrases only: it is let go after their run.
+    encoder_for_fixed: bool,
+    /// [`Sam3::hold_text_encoder`]: several fixed phrases in a row keep it until the hold ends.
+    encoder_held: bool,
     /// The key of candle's encoder (the weights' size and time).
     weights_key: String,
     cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
@@ -258,7 +264,10 @@ impl Sam3 {
             detector: None,
             text_encoder: None,
             tokenizer: None,
-            store: None,
+            coreml_store: None,
+            candle_store: None,
+            encoder_for_fixed: false,
+            encoder_held: false,
             weights_key: stored::weights_key(&dir.join(WEIGHTS_FILE)),
             cancel: None,
             coreml,
@@ -484,18 +493,55 @@ impl Sam3 {
         self.text_encoder.is_some() || self.coreml.as_ref().is_some_and(|p| p.text_encoder_loaded())
     }
 
-    /// The stored text features of the engine that runs prompts now: Core ML's when it runs them, else candle's on
-    /// its device.
-    fn store(&mut self) -> &mut stored::Store {
-        let (name, key) = match &self.coreml {
-            Some(p) => (format!("coreml-{:?}", p.units()).to_lowercase(), p.text_key()),
-            None => (if self.device.is_metal() { "candle-metal" } else { "candle-cpu" }.to_string(), self.weights_key.clone()),
-        };
-        let path = stored::path(&self.dir, &name);
-        if !self.store.as_ref().is_some_and(|s| s.is(path.as_deref(), &key)) {
-            self.store = None;
+    /// The stored text features of Core ML's encoder in `parts`; `None` when the encoder has no key to check them
+    /// against (nothing is stored then).
+    fn coreml_store(&mut self, parts: &coreml::Parts) -> Option<&mut stored::Store> {
+        let key = parts.text_key()?;
+        let path = stored::path(&self.dir, &format!("coreml-{:?}", parts.units()).to_lowercase());
+        if !self.coreml_store.as_ref().is_some_and(|s| s.is(path.as_deref(), &key)) {
+            self.coreml_store = Some(stored::Store::open(path, &key));
         }
-        self.store.get_or_insert_with(|| stored::Store::open(path, &key))
+        self.coreml_store.as_mut()
+    }
+
+    /// The stored text features of candle's encoder on its device.
+    fn candle_store(&mut self) -> &mut stored::Store {
+        let path = stored::path(&self.dir, if self.device.is_metal() { "candle-metal" } else { "candle-cpu" });
+        if !self.candle_store.as_ref().is_some_and(|s| s.is(path.as_deref(), &self.weights_key)) {
+            self.candle_store = None;
+        }
+        let key = self.weights_key.clone();
+        self.candle_store.get_or_insert_with(|| stored::Store::open(path, &key))
+    }
+
+    /// While `hold` is on, a text encoder loaded for fixed phrases stays loaded (Subject asks for several in a row,
+    /// each loading it the first time); turning it off lets such an encoder go. Describe's encoder stays either way.
+    pub fn hold_text_encoder(&mut self, hold: bool) {
+        self.encoder_held = hold;
+        if !hold {
+            self.release_fixed_encoder();
+        }
+    }
+
+    /// Let the text encoder go when it was loaded for fixed phrases only and no hold keeps it.
+    fn release_fixed_encoder(&mut self) {
+        if !self.encoder_for_fixed || self.encoder_held {
+            return;
+        }
+        self.encoder_for_fixed = false;
+        self.text_encoder = None;
+        if let Some(p) = &self.coreml {
+            p.release_text_encoder();
+        }
+    }
+
+    /// Whether the encoder that just ran was loaded now (`!had`) for a fixed phrase (`keep`), or is Describe's.
+    fn note_encoder_use(&mut self, had: bool, keep: bool) {
+        if !keep {
+            self.encoder_for_fixed = false;
+        } else if !had {
+            self.encoder_for_fixed = true;
+        }
     }
 
     /// `phrase`'s text features on Core ML's split prompt model: with `keep` (a fixed phrase), the stored ones, or the
@@ -508,23 +554,24 @@ impl Sam3 {
         valid: &[bool],
         keep: bool,
     ) -> lightcraft_coreml::Result<Vec<f32>> {
-        if keep && let Some(v) = self.store().get(phrase) {
+        if keep && let Some(v) = self.coreml_store(parts).and_then(|s| s.get(phrase)) {
             return Ok(v);
         }
         let had = parts.text_encoder_loaded();
         let v = parts.text_encode(ids, valid)?;
+        self.note_encoder_use(had, keep);
         if keep {
-            self.store().put(phrase, &v);
-            if !had {
-                parts.release_text_encoder();
+            if let Some(s) = self.coreml_store(parts) {
+                s.put(phrase, &v);
             }
+            self.release_fixed_encoder();
         }
         Ok(v)
     }
 
     /// `phrase`'s text features `[1, 32, 256]` on candle, as [`Sam3::coreml_text_features`].
     fn candle_text_features(&mut self, phrase: &str, ids: &[u32], valid: &[bool], keep: bool) -> Result<Tensor> {
-        if keep && let Some(v) = self.store().get(phrase) {
+        if keep && let Some(v) = self.candle_store().get(phrase) {
             return Ok(Tensor::from_vec(v, (1, tokenizer::CONTEXT, neck::FPN), &self.device)?);
         }
         let had = self.text_encoder.is_some();
@@ -533,12 +580,11 @@ impl Sam3 {
             self.text_encoder = Some(clip::TextEncoder::new(vb.pp("text_encoder.text_model"), vb.pp("text_projection"))?);
         }
         let t = self.text_encoder.as_ref().ok_or_else(|| Error::Model("the text encoder did not load".into()))?.forward(ids, valid)?;
+        self.note_encoder_use(had, keep);
         if keep {
             let v = nn::to_vec(&t)?;
-            self.store().put(phrase, &v);
-            if !had {
-                self.text_encoder = None;
-            }
+            self.candle_store().put(phrase, &v);
+            self.release_fixed_encoder();
         }
         Ok(t)
     }
@@ -645,8 +691,11 @@ impl Sam3 {
     /// without it the most prominent, with whoever is about as large. `None` when the subject is
     /// neither (a focus on something else, or nobody in the photo): select what is at the point.
     pub fn segment_subject(&mut self, enc: &mut Encoded, focus: Option<(f32, f32)>, threshold: f32) -> Result<Option<Prediction>> {
-        let outs = SUBJECT_CONCEPTS.iter().map(|c| self.detect_with(enc, c, true)).collect::<Result<Vec<_>>>()?;
-        Ok(detector::subject(&outs, threshold, focus))
+        let held = self.encoder_held;
+        self.hold_text_encoder(true);
+        let outs = SUBJECT_CONCEPTS.iter().map(|c| self.detect_with(enc, c, true)).collect::<Result<Vec<_>>>();
+        self.hold_text_encoder(held);
+        Ok(detector::subject(&outs?, threshold, focus))
     }
 
     /// Raw detector outputs for `text` (tests and tools).
