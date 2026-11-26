@@ -63,7 +63,7 @@ fn main() -> Result<(), String> {
     let mut s = Session::new().with_fs().with_default_sam3_model().with_default_parsing_models();
     s.segmenter.background = false;
     if std::env::var_os("MASKING_PANEL").is_some() {
-        s.keep_mask_models(true);
+        s.keep_mask_models(lightcraft_engine::segment::MaskModels { sam3: true, birefnet: true, matting: true });
     }
     s.execute("segment.selectionModel", &json!({"model": model})).map_err(|e| e.to_string())?;
     let paths: Vec<String> = photos.iter().filter_map(|p| std::fs::canonicalize(p).ok()).map(|p| p.to_string_lossy().to_string()).collect();

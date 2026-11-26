@@ -21,6 +21,7 @@ pub(crate) mod clicks_request;
 #[cfg(feature = "sam")]
 pub(crate) mod download;
 mod kept;
+pub use kept::MaskModels;
 pub(crate) mod request;
 #[cfg(feature = "sam")]
 mod worker;
@@ -85,6 +86,18 @@ pub(crate) enum Tag {
     /// Find Subject for component `comp` of mask `mask` (an Object waiting for it): the people /
     /// animals found become a "person" Describe selection; none, the object at `point`.
     Subject { photo: PhotoId, mask: u32, comp: usize, point: Point },
+}
+
+impl Tag {
+    /// Whether the request is for mask `mask` on `photo`.
+    fn is_for(&self, photo: PhotoId, mask: u32) -> bool {
+        match self {
+            Tag::Clicks { photo: p, mask: m, .. } | Tag::Detail { photo: p, mask: m, .. } => *p == photo && *m == mask,
+            Tag::NewPrompt { photo: p, mask: Some(m), .. } => *p == photo && *m == mask,
+            Tag::NewConcept { photo: p, mask: Some(m), .. } => *p == photo && *m == mask,
+            _ => false,
+        }
+    }
 }
 
 /// A background job currently queued or running on the SAM 3 worker thread.
@@ -334,16 +347,16 @@ impl Segmenter {
         had
     }
 
+    /// Whether an AI request for `mask` on `photo` is in flight or waits to be sent (fork, issue #407).
+    pub fn mask_busy(&self, photo: PhotoId, mask: u32) -> bool {
+        self.in_flight.iter().any(|job| job.tag.is_for(photo, mask)) || self.pending.as_ref().is_some_and(|p| p.photo == photo && p.mask == mask)
+    }
+
     /// Immediately cancel any in-flight AI requests targeting `mask` on `photo`.
     pub fn cancel_mask(&mut self, photo: PhotoId, mask: u32) -> bool {
         let mut cancelled = false;
         self.in_flight.retain(|job| {
-            let matches_mask = match &job.tag {
-                Tag::Clicks { photo: p, mask: m, .. } | Tag::Detail { photo: p, mask: m, .. } => *p == photo && *m == mask,
-                Tag::NewPrompt { photo: p, mask: Some(m), .. } => *p == photo && *m == mask,
-                Tag::NewConcept { photo: p, mask: Some(m), .. } => *p == photo && *m == mask,
-                _ => false,
-            };
+            let matches_mask = job.tag.is_for(photo, mask);
             if matches_mask {
                 job.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
                 cancelled = true;

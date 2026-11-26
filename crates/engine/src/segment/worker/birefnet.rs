@@ -53,7 +53,7 @@ fn model<'a>(
         };
         log::info!("BiRefNet loaded in {:?} ({}, {})", t.elapsed(), m.backend(), if m.device().is_cpu() { "CPU" } else { "GPU" });
         state.birefnet = Some((dir.to_path_buf(), runtime, m));
-        shared.loaded.store(true, Ordering::SeqCst);
+        state.publish(shared);
     }
     state.birefnet.as_mut().map(|(_, _, m)| m).ok_or_else(|| "the BiRefNet model did not load".into())
 }
