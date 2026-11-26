@@ -76,11 +76,11 @@ fn failed_gpu_renders_fall_back_with_a_reason() {
     assert!(why.contains("limit"), "{why}");
     assert!(lightcraft_gpu::available(), "a limit is no device failure");
 
-    // the output fits but the mask planes (4 masks: 4 planes in one buffer) don't: caught when the
-    // buffer is created, without a device error, and the GPU stays in use
+    // the output fits but the 4 mask planes don't fit in one buffer whole: a render that keeps
+    // nothing evaluates them in bands sized to the limit (#406), so it renders on the GPU and
+    // matches the CPU, and the GPU stays in use
     lightcraft_gpu::inject_fault(Fault::Limit((w * h * 3 * 4 + 1024) as u64));
-    let why = failed("mask planes over the limit");
-    assert!(why.contains("exceeds"), "{why}");
+    ok("mask planes over the limit, in bands");
     assert!(lightcraft_gpu::available(), "{:?}", lightcraft_gpu::unavailable_reason());
     ok("after the limit faults");
 
