@@ -1,0 +1,3 @@
+# Noise reduction bands take a share of the memory budget (issue #409)
+cargo test -p lightcraft-gpu --lib -- a_small_share_filters band_budget
+cargo test -p lightcraft-gpu --test it -- colour_noise_bands

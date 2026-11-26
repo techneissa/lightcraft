@@ -484,6 +484,16 @@ pub fn set_pool_limit(bytes: u64) {
     let _ = bytes;
 }
 
+/// Where the device's free memory is unknown (a Mac), size the bands of the joint colour noise reduction to
+/// `bytes` each from now on. The output is the same for any size. A band is never so small that it keeps less
+/// than half its rows (the rest is its halo), even when that takes more than `bytes`.
+pub fn set_band_budget(bytes: u64) {
+    #[cfg(not(target_arch = "wasm32"))]
+    ctx::BAND_BUDGET.store(bytes, Ordering::Relaxed);
+    #[cfg(target_arch = "wasm32")]
+    let _ = bytes;
+}
+
 /// Free recycled buffers until at most `keep` bytes stay pooled (e.g. when the app goes idle).
 pub fn trim_pool(keep: u64) {
     #[cfg(not(target_arch = "wasm32"))]

@@ -1804,6 +1804,19 @@ fn band_budget_from(free: u64, pooled: u64, renders: usize) -> usize {
     free.saturating_add(pooled).saturating_sub(reserve) as usize
 }
 
+/// Rows one band of the joint colour NR may have, its halos included, on a `w` × `h` image. `budget`
+/// (`NRV2_GPU_BAND_MB` or the free device memory) holds the whole output and one band. Where it is unknown,
+/// `share` ([`crate::set_band_budget`]) is for the band alone, and a band has at least four halos of rows: half
+/// of it or more is kept, so a small share doesn't make hundreds of bands that mostly repeat their halos.
+fn band_rows(budget: Option<usize>, share: usize, w: usize, h: usize, halo: usize) -> usize {
+    // about 12 values of 4 bytes per band pixel; 3 per output pixel
+    let per_row = 48 * w;
+    match budget {
+        Some(budget) => budget.saturating_sub(12 * w * h) / per_row,
+        None => (share / per_row).max(4 * halo),
+    }
+}
+
 /// The joint colour noise reduction (`lightcraft_pipeline::nrc_joint`) on the GPU, the same steps as the
 /// CPU: only the noise samples are read back (the noise model is fitted on the CPU, by the same code).
 /// Large images are filtered in horizontal bands whose halo covers every step's reach, so each kept pixel
@@ -1864,33 +1877,32 @@ fn color_nr_joint(
     // Memory: the whole output (3 values per pixel) is held besides the input; a band then holds about
     // 12 values per pixel (guide 3, two chroma buffers 2 + 2, paths 2, weights 2; up to 12 while the
     // speck brake and the guide run). The budget for both together is `band_budget_from` the device memory
-    // free right now (where the driver can be asked, `crate::vram`); else a fixed 2 GB. One band plan at a
-    // time (`BANDS`), held until the bands are done. PROTOTYPE: `NRV2_GPU_BAND_MB` overrides it.
+    // free right now (where the driver can be asked, `crate::vram`); else the app's band share (`band_rows`).
+    // One band plan at a time (`BANDS`), held until the bands are done. PROTOTYPE: `NRV2_GPU_BAND_MB` overrides it.
     // (free memory asked before the lock: the first question for a device waits for the driver)
     let free = crate::vram::free_bytes(&cx.gpu.info);
     let _bands = BANDS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let fixed = std::env::var("NRV2_GPU_BAND_MB").ok().and_then(|v| v.parse::<usize>().ok()).map(|mb| mb << 20);
     let renders = RENDERS.load(std::sync::atomic::Ordering::Relaxed);
     let measured = free.map(|free| band_budget_from(free, crate::ctx::memory().pooled, renders));
-    let budget = fixed.or(measured).unwrap_or(2048 << 20);
+    let share = usize::try_from(crate::ctx::BAND_BUDGET.load(std::sync::atomic::Ordering::Relaxed)).unwrap_or(usize::MAX);
+    // no band may exceed the device's largest buffer either (3 values per pixel are the largest)
+    let limit_rows = (cx.gpu.limit() as usize / (12 * w)).max(1);
+    let rows = band_rows(fixed.or(measured), share, w, h, halo).min(limit_rows);
     if profiling() {
         eprintln!(
-            "  gpu joint budget: {} MB ({}, {renders} render(s) on the device)",
-            budget >> 20,
+            "  gpu joint budget: {} MB ({}, {renders} render(s) on the device), bands of {} of {h} rows",
+            fixed.or(measured).unwrap_or(share) >> 20,
             if fixed.is_some() {
                 "NRV2_GPU_BAND_MB"
             } else if measured.is_some() {
                 "free device memory"
             } else {
-                "fixed default"
-            }
+                "the app's band share"
+            },
+            rows.min(h)
         );
     }
-    let out_bytes = 12 * n;
-    let per_row = 48 * w;
-    // no band may exceed the device's largest buffer either (3 values per pixel are the largest)
-    let limit_rows = (cx.gpu.limit() as usize / (12 * w)).max(1);
-    let rows = (budget.saturating_sub(out_bytes) / per_row).min(limit_rows);
     let core = if rows >= h {
         h
     } else if rows > 2 * halo {
@@ -2108,6 +2120,18 @@ mod tests {
             assert!(RENDERS.load(std::sync::atomic::Ordering::Relaxed) >= before + 2);
         }
         assert!(RENDERS.load(std::sync::atomic::Ordering::Relaxed) < before + 2, "a finished render no longer counts");
+    }
+
+    /// Free device memory unknown (a Mac): the app's share sizes the joint colour NR's bands, so a 33 MP frame is
+    /// not one band the size of the frame (issue #409), and a tiny share still keeps half of each band.
+    #[test]
+    fn a_small_share_filters_a_33_mp_frame_in_bands() {
+        let (w, h) = (7008, 4672);
+        let halo = joint_halo(&lightcraft_pipeline::nrc_joint::scale_plan(20.0, w, h));
+        let rows = band_rows(None, 256 << 20, w, h, halo);
+        assert!(rows < h && rows > 2 * halo, "several bands, each keeping rows: {rows} of {h}, halo {halo}");
+        let tiny = band_rows(None, 0, w, h, halo);
+        assert!(tiny - 2 * halo >= 2 * halo && tiny <= rows, "at least half of a band is kept: {tiny}, halo {halo}");
     }
 
     #[test]
