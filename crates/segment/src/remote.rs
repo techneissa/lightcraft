@@ -123,12 +123,38 @@ impl Client {
 /// and comma-separated phrase lists; a phrase needs a score of `threshold`, and with `main_only` only the main
 /// subject's instances count.
 pub fn text_logits(model: &mut Sam3, enc: &mut Encoded, text: &str, threshold: f32, main_only: bool) -> crate::Result<Option<Vec<f32>>> {
+    phrase_logits(model, enc, text, threshold, main_only, false)
+}
+
+/// [`text_logits`] for Subject, Sky and Background's fixed phrases, at [`CONCEPT_THRESHOLD`]: their text features are
+/// stored beside the model, so the text encoder is not loaded for them ([`Sam3::segment_concept`], issue #437).
+pub fn concept_logits(model: &mut Sam3, enc: &mut Encoded, text: &str, main_only: bool) -> crate::Result<Option<Vec<f32>>> {
+    phrase_logits(model, enc, text, CONCEPT_THRESHOLD, main_only, true)
+}
+
+fn phrase_logits(model: &mut Sam3, enc: &mut Encoded, text: &str, threshold: f32, main_only: bool, fixed: bool) -> crate::Result<Option<Vec<f32>>> {
+    // (a fixed text lists several phrases: an encoder loaded for the first stays for the rest, then goes)
+    if !fixed {
+        return groups_logits(model, enc, text, threshold, main_only, false);
+    }
+    model.hold_text_encoder(true);
+    let out = groups_logits(model, enc, text, threshold, main_only, true);
+    model.hold_text_encoder(false);
+    out
+}
+
+fn groups_logits(model: &mut Sam3, enc: &mut Encoded, text: &str, threshold: f32, main_only: bool, fixed: bool) -> crate::Result<Option<Vec<f32>>> {
     let mut best_group: Option<(f32, Vec<f32>)> = None;
     for group in text.split('|').map(str::trim).filter(|g| !g.is_empty()) {
         let mut merged: Option<Vec<f32>> = None;
         let mut group_score = 0.0f32;
         for phrase in group.split([',', ';']).map(str::trim).filter(|p| !p.is_empty()) {
-            if let Some(p) = model.segment_text_with(enc, phrase, threshold, main_only)? {
+            let p = if fixed {
+                model.segment_concept(enc, phrase, threshold, main_only)?
+            } else {
+                model.segment_text_with(enc, phrase, threshold, main_only)?
+            };
+            if let Some(p) = p {
                 group_score = group_score.max(p.score);
                 if let Some(m) = &mut merged {
                     for (a, b) in m.iter_mut().zip(p.logits) {
@@ -158,7 +184,7 @@ fn predict(model: &mut Sam3, enc: &mut Encoded, operation: Operation) -> Result<
             Ok(None)
         }
         Operation::Text(text) => text_logits(model, enc, &text, TEXT_THRESHOLD, false).map_err(|e| e.to_string()),
-        Operation::Concept(text, main) => text_logits(model, enc, &text, CONCEPT_THRESHOLD, main).map_err(|e| e.to_string()),
+        Operation::Concept(text, main) => concept_logits(model, enc, &text, main).map_err(|e| e.to_string()),
         // (the reference score threshold, as a local Find Subject uses)
         Operation::Subject(focus) => {
             let p = model.segment_subject(enc, focus.map(|f| (f[0], f[1])), 0.5).map_err(|e| e.to_string())?;

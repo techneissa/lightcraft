@@ -1,4 +1,4 @@
-//! SAM 3 through Apple's Core ML (issue #268, `fork/coreml.md`): six converted parts on the GPU in float32, candle
+//! SAM 3 through Apple's Core ML (issue #268, `fork/coreml.md`): seven converted parts on the GPU in float32, candle
 //! staying the reference and the fallback.
 //!
 //! `tools/convert-coreml-sam3.py` converts them once from the weights in the `sam3` folder into the sibling folder
@@ -15,8 +15,14 @@
 //! | clickfeat | once per photo | backbone → image, s0, s1 |
 //! | clickdec | per click | image, s0, s1, points, labels → masks, iou, obj |
 //! | textfeat | first prompt on a photo | backbone → l0, l1, l2 |
-//! | textscore | per prompt | l2, ids, mask → logits, presence, boxes, queries, memory, text |
+//! | textenc | per prompt without stored text features (Describe, a fixed phrase's first run) | ids, mask → text |
+//! | textdet | per prompt | l2, text, mask → logits, presence, boxes, queries, memory |
 //! | textmask | per prompt that matches | l0, l1, memory, text, mask, queries → masks, semantic |
+//!
+//! `textenc`, CLIP's text encoder, is most of the prompt model (about 1.4 GB, issue #437): it loads only when a prompt
+//! has no stored text features ([`crate::stored`]), is never warmed up, and is let go after a fixed phrase's run. A
+//! folder converted before #437 holds `textscore` (`textenc` and `textdet` in one part, giving `text` too) instead:
+//! it still works, loading the encoder with every prompt, until `textenc` and `textdet` are converted beside it.
 //!
 //! Clicks go in [`SLOTS`] fixed slots (one input shape: Core ML plans a model on the GPU again for every new shape);
 //! the decoder masks unused slots out of its attention, so a click's mask is the one of the clicks alone. A prompt
@@ -29,7 +35,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, OnceLock, PoisonError};
+use std::sync::{Mutex, PoisonError};
 
 pub use lightcraft_coreml::ComputeUnits;
 use lightcraft_coreml::{Error, Model, Output, Tensor};
@@ -63,12 +69,18 @@ pub enum Part {
     ClickFeat,
     ClickDec,
     TextFeat,
-    TextScore,
+    TextEnc,
+    TextDet,
     TextMask,
+    /// `textenc` and `textdet` in one part, as converted before issue #437.
+    TextScore,
 }
 
 impl Part {
-    pub const ALL: [Part; 6] = [Part::Encoder, Part::ClickFeat, Part::ClickDec, Part::TextFeat, Part::TextScore, Part::TextMask];
+    pub const ALL: [Part; 8] =
+        [Part::Encoder, Part::ClickFeat, Part::ClickDec, Part::TextFeat, Part::TextEnc, Part::TextDet, Part::TextMask, Part::TextScore];
+    /// The parts every conversion holds.
+    const BASE: [Part; 5] = [Part::Encoder, Part::ClickFeat, Part::ClickDec, Part::TextFeat, Part::TextMask];
 
     /// Its name in the package's file name (`sam3-<name>.mlpackage`).
     pub fn name(self) -> &'static str {
@@ -77,8 +89,10 @@ impl Part {
             Part::ClickFeat => "clickfeat",
             Part::ClickDec => "clickdec",
             Part::TextFeat => "textfeat",
-            Part::TextScore => "textscore",
+            Part::TextEnc => "textenc",
+            Part::TextDet => "textdet",
             Part::TextMask => "textmask",
+            Part::TextScore => "textscore",
         }
     }
 
@@ -100,6 +114,8 @@ impl Part {
                 ("points", &[1, 1, SLOTS, 2], false),
                 ("labels", &[1, 1, SLOTS], true),
             ],
+            Part::TextEnc => &[("ids", IDS, true), ("mask", IDS, true)],
+            Part::TextDet => &[("l2", LEVEL2, false), ("text", &[1, TOKENS, HIDDEN], false), ("mask", IDS, true)],
             Part::TextScore => &[("l2", LEVEL2, false), ("ids", IDS, true), ("mask", IDS, true)],
             Part::TextMask => &[
                 ("l0", &[1, HIDDEN, MASK_SIDE, MASK_SIDE], false),
@@ -119,6 +135,10 @@ impl Part {
             Part::ClickFeat => &[("image", HIDDEN * GRID * GRID), ("s0", 32 * CELLS), ("s1", 64 * CELLS / 4)],
             Part::ClickDec => &[("masks", 4 * CELLS), ("iou", 4), ("obj", 1)],
             Part::TextFeat => &[("l0", HIDDEN * CELLS), ("l1", HIDDEN * CELLS / 4), ("l2", HIDDEN * GRID * GRID)],
+            Part::TextEnc => &[("text", TOKENS * HIDDEN)],
+            Part::TextDet => {
+                &[("logits", QUERIES), ("presence", 1), ("boxes", QUERIES * 4), ("queries", QUERIES * HIDDEN), ("memory", GRID * GRID * HIDDEN)]
+            }
             Part::TextScore => &[
                 ("logits", QUERIES),
                 ("presence", 1),
@@ -142,29 +162,55 @@ pub fn paths(dir: &Path, part: Part) -> (PathBuf, PathBuf) {
     (dir.join(format!("sam3-{}.mlpackage", part.name())), dir.join(format!("sam3-{}.mlmodelc", part.name())))
 }
 
-/// Whether every part's Core ML version is beside the model folder `model_dir` (packaged or compiled; whether they
-/// load is only known by loading them).
+/// Whether `part` is in the Core ML folder `dir` (packaged or compiled).
+fn present(dir: &Path, part: Part) -> bool {
+    let (package, compiled) = paths(dir, part);
+    package.is_dir() || compiled.is_dir()
+}
+
+/// Whether the folder `dir` holds the prompt model split in two (`textenc` and `textdet`, issue #437).
+fn split_in(dir: &Path) -> bool {
+    present(dir, Part::TextEnc) && present(dir, Part::TextDet)
+}
+
+/// The parts the folder `dir` is used with: the split prompt model when it is there, else the old `textscore`.
+fn used(dir: &Path) -> Vec<Part> {
+    let text: &[Part] = if split_in(dir) { &[Part::TextEnc, Part::TextDet] } else { &[Part::TextScore] };
+    Part::BASE.iter().chain(text).copied().collect()
+}
+
+/// The parts the Core ML folder beside the model folder `model_dir` is used with (all of them, or some missing).
+pub fn used_parts(model_dir: &Path) -> Vec<Part> {
+    folder(model_dir).map(|dir| used(&dir)).unwrap_or_default()
+}
+
+/// Whether every part's Core ML version is beside the model folder `model_dir` (packaged or compiled, with the prompt
+/// model split or in one part; whether they load is only known by loading them).
 pub fn installed(model_dir: &Path) -> bool {
-    folder(model_dir).is_some_and(|dir| {
-        Part::ALL.iter().all(|p| {
-            let (package, compiled) = paths(&dir, *p);
-            package.is_dir() || compiled.is_dir()
-        })
-    })
+    folder(model_dir).is_some_and(|dir| used(&dir).iter().all(|p| present(&dir, *p)))
 }
 
-/// A part, loaded when first needed.
+/// A part, loaded when first needed (and the text encoder let go again, [`Parts::release_text_encoder`]).
 struct Slot {
-    model: OnceLock<Model>,
     /// Serialises loading and runs, and says whether the part has run once (Core ML planned it on the GPU).
-    warm: Mutex<bool>,
+    state: Mutex<SlotState>,
 }
 
-/// The six parts on one set of compute units.
+#[derive(Default)]
+struct SlotState {
+    model: Option<Model>,
+    warm: bool,
+}
+
+/// The parts on one set of compute units.
 pub struct Parts {
     dir: PathBuf,
     units: ComputeUnits,
-    slots: [Slot; 6],
+    /// The prompt model is split (`textenc` and `textdet`) rather than the old `textscore`.
+    split: bool,
+    /// The key of the text encoder's numbers ([`Parts::text_key`]).
+    text_key: Option<String>,
+    slots: [Slot; 8],
 }
 
 /// The click decoder's features of a photo (Core ML's or candle's numbers, on the CPU).
@@ -181,7 +227,7 @@ pub struct TextFeatures {
     pub l2: Vec<f32>,
 }
 
-/// What `textscore` gives for one prompt.
+/// What `textdet` (or the old `textscore`) gives for one prompt.
 pub struct Scores {
     pub logits: Vec<f32>,
     pub presence: f32,
@@ -229,15 +275,46 @@ impl Parts {
             return Err(Error::Unavailable);
         }
         let dir = folder(model_dir).ok_or_else(|| Error::Missing(model_dir.to_path_buf()))?;
-        if let Some(missing) = Part::ALL.iter().map(|p| paths(&dir, *p)).find(|(package, compiled)| !package.is_dir() && !compiled.is_dir()) {
-            return Err(Error::Missing(missing.0));
+        if let Some(missing) = used(&dir).iter().find(|p| !present(&dir, **p)) {
+            // half the split prompt model and no old one: name the half that is missing
+            let missing = match (*missing, present(&dir, Part::TextEnc), present(&dir, Part::TextDet)) {
+                (Part::TextScore, true, false) => Part::TextDet,
+                (Part::TextScore, false, true) => Part::TextEnc,
+                (p, _, _) => p,
+            };
+            return Err(Error::Missing(paths(&dir, missing).0));
         }
-        let parts = Self { dir, units, slots: std::array::from_fn(|_| Slot { model: OnceLock::new(), warm: Mutex::new(false) }) };
+        let split = split_in(&dir);
+        if !split {
+            log::info!(
+                "SAM 3 on Core ML: the prompt model is the old single textscore part; tools/convert-coreml-sam3.py --parts textenc,textdet splits it"
+            );
+        }
+        let (package, compiled) = paths(&dir, Part::TextEnc);
+        let key = lightcraft_coreml::package_key(&package).ok().or_else(|| std::fs::read_to_string(format!("{}.key", compiled.display())).ok());
+        let text_key = key.map(|k| format!("{units:?}-{k}"));
+        let parts = Self { dir, units, split, text_key, slots: std::array::from_fn(|_| Slot { state: Mutex::new(SlotState::default()) }) };
         for part in [Part::Encoder, Part::ClickFeat, Part::ClickDec] {
-            let _held = parts.lock(part);
-            parts.model(part)?;
+            let mut held = parts.lock(part);
+            parts.model(&mut held, part)?;
         }
         Ok(parts)
+    }
+
+    /// Whether the prompt model is split, so a prompt with stored text features runs without the text encoder.
+    pub fn split(&self) -> bool {
+        self.split
+    }
+
+    /// The key of the text encoder's numbers: its package (or compiled copy) and the units it runs on; `None` when
+    /// neither can be read (its features are not stored then).
+    pub fn text_key(&self) -> Option<String> {
+        self.text_key.clone()
+    }
+
+    /// The compute units the parts run on.
+    pub fn units(&self) -> ComputeUnits {
+        self.units
     }
 
     fn slot(&self, part: Part) -> &Slot {
@@ -246,15 +323,14 @@ impl Parts {
         &self.slots[i.min(self.slots.len() - 1)]
     }
 
-    fn lock(&self, part: Part) -> std::sync::MutexGuard<'_, bool> {
-        self.slot(part).warm.lock().unwrap_or_else(PoisonError::into_inner)
+    fn lock(&self, part: Part) -> std::sync::MutexGuard<'_, SlotState> {
+        self.slot(part).state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// `part`'s model, loading it the first time (call with its lock held).
-    fn model(&self, part: Part) -> Result<&Model, Error> {
-        let slot = self.slot(part);
-        if let Some(m) = slot.model.get() {
-            return Ok(m);
+    /// `part`'s model, loading it the first time (`state` is its slot, locked).
+    fn model<'a>(&self, state: &'a mut SlotState, part: Part) -> Result<&'a Model, Error> {
+        if state.model.is_some() {
+            return state.model.as_ref().ok_or(Error::Unavailable);
         }
         let (package, compiled) = paths(&self.dir, part);
         let model = lightcraft_coreml::load_package(&package, &compiled, self.units)?;
@@ -269,7 +345,18 @@ impl Parts {
                 model.outputs()
             )));
         }
-        Ok(slot.model.get_or_init(|| model))
+        Ok(state.model.insert(model))
+    }
+
+    /// Let the text encoder go (after a fixed phrase's features are stored); it loads again for the next prompt that
+    /// needs it.
+    pub fn release_text_encoder(&self) {
+        *self.lock(Part::TextEnc) = SlotState::default();
+    }
+
+    /// Whether the text encoder is in memory (tests).
+    pub fn text_encoder_loaded(&self) -> bool {
+        self.lock(Part::TextEnc).model.is_some()
     }
 
     /// Run `part` on `data` (its inputs in order) and read its outputs, each checked for its size and for numbers that
@@ -288,10 +375,10 @@ impl Parts {
             })
             .collect();
         let names: Vec<&str> = part.outputs().iter().map(|(n, _)| *n).collect();
-        let mut warm = self.lock(part);
-        let out = self.model(part)?.predict_many(&inputs, &names)?;
-        *warm = true;
-        drop(warm);
+        let mut state = self.lock(part);
+        let out = self.model(&mut state, part)?.predict_many(&inputs, &names)?;
+        state.warm = true;
+        drop(state);
         check(part, &out)?;
         Ok(out.into_iter())
     }
@@ -323,14 +410,26 @@ impl Parts {
         Ok(TextFeatures { l0: take(&mut out)?, l1: take(&mut out)?, l2: take(&mut out)? })
     }
 
-    /// Score the 200 queries for a tokenized prompt (`ids` and `valid` as the tokenizer gives them, 32 each).
+    /// The text features `[1, 32, 256]` of a tokenized prompt (`ids` and `valid` as the tokenizer gives them, 32
+    /// each), from the split prompt model's text encoder.
+    pub fn text_encode(&self, ids: &[u32], valid: &[bool]) -> Result<Vec<f32>, Error> {
+        let (ids, mask) = tokens(ids, valid)?;
+        take(&mut self.run(Part::TextEnc, &[Data::I(&ids), Data::I(&mask)])?)
+    }
+
+    /// Score the 200 queries for a prompt's text features (`valid` marks its real tokens), on the split prompt model.
+    pub fn text_detect(&self, f: &TextFeatures, text: Vec<f32>, valid: &[bool]) -> Result<Scores, Error> {
+        let mask: Vec<i32> = valid.iter().map(|v| i32::from(*v)).collect();
+        let mut out = self.run(Part::TextDet, &[Data::F(&f.l2), Data::F(&text), Data::I(&mask)])?;
+        let (logits, presence) = scores(&mut out)?;
+        Ok(Scores { logits, presence, queries: take(&mut out)?, memory: take(&mut out)?, text })
+    }
+
+    /// Score the 200 queries for a tokenized prompt on the old single `textscore` part (text encoder included).
     pub fn text_score(&self, f: &TextFeatures, ids: &[u32], valid: &[bool]) -> Result<Scores, Error> {
         let (ids, mask) = tokens(ids, valid)?;
         let mut out = self.run(Part::TextScore, &[Data::F(&f.l2), Data::I(&ids), Data::I(&mask)])?;
-        // (clamped as candle clamps them)
-        let logits = take(&mut out)?.into_iter().map(|l| l.clamp(-12.0, 12.0)).collect();
-        let presence = take(&mut out)?.first().copied().unwrap_or(-10.0).clamp(-10.0, 10.0);
-        let _boxes = take(&mut out)?;
+        let (logits, presence) = scores(&mut out)?;
         Ok(Scores { logits, presence, queries: take(&mut out)?, memory: take(&mut out)?, text: take(&mut out)? })
     }
 
@@ -343,28 +442,32 @@ impl Parts {
     }
 
     /// The order the parts are warmed up in: the click decoder first (the user's next step after a photo is ready),
-    /// then the prompt parts; the encoder and the click features run when a photo is analysed.
-    const WARM_ORDER: [Part; 6] = [Part::ClickDec, Part::TextFeat, Part::TextScore, Part::TextMask, Part::Encoder, Part::ClickFeat];
+    /// then the prompt parts; the encoder and the click features run when a photo is analysed. The split prompt
+    /// model's text encoder is never warmed: it loads only for a prompt without stored text features.
+    fn warm_order(&self) -> [Part; 6] {
+        let score = if self.split { Part::TextDet } else { Part::TextScore };
+        [Part::ClickDec, Part::TextFeat, score, Part::TextMask, Part::Encoder, Part::ClickFeat]
+    }
 
-    /// Whether every part has run once since loading. A part running right now counts as not run yet.
+    /// Whether every part warmed up has run once since loading. A part running right now counts as not run yet.
     pub fn warmed(&self) -> bool {
-        Part::ALL.iter().all(|p| self.slot(*p).warm.try_lock().is_ok_and(|w| *w))
+        self.warm_order().iter().all(|p| self.slot(*p).state.try_lock().is_ok_and(|s| s.warm))
     }
 
     /// Run the next part that has not run yet on made-up inputs, so Core ML plans it on the GPU now and not in the
     /// user's first click or prompt. Never waits for a user's run: a part running right now is skipped (that run
     /// plans it), and so is a part that has run. One prediction at most; `Ok(false)` when no part was left to run.
     pub fn warm_next(&self) -> Result<bool, Error> {
-        for part in Self::WARM_ORDER {
-            let mut warm = match self.slot(part).warm.try_lock() {
+        for part in self.warm_order() {
+            let mut state = match self.slot(part).state.try_lock() {
                 Ok(w) => w,
                 Err(std::sync::TryLockError::Poisoned(p)) => p.into_inner(),
                 Err(std::sync::TryLockError::WouldBlock) => continue,
             };
-            if *warm {
+            if state.warm {
                 continue;
             }
-            let model = self.model(part)?;
+            let model = self.model(&mut state, part)?;
             let made_up: Vec<(Vec<f32>, Vec<i32>)> = part
                 .inputs()
                 .iter()
@@ -386,7 +489,7 @@ impl Parts {
                 .collect();
             let names: Vec<&str> = part.outputs().iter().map(|(n, _)| *n).collect();
             model.predict_many(&inputs, &names)?;
-            *warm = true;
+            state.warm = true;
             return Ok(true);
         }
         Ok(false)
@@ -416,7 +519,15 @@ fn check(part: Part, out: &[Output]) -> Result<(), Error> {
     Ok(())
 }
 
-/// The token ids and mask as `textscore` takes them (32 of each).
+/// The logits and the presence score, clamped as candle clamps them, and the boxes skipped.
+fn scores(out: &mut std::vec::IntoIter<Output>) -> Result<(Vec<f32>, f32), Error> {
+    let logits = take(out)?.into_iter().map(|l| l.clamp(-12.0, 12.0)).collect();
+    let presence = take(out)?.first().copied().unwrap_or(-10.0).clamp(-10.0, 10.0);
+    let _boxes = take(out)?;
+    Ok((logits, presence))
+}
+
+/// The token ids and mask as `textenc` and `textscore` take them (32 of each).
 fn tokens(ids: &[u32], valid: &[bool]) -> Result<(Vec<i32>, Vec<i32>), Error> {
     if ids.len() != TOKENS || valid.len() != TOKENS {
         return Err(Error::Input(format!("a prompt is {TOKENS} tokens, not {}", ids.len())));
@@ -467,20 +578,29 @@ mod tests {
         assert!(matches!(check(Part::ClickDec, &out(vec![0.1; 4])[..2]), Err(Error::Output(_))));
     }
 
-    /// The Core ML folder is the `sam3` folder's sibling, and it counts as installed only with all six parts.
+    /// The Core ML folder is the `sam3` folder's sibling, and it counts as installed only with every part, the
+    /// prompt model split in two (issue #437) or in the old single `textscore` (a folder converted before #437).
     #[test]
     fn the_packages_live_beside_the_model_folder() {
         let root = std::env::temp_dir().join(format!("lc-sam3-coreml-folder-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let model = root.join("sam3");
         std::fs::create_dir_all(&model).unwrap();
-        assert_eq!(folder(&model), Some(root.join(FOLDER)));
+        let dir = root.join(FOLDER);
+        assert_eq!(folder(&model), Some(dir.clone()));
         assert!(!installed(&model));
-        for (i, p) in Part::ALL.iter().enumerate() {
-            let (package, compiled) = paths(&root.join(FOLDER), *p);
+        for (i, p) in Part::BASE.iter().enumerate() {
+            let (package, compiled) = paths(&dir, *p);
             std::fs::create_dir_all(if i % 2 == 0 { package } else { compiled }).unwrap();
-            assert_eq!(installed(&model), i + 1 == Part::ALL.len());
+            assert!(!installed(&model));
         }
+        std::fs::create_dir_all(paths(&dir, Part::TextScore).0).unwrap();
+        assert!(installed(&model) && !split_in(&dir), "an old conversion");
+        std::fs::create_dir_all(paths(&dir, Part::TextEnc).0).unwrap();
+        assert!(!split_in(&dir), "half the split prompt model: the old one is used");
+        std::fs::create_dir_all(paths(&dir, Part::TextDet).1).unwrap();
+        std::fs::remove_dir_all(paths(&dir, Part::TextScore).0).unwrap();
+        assert!(installed(&model) && split_in(&dir), "a new conversion");
         let _ = std::fs::remove_dir_all(&root);
     }
 }

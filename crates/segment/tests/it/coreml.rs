@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use lightcraft_segment::{Click, Encoded, Error, Runtime, Sam3, best_device, coreml};
 
-fn shared_dir() -> Option<PathBuf> {
+pub(crate) fn shared_dir() -> Option<PathBuf> {
     if let Some(d) = std::env::var_os("LIGHTCRAFT_SAM3_DIR") {
         return Some(PathBuf::from(d));
     }
@@ -28,7 +28,12 @@ fn link(_: &Path, _: &Path) {}
 
 /// The model and its packages linked into a temporary models folder (and the compiled copies, when made already).
 fn linked(from: &Path) -> PathBuf {
-    let root = std::env::temp_dir().join(format!("lc-sam3-coreml-it-{}", std::process::id()));
+    linked_without(from, "coreml", &[])
+}
+
+/// [`linked`] into a folder named after `tag`, without the parts in `skip`.
+pub(crate) fn linked_without(from: &Path, tag: &str, skip: &[coreml::Part]) -> PathBuf {
+    let root = std::env::temp_dir().join(format!("lc-sam3-{tag}-it-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&root);
     let (dir, cm) = (root.join("sam3"), root.join(coreml::FOLDER));
     std::fs::create_dir_all(&dir).unwrap();
@@ -37,7 +42,7 @@ fn linked(from: &Path) -> PathBuf {
         link(&from.join(f), &dir.join(f));
     }
     let shared = coreml::folder(from).unwrap();
-    for part in coreml::Part::ALL {
+    for part in coreml::Part::ALL.into_iter().filter(|p| !skip.contains(p)) {
         let ((package, compiled), (to_package, to_compiled)) = (coreml::paths(&shared, part), coreml::paths(&cm, part));
         link(&package, &to_package);
         let key = PathBuf::from(format!("{}.key", compiled.display()));
