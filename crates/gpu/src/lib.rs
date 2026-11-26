@@ -108,7 +108,7 @@ pub fn unavailable_reason() -> Option<String> {
     if let Some(why) = env_off_reason() {
         return Some(why.into());
     }
-    if !ENABLED.load(Ordering::Relaxed) {
+    if !preference() {
         return Some("disabled by the GPU rendering preference (app.gpu)".into());
     }
     if shutting_down() {
@@ -231,10 +231,27 @@ pub fn set_enabled(on: bool) {
     ENABLED.store(on, Ordering::SeqCst);
 }
 
+thread_local! {
+    /// The rendering preference for this thread's renders when set ([`set_enabled_here`]), instead of the process's.
+    static ENABLED_HERE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+}
+
+/// Test hook: renders on this thread take `on` as the rendering preference (`None`: the process's, [`set_enabled`]),
+/// so a test that counts its renders' work is not moved between the GPU and the CPU by another test's preference.
+#[doc(hidden)]
+pub fn set_enabled_here(on: Option<bool>) {
+    let _ = ENABLED_HERE.try_with(|c| c.set(on));
+}
+
+/// The rendering preference for this thread: [`set_enabled_here`], else [`set_enabled`].
+fn preference() -> bool {
+    ENABLED_HERE.try_with(std::cell::Cell::get).ok().flatten().unwrap_or_else(|| ENABLED.load(Ordering::Relaxed))
+}
+
 /// Whether GPU rendering is allowed (environment, preference, no earlier failure — real, or
 /// simulated on this thread).
 pub fn enabled() -> bool {
-    ENABLED.load(Ordering::Relaxed) && !BROKEN.load(Ordering::Relaxed) && !env_disabled() && broken_here().is_none()
+    preference() && !BROKEN.load(Ordering::Relaxed) && !env_disabled() && broken_here().is_none()
 }
 
 /// The process is about to end: no GPU work starts from now on, on any thread. [`render`] returns
@@ -279,7 +296,7 @@ pub(crate) fn switched_off() -> Option<String> {
     if let Some(why) = env_off_reason() {
         return Some(why.into());
     }
-    (!ENABLED.load(Ordering::Relaxed)).then(|| "disabled by the GPU rendering preference (app.gpu)".into())
+    (!preference()).then(|| "disabled by the GPU rendering preference (app.gpu)".into())
 }
 
 /// Why the environment switches the GPU off for the whole process (`LIGHTCRAFT_GPU=0` or
@@ -328,7 +345,7 @@ pub fn set_window_device_pending(pending: bool) {
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn device() -> Option<&'static ctx::Gpu> {
     // turned off (preference, environment): don't even load the driver (issue #136)
-    if env_disabled() || !ENABLED.load(Ordering::Relaxed) {
+    if env_disabled() || !preference() {
         return existing_device();
     }
     if let Some(g) = GPU.get() {

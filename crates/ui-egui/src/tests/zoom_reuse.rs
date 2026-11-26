@@ -51,6 +51,9 @@ fn view(h: &mut Headless, zoom: serde_json::Value, pan: [f32; 2]) {
 // again, then no mask is built again and no spot is drawn again: each view reuses the window already rendered
 #[test]
 fn zooming_and_panning_a_photo_with_masks_and_spots_redoes_none_of_them() {
+    // (tests beside it switch GPU rendering on and off for the whole process, `app.gpu`: renders here keep one
+    // renderer, whose kept masks and spots are counted)
+    lightcraft_engine::gpu::set_enabled_here(Some(true));
     let fixture = RenderFixture::new("zoom-reuse", 1);
     let app = LightcraftApp::new(fixture.session(), Services { png: None, ..Default::default() });
     let mut h = Headless::new(app, [1400.0, 900.0], 1.0);
