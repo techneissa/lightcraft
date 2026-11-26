@@ -135,45 +135,63 @@ impl GpuStages {
     /// Bytes held: device buffers (each counted once), and the images a loupe job kept on the host with them
     /// (`dirty::keep_host`, issue #111).
     pub fn bytes(&self) -> usize {
+        self.parts().total()
+    }
+
+    /// [`Self::bytes`] by part.
+    pub fn parts(&self) -> crate::StageParts {
         let mut seen: Vec<*const Buf> = Vec::new();
-        let mut total = 0;
-        // (each spot's patches are its own)
-        let mut patches = 0;
-        let mut add = |b: &Arc<Buf>| {
+        let mut parts = crate::StageParts::default();
+        let mut add = |to: &mut usize, b: &Arc<Buf>| {
             let p = Arc::as_ptr(b);
             if !seen.contains(&p) {
                 seen.push(p);
-                total += b.len * 4;
+                *to += b.len * 4;
             }
         };
         for e in self.lock().iter() {
-            add(&e.sampled);
+            let to = &mut parts.images;
+            add(to, &e.sampled);
             if let Some((_, b)) = &e.lin {
-                add(b);
+                add(to, b);
             }
             if let Some(l) = &e.last {
-                add(&l.out);
+                add(to, &l.out);
             }
             if let Some(p) = e.pre_retouch.as_ref().and_then(|p| p.kept.peek()) {
-                add(&p.dev);
+                add(to, &p.dev);
             }
             let p = &e.planes;
-            p.log_l.iter().for_each(&mut add);
-            p.base.iter().for_each(|(_, b)| add(b));
-            p.clarity.iter().for_each(|(_, b)| add(b));
-            p.texture.iter().for_each(|(_, b)| add(b));
-            p.sharpen.iter().for_each(|(_, b)| add(b));
-            p.dark.iter().for_each(|(_, b, _)| add(b));
-            p.chroma.iter().for_each(|(_, b)| add(b));
+            p.log_l.iter().for_each(|b| add(&mut parts.planes, b));
+            p.base.iter().for_each(|(_, b)| add(&mut parts.planes, b));
+            p.clarity.iter().for_each(|(_, b)| add(&mut parts.planes, b));
+            p.texture.iter().for_each(|(_, b)| add(&mut parts.planes, b));
+            p.sharpen.iter().for_each(|(_, b)| add(&mut parts.planes, b));
+            p.dark.iter().for_each(|(_, b, _)| add(&mut parts.planes, b));
+            p.chroma.iter().for_each(|(_, b)| add(&mut parts.planes, b));
         }
         if let Some((_, b)) = &*self.source.lock().unwrap_or_else(|e| e.into_inner()) {
-            add(b);
+            add(&mut parts.source, b);
         }
-        self.alphas.each(&mut add);
-        self.decontam.each(&mut add);
-        patches += self.spots.bytes();
-        let host = self.host.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map_or(0, |k| k.bytes);
-        total + patches + host + self.alphas.host_bytes()
+        self.alphas.each(|part, b| {
+            let to = match part {
+                crate::masks::AlphaPart::Current => &mut parts.alphas,
+                crate::masks::AlphaPart::Other => &mut parts.other_alphas,
+                crate::masks::AlphaPart::Brush => &mut parts.brushes,
+            };
+            add(to, b)
+        });
+        self.decontam.each(|b| add(&mut parts.other, b));
+        // (each spot's patches are its own)
+        parts.other += self.spots.bytes();
+        parts.host = self.host.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map_or(0, |k| k.bytes) + self.alphas.host_bytes();
+        parts
+    }
+
+    /// The kept mask alphas (tests).
+    #[cfg(test)]
+    pub(crate) fn alphas(&self) -> &crate::masks::AlphaStore {
+        &self.alphas
     }
 
     /// Drop everything (e.g. when memory is needed).
@@ -324,6 +342,12 @@ impl<'a> Cx<'a> {
     pub fn copy_into(&mut self, src: &Buf, dst: &Buf, offset: usize) {
         let enc = self.enc.get_or_insert_with(|| self.gpu.encoder());
         enc.copy_buffer_to_buffer(src.raw(), 0, dst.raw(), (offset * 4) as u64, (src.len * 4) as u64);
+    }
+
+    /// Copy `len` values of `src` from `from` into `dst` at `to` (all in 32-bit words; recorded).
+    pub fn copy_range(&mut self, src: &Buf, from: usize, dst: &Buf, to: usize, len: usize) {
+        let enc = self.enc.get_or_insert_with(|| self.gpu.encoder());
+        enc.copy_buffer_to_buffer(src.raw(), (from * 4) as u64, dst.raw(), (to * 4) as u64, (len * 4) as u64);
     }
 
     /// Copy `w × h` texels from `b` (rows of `stride` 32-bit texels, a multiple of 64) into
@@ -961,7 +985,7 @@ pub fn render(
     let (masks, terms) = crate::masks::masks(&mut cx, (&lin, &sampled), &prep, &plan, &mut host, stages.map(|c| (&c.alphas, src)));
     lap("masks", &mut t, &mut cx);
     if let Want::MaskPlanes(ask) = want {
-        return Some(Output::Masks(mask_planes(&mut cx, masks.as_ref(), &plan, (&lin, &prep.log_l), Arc::as_ptr(src) as usize, ask)));
+        return Some(Output::Masks(mask_planes(&mut cx, masks.as_deref(), &plan, (&lin, &prep.log_l), Arc::as_ptr(src) as usize, ask)));
     }
     // fork (`fork/perf-decontam-gpu.md`): the decontaminated masks' edges, after the alphas
     let edge_lin = crate::decontam::Lin { buf: &lin, boxes: edge_boxes.as_deref() };
@@ -1066,7 +1090,7 @@ pub fn render(
                     prep.clarity.as_deref(),
                     tex_buf.as_deref(),
                     prep.dark.as_deref(),
-                    masks.as_ref(),
+                    masks.as_deref(),
                     Some(&aux),
                     Some(&out),
                 ],
@@ -1104,7 +1128,7 @@ pub fn render(
     // the alpha a mask overlay shows: copied out before the readback below submits
     let overlay_mask = req.overlay.mask(s).map(|m| {
         let list = s.masks.iter().filter(|m| m.renders());
-        match (list.map(|m| m.id).position(|id| id == m.id), masks.as_ref()) {
+        match (list.map(|m| m.id).position(|id| id == m.id), masks.as_deref()) {
             (Some(mi), Some(all)) => Ok(cx.slice(all, mi * n, n)),
             _ => Err(m),
         }
@@ -1114,7 +1138,7 @@ pub fn render(
     // single-mask overlay uses, so read the whole buffer back in ONE GPU->CPU transfer and split it
     // on the CPU, instead of one synchronous readback per mask (which stalls the pipeline N times).
     let all_overlay_alphas: Option<Vec<Plane>> = if matches!(req.overlay, lightcraft_pipeline::Overlay::AllMasks { .. }) {
-        masks.as_ref().map(|all| {
+        masks.as_deref().map(|all| {
             let list: Vec<_> = s.masks.iter().filter(|m| m.renders()).collect();
             if list.is_empty() {
                 return Vec::new();

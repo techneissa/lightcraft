@@ -459,6 +459,8 @@ pub struct GpuMemory {
     pub allocated: u64,
     pub pooled: u64,
     pub retired: u64,
+    /// The most bytes allocated at once since launch.
+    pub peak: u64,
 }
 
 /// Device memory held by the renderer's buffers (zero without a device).
@@ -520,6 +522,48 @@ pub fn source_uploads() -> u64 {
     #[cfg(target_arch = "wasm32")]
     {
         0
+    }
+}
+
+/// What a view's GPU stages hold, by part (bytes; a buffer two parts share counts in the first).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct StageParts {
+    /// The images of each kept output size: the resampled source, the linear image, the last output.
+    pub images: usize,
+    /// Their spatial planes (local contrast, sharpening, noise reduction's chromaticity…).
+    pub planes: usize,
+    /// The uploaded source.
+    pub source: usize,
+    /// The last render's mask alphas.
+    pub alphas: usize,
+    /// Mask alphas of earlier windows and scales.
+    pub other_alphas: usize,
+    /// Brush parts' planes.
+    pub brushes: usize,
+    /// Host images kept with the stages (the loupe job's, Auto Mask brush planes).
+    pub host: usize,
+    /// Spots' patches and decontaminated edges.
+    pub other: usize,
+}
+
+impl StageParts {
+    pub fn total(&self) -> usize {
+        [self.images, self.planes, self.source, self.alphas, self.other_alphas, self.brushes, self.host, self.other]
+            .iter()
+            .fold(0, |a, b| a.saturating_add(*b))
+    }
+}
+
+/// [`stage_bytes`] by part.
+pub fn stage_parts(stages: &StageCache) -> StageParts {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        stages.peek_extension::<GpuStages>().map(|g| g.parts()).unwrap_or_default()
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = stages;
+        StageParts::default()
     }
 }
 

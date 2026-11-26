@@ -325,6 +325,7 @@ impl Tracked {
     fn new(b: wgpu::Buffer) -> Tracked {
         let now = ALLOCATED.fetch_add(b.size(), Ordering::Relaxed) + b.size();
         PEAK.fetch_max(now, Ordering::Relaxed);
+        HIGH.fetch_max(now, Ordering::Relaxed);
         Tracked(b)
     }
 }
@@ -349,6 +350,8 @@ thread_local! {
 static ALLOCATED: AtomicU64 = AtomicU64::new(0);
 /// Most bytes allocated since [`take_peak`] (profiling).
 static PEAK: AtomicU64 = AtomicU64::new(0);
+/// Most bytes allocated at once since launch ([`GpuMemory::peak`]).
+static HIGH: AtomicU64 = AtomicU64::new(0);
 
 /// The most bytes allocated since the last call; starts over from what is allocated now.
 pub(crate) fn take_peak() -> (u64, u64) {
@@ -378,10 +381,17 @@ pub struct GpuMemory {
     pub pooled: u64,
     /// Of which buffers dropped since their thread's last submit (pooled at its next submit).
     pub retired: u64,
+    /// The most bytes allocated at once since launch.
+    pub peak: u64,
 }
 
 pub(crate) fn memory() -> GpuMemory {
-    GpuMemory { allocated: ALLOCATED.load(Ordering::Relaxed), pooled: POOLED.load(Ordering::Relaxed), retired: RETIRED_BYTES.load(Ordering::Relaxed) }
+    GpuMemory {
+        allocated: ALLOCATED.load(Ordering::Relaxed),
+        pooled: POOLED.load(Ordering::Relaxed),
+        retired: RETIRED_BYTES.load(Ordering::Relaxed),
+        peak: HIGH.load(Ordering::Relaxed),
+    }
 }
 
 pub struct Gpu {

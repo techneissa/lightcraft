@@ -485,7 +485,9 @@ pub const AHEAD_SLOTS: u8 = 6;
 const IDLE_TRIM: std::time::Duration = std::time::Duration::from_secs(3);
 
 /// The idle trim's wait while a zoom window is kept but not drawn (at Fit, for the next zoom: #174): the trim lets go
-/// of the GPU copy of the original, which that zoom then uploads again. The window's texture and stage caches stay.
+/// of the GPU copy of the original, which that zoom then uploads again, and of the window's stage caches (a window of
+/// a large photo holds its images, planes and every mask's alpha: about 1 GB for 12 masks on a 33 MP photo, issue
+/// #402). The window's texture stays.
 const KEPT_WINDOW_IDLE_TRIM: std::time::Duration = std::time::Duration::from_secs(30);
 
 impl Slot {
@@ -1968,7 +1970,9 @@ impl Renderer {
             self.idle = None;
             return;
         }
-        let wait = if window { KEPT_WINDOW_IDLE_TRIM } else { IDLE_TRIM };
+        // (a window kept at Fit: its texture, or only its stages once an edit dropped the texture, issue #402)
+        let kept = window || self.stages.contains_key(&Slot::Region) || self.stages.contains_key(&Slot::RegionBefore);
+        let wait = if kept { KEPT_WINDOW_IDLE_TRIM } else { IDLE_TRIM };
         let now = std::time::Instant::now();
         let (since, trimmed) = *self.idle.get_or_insert((now, false));
         if trimmed {
@@ -1976,6 +1980,11 @@ impl Renderer {
         }
         let waited = now.duration_since(since);
         if waited >= wait {
+            if !self.window_on_screen {
+                // (a window kept at Fit: the next zoom renders it again, from the original it uploads again anyway)
+                self.stages.remove(&Slot::Region);
+                self.stages.remove(&Slot::RegionBefore);
+            }
             lightcraft_engine::gpu::trim_pool(0);
             lightcraft_engine::memory::release();
             self.idle = Some((since, true));
@@ -2018,8 +2027,18 @@ impl Renderer {
         let gpu: usize = self.stages.values().map(|s| lightcraft_engine::gpu::stage_bytes(s)).sum();
         let tex: usize = self.textures.values().map(|t| t.size[0] * t.size[1] * 4).sum();
         let copies: usize = self.textures.values().filter_map(|t| t.pixels.as_ref()).map(|p| p.pixels.len() * 4).sum();
+        // each view's GPU stages by part: what a zoom window, a mask or a brush stroke keeps
+        let views: Vec<serde_json::Value> = self
+            .stages
+            .iter()
+            .map(|(slot, c)| {
+                let p = lightcraft_engine::gpu::stage_parts(c);
+                serde_json::json!({"slot": format!("{slot:?}"), "images": p.images, "planes": p.planes, "source": p.source, "alphas": p.alphas,
+                    "otherAlphas": p.other_alphas, "brushes": p.brushes, "host": p.host, "other": p.other})
+            })
+            .collect();
         serde_json::json!({
-            "stageCaches": {"count": self.stages.len(), "cpuBytes": cpu, "gpuBytes": gpu, "budgetBytes": self.stage_budget(), "trimmed": self.stages_trimmed, "sharedSourceBytes": lightcraft_engine::gpu::shared_source_bytes()},
+            "stageCaches": {"count": self.stages.len(), "cpuBytes": cpu, "gpuBytes": gpu, "budgetBytes": self.stage_budget(), "trimmed": self.stages_trimmed, "sharedSourceBytes": lightcraft_engine::gpu::shared_source_bytes(), "views": views},
             "textures": {"count": self.textures.len(), "bytes": tex, "cpuCopyBytes": copies, "maskTintBytes": self.tints.bytes()},
             "fullPicture": self.full.to_json(),
         })
@@ -2271,11 +2290,25 @@ mod stage_budget_tests {
         r.idle = Some((short, false));
         r.trim_when_idle(&ctx);
         assert_eq!(r.idle_trims, 0, "not after the usual idle");
+        r.stages.insert(Slot::Region, Arc::default());
+        r.stages.insert(Slot::Main, Arc::default());
         let long = now.checked_sub(KEPT_WINDOW_IDLE_TRIM + IDLE_TRIM).unwrap();
         r.idle = Some((long, false));
         r.trim_when_idle(&ctx);
         assert_eq!(r.idle_trims, 1, "after the longer one");
         assert!(r.textures.contains_key(&Slot::Region), "the kept window stays");
+        // (issue #402: a window's stages held every mask's alpha at full size until the next zoom)
+        assert!(!r.stages.contains_key(&Slot::Region), "the window's stage caches go with it");
+        assert!(r.stages.contains_key(&Slot::Main), "the loupe's own stay for the next edit");
+        // an edit at Fit dropped the window's texture and kept its stages: it is still kept for the longer wait
+        r.textures.remove(&Slot::Region);
+        r.stages.insert(Slot::Region, Arc::default());
+        r.idle = Some((short, false));
+        r.trim_when_idle(&ctx);
+        assert_eq!(r.idle_trims, 1, "a window kept as stages only is not trimmed after the usual idle");
+        r.idle = Some((long, false));
+        r.trim_when_idle(&ctx);
+        assert!(!r.stages.contains_key(&Slot::Region), "its stages go after the longer one");
     }
 
     // Given views drawn from GPU-resident frames, freeing those frames (the screen can't show one any more) drops
