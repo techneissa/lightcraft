@@ -62,6 +62,8 @@ pub(super) fn take_jump(app: &mut LightcraftApp) -> bool {
 pub(crate) fn pinned(app: &mut LightcraftApp, ui: &mut egui::Ui, photo: PhotoId) {
     let d = app.session.develop_of(photo).unwrap_or_default();
     header(ui, "Masking");
+    // (it draws on the heading row just above the cursor, so it follows the heading and shares its clip)
+    super::selection_model::show(app, ui);
     let reveal = follow_selection(app, ui.ctx(), photo, &d);
     app.mask_list.rows.clear();
     if d.masks.is_empty() {

@@ -99,7 +99,6 @@ fn show_mask_panel(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let t = Tokens::get(ui.ctx());
     let d = app.session.develop_of(id).unwrap_or_default();
     super::mask_menus::confirm_window(app, ui.ctx());
-    super::selection_model::show(app, ui);
     // (room under the pinned list, which the title otherwise gives)
     let top = if d.masks.is_empty() { 0 } else { 8 };
     egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top, bottom: 10 }).show(ui, |ui| {
