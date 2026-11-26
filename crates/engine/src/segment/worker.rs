@@ -76,6 +76,8 @@ pub enum Kind {
         prompt: Prompt,
         region: [f64; 4],
     },
+    /// Let these models go now (fork, issue #407): not a request, nothing replies.
+    Release(crate::segment::MaskModels),
     /// Panics (tests of the worker's recovery).
     #[cfg(test)]
     Panic,
@@ -219,8 +221,12 @@ pub struct Shared {
     pub sam3_backend: std::sync::Mutex<Option<&'static str>>,
     /// Core ML's warm-up while the worker is idle (issue #268): [`Worker::submit`] pauses it.
     pub warm: warm::Flags,
-    /// The models stay loaded while the Masking panel is open (fork, issue #353).
+    /// The models stay loaded while the Masking panel is open (fork, issue #353), the ones the open photo's AI masks
+    /// use (issue #407).
     pub hold: std::sync::Mutex<keep::Hold>,
+    /// Which of SAM 3 (or a remote worker) and BiRefNet are in memory (issue #407; `loaded`: either).
+    pub sam3_in: AtomicBool,
+    pub birefnet_in: AtomicBool,
     /// The job under way loads a model, or runs one for the first time since its load (Core ML plans it then): the
     /// panel says so instead of "Selecting…" (fork, issue #353).
     pub loading: AtomicBool,
@@ -297,12 +303,27 @@ impl Worker {
         !self.dead() && self.shared.loading.load(Ordering::SeqCst)
     }
 
-    /// Keep the models loaded (`true`: the Masking panel is open in the front window), or let them go after the idle
-    /// time from now on (fork, issue #353).
-    pub fn hold(&self, on: bool) {
+    /// Keep `models`' SAM 3 and BiRefNet loaded (the open photo's AI masks use them while the Masking panel is open in
+    /// the front window), and let the others go after the idle time from now on (fork, issues #353 and #407).
+    pub fn hold(&self, models: crate::segment::MaskModels) {
+        let models = keep::worker_part(models);
         let mut hold = self.shared.hold.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        if hold.on != on {
-            *hold = keep::Hold { on, since: web_time::Instant::now() };
+        if hold.models != models {
+            *hold = keep::Hold { models, since: web_time::Instant::now() };
+        }
+    }
+
+    /// Which of SAM 3 and BiRefNet are in memory (issue #407).
+    pub fn loaded_models(&self) -> crate::segment::MaskModels {
+        let on = |f: &AtomicBool| !self.dead() && f.load(Ordering::SeqCst);
+        crate::segment::MaskModels { sam3: on(&self.shared.sam3_in), birefnet: on(&self.shared.birefnet_in), matting: false }
+    }
+
+    /// Let `models`' SAM 3 and BiRefNet go now, held or not, once the requests ahead of this have ended (issue #407:
+    /// an AI mask's stop button). Nothing when the worker never started.
+    pub fn release(&mut self, models: crate::segment::MaskModels) {
+        if self.tx.is_some() && !self.dead() {
+            let _ = self.submit(keep::release_job(models));
         }
     }
 
@@ -324,9 +345,12 @@ impl Worker {
             self.thread = None;
             let hold = self.shared.hold();
             self.shared = Arc::new(Shared::default());
-            self.hold(hold.on);
+            self.hold(hold.models);
         }
-        self.counter(&job).fetch_add(1, Ordering::SeqCst);
+        // (a release is no request: nothing shows as working for it)
+        if !matches!(job.kind, Kind::Release(_)) {
+            self.counter(&job).fetch_add(1, Ordering::SeqCst);
+        }
         let job = match &self.tx {
             Some(tx) => match tx.send(job) {
                 Ok(()) => {
@@ -350,7 +374,9 @@ impl Worker {
                 sent
             }
             Err(e) => {
-                let _ = self.counter(&job).try_update(Ordering::SeqCst, Ordering::SeqCst, |n| Some(n.saturating_sub(1)));
+                if !matches!(job.kind, Kind::Release(_)) {
+                    let _ = self.counter(&job).try_update(Ordering::SeqCst, Ordering::SeqCst, |n| Some(n.saturating_sub(1)));
+                }
                 Err(format!("could not start the AI mask worker: {e}"))
             }
         }
@@ -372,6 +398,13 @@ impl State {
     /// Whether a model is in memory.
     fn loaded(&self) -> bool {
         self.model.is_some() || self.birefnet.is_some() || self.remote.is_some()
+    }
+
+    /// Tell the session what is in memory.
+    fn publish(&self, shared: &Shared) {
+        shared.sam3_in.store(self.model.is_some() || self.remote.is_some(), Ordering::SeqCst);
+        shared.birefnet_in.store(self.birefnet.is_some(), Ordering::SeqCst);
+        shared.loaded.store(self.loaded(), Ordering::SeqCst);
     }
 }
 
@@ -412,7 +445,7 @@ fn run(rx: &mpsc::Receiver<Job>, shared: &Shared, idle: Duration, mut placement:
     loop {
         if queue.is_empty() {
             // (held while the Masking panel is open: looked at again after `idle`, fork issue #353)
-            let due = keep::unload_at(last, shared.hold(), idle);
+            let due = keep::unload_at(last, shared.hold(), idle, keep::loaded(&state));
             let left = due.map_or(idle, |d| d.saturating_duration_since(web_time::Instant::now()));
             let warming = state.warm.as_ref().is_some_and(|(s, _)| !s.done());
             // (with nothing loaded and nothing warming there is no deadline: it sleeps until a request comes)
@@ -423,18 +456,17 @@ fn run(rx: &mpsc::Receiver<Job>, shared: &Shared, idle: Duration, mut placement:
             };
             match got {
                 Ok(j) => queue.push_back(j),
-                Err(RecvTimeoutError::Timeout) if keep::unload_at(last, shared.hold(), idle).is_none_or(|d| web_time::Instant::now() < d) => {
+                Err(RecvTimeoutError::Timeout)
+                    if keep::unload_at(last, shared.hold(), idle, keep::loaded(&state)).is_none_or(|d| web_time::Instant::now() < d) =>
+                {
                     warm_if_idle(&mut state, shared);
                     continue;
                 }
                 Err(RecvTimeoutError::Timeout) => {
                     last = web_time::Instant::now();
-                    if state.loaded() {
-                        shared.warm.pause();
-                        state = State::default();
-                        shared.loaded.store(false, Ordering::SeqCst);
-                        log::info!("SAM 3 unloaded after {} minutes without use", idle.as_secs() / 60);
-                    }
+                    // (only the models the open photo's AI masks don't use: issue #407)
+                    let held = shared.hold().models;
+                    keep::let_go(&mut state, shared, crate::segment::MaskModels { sam3: !held.sam3, birefnet: !held.birefnet, matting: false });
                     continue;
                 }
                 Err(RecvTimeoutError::Disconnected) => return,
@@ -444,6 +476,10 @@ fn run(rx: &mpsc::Receiver<Job>, shared: &Shared, idle: Duration, mut placement:
             queue.push_back(j);
         }
         let Some(mut job) = queue.pop_front() else { continue };
+        if let Kind::Release(models) = job.kind {
+            keep::let_go(&mut state, shared, models);
+            continue;
+        }
         let is_detail = is_detail(&job);
         // counts the job as pending until just before its reply goes out: a caller woken by the
         // reply must not still see the worker busy with it
@@ -461,7 +497,7 @@ fn run(rx: &mpsc::Receiver<Job>, shared: &Shared, idle: Duration, mut placement:
         let mut result = attempt(&mut state, shared, &mut job, placement);
         let mut notice = None;
         if matches!(result, Err(Failure::Cancelled)) {
-            shared.loaded.store(state.loaded(), Ordering::SeqCst);
+            state.publish(shared);
             drop(done);
             let _ = job.reply.send(Outcome { id: job.id, tag: job.tag, result: Ok(None), superseded: true, notice: None, detail: Vec::new() });
             continue;
@@ -484,7 +520,7 @@ fn run(rx: &mpsc::Receiver<Job>, shared: &Shared, idle: Duration, mut placement:
                     result = Ok(r);
                 }
                 Err(Failure::Cancelled) => {
-                    shared.loaded.store(state.loaded(), Ordering::SeqCst);
+                    state.publish(shared);
                     drop(done);
                     let _ =
                         job.reply.send(Outcome { id: job.id, tag: job.tag, result: Ok(None), superseded: true, notice: None, detail: Vec::new() });
@@ -505,7 +541,7 @@ fn run(rx: &mpsc::Receiver<Job>, shared: &Shared, idle: Duration, mut placement:
             // (Core ML hands the model to candle when it fails on Automatic)
             *shared.sam3_backend.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(m.backend());
         }
-        shared.loaded.store(state.loaded(), Ordering::SeqCst);
+        state.publish(shared);
         drop(done);
         let detail = if result.as_ref().is_ok_and(Option::is_some) { std::mem::take(&mut job.detail) } else { Vec::new() };
         let _ = job.reply.send(Outcome { id: job.id, tag: job.tag, result, superseded: false, notice, detail });
@@ -554,7 +590,7 @@ fn model<'a>(state: &'a mut State, shared: &Shared, job: &Job, placement: Placem
         log::info!("SAM 3 loaded in {:?} ({}, candle on the {})", t.elapsed(), m.backend(), if m.device().is_cpu() { "CPU" } else { "GPU" });
         state.warm = m.warm_up().map(|w| (Arc::new(w) as Arc<dyn warm::Steps>, job.activity.clone()));
         state.model = Some((dir.to_path_buf(), runtime, m));
-        shared.loaded.store(true, Ordering::SeqCst);
+        state.publish(shared);
     }
     state.model.as_mut().map(|(_, _, m)| m).ok_or_else(|| "the model did not load".into())
 }
@@ -623,6 +659,7 @@ fn remote_job(state: &mut State, shared: &Shared, job: &mut Job, endpoint: &str)
         Kind::Text(text) => Operation::Text(text),
         Kind::Concept(text, main) => Operation::Concept(text, main),
         Kind::BiRefNet { .. } => return Err("BiRefNet runs on this Mac, not on a remote worker".into()),
+        Kind::Release(_) => return Ok(None),
         Kind::Clicks(clicks) | Kind::ObjectClicks(clicks) => {
             Operation::Clicks(clicks.iter().map(|c| [c.x, c.y, if c.positive { 1.0 } else { 0.0 }]).collect())
         }
@@ -706,6 +743,7 @@ fn run_job(state: &mut State, shared: &Shared, job: &mut Job, placement: Placeme
             Ok(text_logits(m, enc, &text, CONCEPT_THRESHOLD, main)?.map(|l| SegMask::from_logits(side, &l)))
         }
         Kind::BiRefNet { .. } => Err("BiRefNet is run before this point".into()),
+        Kind::Release(_) => Ok(None),
         Kind::Subject { focus } => {
             let (m, enc) = encoded(state, shared, job, placement)?;
             // (the reference score threshold, as Describe uses)

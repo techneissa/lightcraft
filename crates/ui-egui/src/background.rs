@@ -18,8 +18,11 @@ pub struct Background {
     since: Option<f64>,
     /// The caches were released for this stay.
     released: bool,
-    /// The AI mask models are kept loaded (fork, issue #353): the Masking panel is open in the front window.
-    mask_models: bool,
+    /// The AI mask models kept loaded (fork, issues #353 and #407): while the Masking panel is open in the front window,
+    /// the ones the open photo's AI masks use.
+    mask_models: lightcraft_engine::segment::MaskModels,
+    /// What each mask of the open photo uses (fork, issue #407).
+    pub ai: crate::panels::mask_stop_ai::Uses,
 }
 
 /// Called every frame (also from hidden ticks).
@@ -27,14 +30,16 @@ pub fn tick(app: &mut LightcraftApp, ctx: &egui::Context, now: f64) {
     let (focused, minimized, visible) = ctx.input(|i| (i.raw.focused, i.viewport().minimized == Some(true), i.viewport().visible()));
     let background = !focused || minimized || visible == Some(false);
     lightcraft_engine::idle::set_background(background);
-    // (fork, issue #353: a mask made after a pause in the Masking panel does not load and plan the models again)
+    // (fork, issue #353: a mask made after a pause in the Masking panel does not load and plan the models again; #407:
+    // only the models the open photo's AI masks use, so brush, gradient and range work holds none)
     let masking = !background
         && app.ui.right == crate::state::RightPanel::Masking
         && !app.ui.fullscreen
         && crate::docking::exposed(app, crate::docking::Panel::Tools);
-    if masking != app.background.mask_models {
-        app.background.mask_models = masking;
-        app.session.keep_mask_models(masking);
+    let models = if masking { crate::panels::mask_stop_ai::photo_models(app, now) } else { lightcraft_engine::segment::MaskModels::NONE };
+    if models != app.background.mask_models {
+        app.background.mask_models = models;
+        app.session.keep_mask_models(models);
     }
     if !background {
         (app.background.since, app.background.released) = (None, false);

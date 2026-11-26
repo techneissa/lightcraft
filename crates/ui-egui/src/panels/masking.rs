@@ -281,7 +281,10 @@ fn show_mask_panel(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             paint(ui.painter(), Rect::from_min_size(r.min + vec2(8.0, 7.0), vec2(16.0, 16.0)), icon, t.text_label);
             // a long name is cut short (with …) before the eye, the full name on hover
             let color = if m.visible { t.text } else { t.text_disabled };
-            let g = super::mask_name::fit(ui.painter(), &m.name, t.font(13.0), color, r.width() - 32.0 - if sel { 56.0 } else { 32.0 });
+            // (fork, issue #407: an AI mask's Stop AI button, left of Invert and the eye)
+            let ai = super::mask_stop_ai::is_ai(app, ui, m.id);
+            let buttons = if sel { 56.0 } else { 32.0 } + if ai { 24.0 } else { 0.0 };
+            let g = super::mask_name::fit(ui.painter(), &m.name, t.font(13.0), color, r.width() - 32.0 - buttons);
             let elided = g.elided;
             let at = pos2(r.left() + 32.0, r.center().y - g.size().y / 2.0);
             register(ui, format!("maskName:{}", m.id), Rect::from_min_size(at, g.size()));
@@ -308,6 +311,9 @@ fn show_mask_panel(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             if sel {
                 // Invert of the whole mask, beside the eye
                 super::mask_parts::mask_invert_button(app, ui, r, m.id, m.invert);
+            }
+            if ai {
+                super::mask_stop_ai::button(app, ui, r, r.right() - if sel { 64.0 } else { 40.0 }, m.id, &m.name);
             }
             if resp.clicked() {
                 let _ = app.run("mask.select", json!({"id": m.id}));

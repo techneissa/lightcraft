@@ -55,6 +55,7 @@ pub mod mask_names;
 mod mask_parts;
 mod mask_presets;
 mod mask_recolor;
+mod mask_stop_ai;
 mod masks;
 pub mod match_look;
 mod merge;
@@ -220,6 +221,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(mask_clipboard::specs());
         v.extend(mask_multi::specs());
         v.extend(mask_recolor::specs());
+        v.extend(mask_stop_ai::specs());
         v.extend(cull::specs());
         v.extend(convert::specs());
         v.extend(convert::edit_specs());

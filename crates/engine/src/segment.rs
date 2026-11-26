@@ -21,6 +21,7 @@ pub(crate) mod clicks_request;
 #[cfg(feature = "sam")]
 pub(crate) mod download;
 mod kept;
+pub use kept::MaskModels;
 pub(crate) mod request;
 #[cfg(feature = "sam")]
 mod worker;
