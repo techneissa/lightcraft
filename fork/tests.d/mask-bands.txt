@@ -1,0 +1,2 @@
+# Masks and the finish stage per band (issue #406)
+cargo test -p lightcraft-gpu --lib -- masks::bands

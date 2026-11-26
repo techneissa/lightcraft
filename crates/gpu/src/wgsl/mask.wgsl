@@ -32,12 +32,13 @@ fn pos(x: u32, y: u32) -> vec2<f32> {
     return vec2<f32>(pf(4u) * px + pf(6u) * py + pf(8u), pf(5u) * px + pf(7u) * py + pf(9u));
 }
 
-// P: w, h, kind, invert, affine[6], then per kind:
+// P: w, h (the rows of `c`), kind, invert, affine[6], then per kind:
 //   0 linear: a.xy, d.xy, |d|²         1 radial: centre.xy, cos, sin, rx, ry, feather, invert
 //   (0 and 1: then P[18] = grid, P[19..25] its table: see `grid_pos`)
 //   2 luminance range: lo, hi, lo feather, hi feather, ev
 //   3 colour range: tol, gain, sample count (`masks::color_range::Key`s in aux, 8 values each)
 //   (brush strokes: see `stroke`)
+// and P[25]: the frame row of `c`'s first (`masks::Cut`: `c` holds rows of the frame, `img` and `log_l` all of it).
 // `masks::color_range::L_FLOOR`.
 const CR_L_FLOOR: f32 = 0.1;
 
@@ -49,16 +50,19 @@ fn shape(@builtin(global_invocation_id) g: vec3<u32>) {
         return;
     }
     let i = g.y * w + g.x;
+    // (the pixel in the frame)
+    let y = g.y + pu(25u);
+    let j = y * w + g.x;
     let kind = pu(2u);
     var v = 0.0;
     if (kind == 0u) {
-        let p = pos(g.x, g.y);
+        let p = pos(g.x, y);
         let a = vec2<f32>(pf(10u), pf(11u));
         let d = vec2<f32>(pf(12u), pf(13u));
         let t = dot(p - a, d) / pf(14u);
         v = 1.0 - sstep(0.0, 1.0, t);
     } else if (kind == 1u) {
-        let p = pos(g.x, g.y);
+        let p = pos(g.x, y);
         let d = p - vec2<f32>(pf(10u), pf(11u));
         let co = pf(12u);
         let s = pf(13u);
@@ -75,13 +79,13 @@ fn shape(@builtin(global_invocation_id) g: vec3<u32>) {
     } else if (kind == 2u) {
         let lo = pf(10u);
         let hi = pf(11u);
-        let y = clamp((log_l[i] + pf(14u) + 8.0) / 12.0, 0.0, 1.0);
-        v = sstep(lo - pf(12u), lo, y) * (1.0 - sstep(hi, hi + pf(13u), y));
+        let l = clamp((log_l[j] + pf(14u) + 8.0) / 12.0, 0.0, 1.0);
+        v = sstep(lo - pf(12u), lo, l) * (1.0 - sstep(hi, hi + pf(13u), l));
     } else if (kind == 3u) {
         let tol = pf(10u);
         let gain = pf(11u);
         // `masks::color_range::pixel`, then `distance` to each key (8 values: see `color_range::Key`)
-        let c = vec3<f32>(img[3u * i], img[3u * i + 1u], img[3u * i + 2u]) * gain;
+        let c = vec3<f32>(img[3u * j], img[3u * j + 1u], img[3u * j + 2u]) * gain;
         let lab = oklab(c);
         let ab = lab.yz / sqrt(lab.x * lab.x + CR_L_FLOOR * CR_L_FLOOR);
         let l = oklab(c / (1.0 + c)).x;
@@ -147,10 +151,12 @@ fn finalize(@builtin(global_invocation_id) g: vec3<u32>, @builtin(num_workgroups
 }
 
 // One brush stroke stamped inside its bounding box into `c` (`masks::brush`'s `stamp`): one dab is
-// five words in aux (x, y, r, hard, flow), pen pressure already applied. P: w, h, (unused 2..9),
-// box x0, y0, x1, y1 (10..13), dab count, density, erase (14..16), the edge feathered by stroke (17,
-// process V10: the Flow build-up times the highest dab falloff, `masks::feather_dab`): the stroke is
-// combined into `c` (max, or subtract when erasing). (Auto Mask strokes are stamped on the CPU.)
+// five words in aux (x, y, r, hard, flow), pen pressure already applied. P: w, the frame rows `c`
+// holds (1: past its last, 2: its first; `masks::Cut`), (unused 3..9), box x0, y0, x1, y1 (10..13,
+// in the frame; y0 on one of the whole box's tile rows), dab count, density, erase (14..16), the edge
+// feathered by stroke (17, process V10: the Flow build-up times the highest dab falloff,
+// `masks::feather_dab`): the stroke is combined into `c` (max, or subtract when erasing). (Auto Mask
+// strokes are stamped on the CPU.)
 //
 // Each 16 × 16 tile first picks, 256 dabs at a time, the dabs that reach it into workgroup memory:
 // a pixel then reads the few dabs near it, not every dab of the stroke. A stroke's coverage is a
@@ -165,7 +171,7 @@ fn stroke(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation
     let h = pu(1u);
     let x = pu(10u) + g.x;
     let y = pu(11u) + g.y;
-    let inside = x < pu(12u) && y < pu(13u) && x < w && y < h;
+    let inside = x < pu(12u) && y < pu(13u) && x < w && y < h && y >= pu(2u);
     let tx0 = f32(pu(10u) + wid.x * 16u);
     let ty0 = f32(pu(11u) + wid.y * 16u);
     let px = f32(x) + 0.5;
@@ -227,7 +233,7 @@ fn stroke(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation
         workgroupBarrier();
     }
     if (inside) {
-        let i = y * w + x;
+        let i = (y - pu(2u)) * w + x;
         var cover = 1.0 - keep;
         if (by_stroke) {
             // masks::stroke_coverage
