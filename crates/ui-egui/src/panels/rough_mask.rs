@@ -1,5 +1,6 @@
 //! The line under a Subject, Sky or Background part that the classical heuristic draws (fork feature, issue #37): it
-//! says the mask is rough and, without SAM 3, how to get it. A click opens the SAM 3 download.
+//! says the mask is rough and, without SAM 3, how to get it. A click opens the SAM 3 download. Also the line under an
+//! AI part that selects nothing: still being found on this photo, or not found on it (issue #399).
 
 use egui;
 use lightcraft_develop::MaskShape;
@@ -25,4 +26,15 @@ pub fn line(app: &mut LightcraftApp, ui: &mut egui::Ui, shape: &MaskShape) {
             app.offer_sam_download(None);
         }
     }
+}
+
+/// The line for a part that is waiting to be found on the photo, or whose search selected nothing.
+pub fn unfound(app: &LightcraftApp, ui: &mut egui::Ui, shape: &MaskShape) {
+    let text = match (shape.is_waiting(), app.session.adaptive_busy()) {
+        (true, true) => "Finding AI masks",
+        (true, false) => "Not found yet. Use Update AI Masks in the Photo menu.",
+        (false, _) => "Not found on this photo.",
+    };
+    let t = Tokens::get(ui.ctx());
+    ui.label(egui::RichText::new(crate::i18n::tr(text)).color(t.text_dim).size(11.0));
 }

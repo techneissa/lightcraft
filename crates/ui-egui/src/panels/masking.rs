@@ -442,6 +442,8 @@ pub(super) fn range_controls(app: &mut LightcraftApp, ui: &mut egui::Ui, comp: u
         let _ = app.run("mask.update", json!({"component": comp, "shape": shape}));
     };
     match shape {
+        // (fork, issue #399: an AI part still being found on this photo, or not found on it, says so)
+        s if s.is_waiting() || s.seg() == Some(&lightcraft_develop::SegMask::nothing()) => super::rough_mask::unfound(app, ui, s),
         MaskShape::LuminanceRange { lo, hi, lo_feather, hi_feather } => {
             ui.label(egui::RichText::new(crate::i18n::tr("Select Luminance Range")).color(t.text_dim).size(11.5));
             let (lo, hi) = (*lo, *hi);

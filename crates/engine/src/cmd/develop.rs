@@ -181,12 +181,17 @@ pub(crate) fn merge_settings_for_photo(
 }
 
 /// The ops that merge `partial` into each of `ids`' settings (Paste, Paste from Previous, Sync, Paste Masks), each AI mask part
-/// waiting to be found on that photo, unless it has the same part found already (fork, `fork/adaptive-masks.md`).
+/// waiting to be found on that photo, unless it has the same part found already (fork, `fork/adaptive-masks.md`). When
+/// the paste brings masks, a rough part or one that found nothing is not "found": it is looked for again (issue #399).
 pub(super) fn pasted(s: &mut Session, ids: &[PhotoId], partial: &Value, label: &str) -> Vec<Op> {
     let mut ops = Vec::new();
     for &id in ids {
         let Some(d) = s.develop_of(id) else { continue };
-        let merged = s.adapted(&d, lightcraft_develop::apply_partial(&d, partial, 1.0));
+        let mut own = (*d).clone();
+        if partial.get("masks").is_some() {
+            lightcraft_develop::adaptive::forget_unfound(&mut own.masks);
+        }
+        let merged = s.adapted(&own, lightcraft_develop::apply_partial(&d, partial, 1.0));
         ops.extend(s.develop_op(id, merged, label));
     }
     ops

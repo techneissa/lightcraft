@@ -209,6 +209,17 @@ pub fn adapt(own: Option<&DevelopSettings>, incoming: &mut DevelopSettings) -> u
     waiting
 }
 
+/// Mark as still to be found each AI part that never really was: a rough one (no selection, drawn the classical way)
+/// or one whose search selected nothing. A paste then looks for it rather than keep it as the photo's own (issue #399).
+pub fn forget_unfound(masks: &mut [Mask]) {
+    let nothing = SegMask::nothing();
+    for c in masks.iter_mut().flat_map(|m| &mut m.components) {
+        if c.shape.is_detected() && c.shape.seg().is_none_or(|s| *s == nothing) {
+            c.shape.set_waiting();
+        }
+    }
+}
+
 /// Leave only what each AI part selects (presets: a preset never carries one photo's selection).
 pub fn strip_found(masks: &mut [Mask]) {
     for m in masks {
