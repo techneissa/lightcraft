@@ -59,6 +59,8 @@ pub struct DisplayProfile {
     correction: Correction,
     from_srgb: Transform,
     to_srgb: Transform,
+    /// The display's device values → sRGB (for reading back a pixel shown on screen).
+    device_to_srgb: Transform,
 }
 
 impl std::fmt::Debug for DisplayProfile {
@@ -144,7 +146,8 @@ impl DisplayProfile {
         };
         let from_srgb = transform(&srgb, &p).ok_or("can't convert sRGB to this profile")?;
         let to_srgb = transform(&proxy, &srgb).ok_or("can't convert this profile to sRGB")?;
-        Ok(DisplayProfile { description, id: hash(bytes), kind, to_rec2020, correction, from_srgb, to_srgb })
+        let device_to_srgb = transform(&p, &srgb).ok_or("can't convert this profile to sRGB")?;
+        Ok(DisplayProfile { description, id: hash(bytes), kind, to_rec2020, correction, from_srgb, to_srgb, device_to_srgb })
     }
 
     /// Does [`correct`](Self::correct) change anything (the display's curves aren't sRGB's)?
@@ -183,6 +186,14 @@ impl DisplayProfile {
         let mut out = img.clone();
         apply(&self.to_srgb, &mut out)?;
         Ok(out)
+    }
+
+    /// One pixel as shown on the display (its device values) → sRGB (colours outside sRGB are clipped): what an
+    /// eyedropper over the screen reads.
+    pub fn device_pixel_to_srgb(&self, rgb: [u8; 3]) -> Option<[u8; 3]> {
+        let mut px = Rgba8 { width: 1, height: 1, data: vec![[rgb[0], rgb[1], rgb[2], 255]] };
+        apply(&self.device_to_srgb, &mut px).ok()?;
+        px.data.first().map(|p| [p[0], p[1], p[2]])
     }
 }
 
@@ -299,6 +310,19 @@ mod tests {
         // the display's own pure green is outside sRGB: it clips there
         let srgb = d.to_srgb(&img(&[[0, 255, 0, 255]])).unwrap();
         assert!(srgb.data[0][0] < 10 && srgb.data[0][1] == 255, "{:?}", srgb.data[0]);
+    }
+
+    /// A pixel read off the screen turns back into the sRGB colour that was shown (the eyedropper's value).
+    #[test]
+    fn a_shown_pixel_reads_back_as_its_srgb_colour() {
+        let d = DisplayProfile::from_icc(&icc::write_matrix_trc(&lightcraft_color::ADOBE_RGB, &Trc::Gamma(2.2))).unwrap();
+        for c in [[200u8, 30, 90], [17, 140, 251], [128, 128, 128]] {
+            let mut shown = img(&[[c[0], c[1], c[2], 255]]);
+            d.from_srgb(&mut shown).unwrap();
+            assert_ne!(shown.data[0][..3], c[..], "the display changes the values");
+            let back = d.device_pixel_to_srgb([shown.data[0][0], shown.data[0][1], shown.data[0][2]]).unwrap();
+            assert!(close([back[0], back[1], back[2], 255], [c[0], c[1], c[2], 255], 4), "{back:?} {c:?}");
+        }
     }
 
     /// A gamma 2.2 display (Adobe RGB-like): the proxy's sRGB curve goes to the display's curve.

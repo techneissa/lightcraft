@@ -41,9 +41,9 @@ pub(super) fn read(app: &mut LightcraftApp, resp: &Response, id: PhotoId, views:
         return;
     }
     let Some(mut patch) = magnifier::sample(pixels, vec2((q.x - shown.min.x) / shown.width(), (q.y - shown.min.y) / shown.height())) else { return };
-    if app.renderer.display().is_some() {
-        // a monitor profile: what is on screen is the display's device values, not sRGB, so the value is not told
-        patch.set_srgb(None);
+    if let Some(display) = app.renderer.display() {
+        // a monitor profile: what is on screen is the display's device values, turned back into sRGB for the value
+        patch.set_srgb(patch.shown_rgb().and_then(|rgb| display.profile.device_pixel_to_srgb(rgb)));
     }
     app.eyedropper = Some(Magnified { patch, at: q });
 }
