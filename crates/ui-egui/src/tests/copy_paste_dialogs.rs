@@ -63,6 +63,20 @@ fn return_copies_the_chosen_settings() {
     assert!(h.app.session.clipboard.is_some(), "Return copies the settings");
 }
 
+/// Issue #448: the groups picked in Copy Settings are saved with the app settings and are back after a restart.
+#[test]
+fn the_copied_groups_come_back_after_a_restart() {
+    let (mut h, _) = edited();
+    exec(&mut h, "develop.copy", json!({"groups": ["light", "grain"]}));
+    h.settle(SETTLE);
+    let saved = serde_json::to_string(&h.app.ui).expect("the settings save");
+
+    let (mut again, _) = edited();
+    again.app.ui = serde_json::from_str(&saved).expect("the settings load");
+    again.settle(SETTLE);
+    assert_eq!(again.app.session.copy_groups, h.app.session.copy_groups);
+}
+
 #[test]
 fn escape_closes_copy_settings_without_copying() {
     let (mut h, _) = edited();

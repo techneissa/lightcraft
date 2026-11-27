@@ -110,6 +110,7 @@ impl LightcraftApp {
             loupe_shown: None,
             loupe_timing: Default::default(),
             prep_synced: false,
+            copy_groups_applied: None,
             look_ahead: Default::default(),
             region_view: None,
             region_before_view: None,
@@ -693,6 +694,7 @@ impl LightcraftApp {
     /// `i.time`, events, keys or dropped files.
     pub fn logic(&mut self, ctx: &egui::Context) {
         self.sync_prep_settings();
+        self.sync_copy_groups();
         i18n::set_language(self.ui.language);
         // The fork's AccessKit root language and bidi runs follow the locale; presentation only.
         // Compare against the cached string: `Context::language()` allocates on every call, and

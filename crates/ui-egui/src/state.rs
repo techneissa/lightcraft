@@ -309,6 +309,10 @@ pub struct UiState {
     /// Backspace on it removes that guide alone; a click away or leaving the tool clears it.
     #[serde(skip)]
     pub selected_guide: Option<(u64, usize)>,
+    /// The groups last picked for Copy Edit Settings (`None`: never picked, so the default ones), kept for the next
+    /// start ([`crate::LightcraftApp`] hands them to the session).
+    #[serde(deserialize_with = "settings::lenient")]
+    pub copy_groups: Option<Vec<lightcraft_develop::SettingsGroup>>,
     pub brush_size: f32,
     pub brush_feather: f32,
     pub brush_flow: f32,
@@ -537,6 +541,7 @@ impl Default for UiState {
             person_from: None,
             last_person: None,
             cull_burst: None,
+            copy_groups: None,
             dismissed_faces: Default::default(),
             unnamed_selected: Default::default(),
             unnamed_name: String::new(),
