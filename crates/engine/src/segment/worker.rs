@@ -221,21 +221,12 @@ pub struct Shared {
     pub sam3_backend: std::sync::Mutex<Option<&'static str>>,
     /// Core ML's warm-up while the worker is idle (issue #268): [`Worker::submit`] pauses it.
     pub warm: warm::Flags,
-    /// The models stay loaded while the Masking panel is open (fork, issue #353), the ones the open photo's AI masks
-    /// use (issue #407).
-    pub hold: std::sync::Mutex<keep::Hold>,
     /// Which of SAM 3 (or a remote worker) and BiRefNet are in memory (issue #407; `loaded`: either).
     pub sam3_in: AtomicBool,
     pub birefnet_in: AtomicBool,
     /// The job under way loads a model, or runs one for the first time since its load (Core ML plans it then): the
     /// panel says so instead of "Selecting…" (fork, issue #353).
     pub loading: AtomicBool,
-}
-
-impl Shared {
-    fn hold(&self) -> keep::Hold {
-        *self.hold.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
-    }
 }
 
 /// Decrements a counter when dropped (also when unwinding).
@@ -303,16 +294,6 @@ impl Worker {
         !self.dead() && self.shared.loading.load(Ordering::SeqCst)
     }
 
-    /// Keep `models`' SAM 3 and BiRefNet loaded (the open photo's AI masks use them while the Masking panel is open in
-    /// the front window), and let the others go after the idle time from now on (fork, issues #353 and #407).
-    pub fn hold(&self, models: crate::segment::MaskModels) {
-        let models = keep::worker_part(models);
-        let mut hold = self.shared.hold.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        if hold.models != models {
-            *hold = keep::Hold { models, since: web_time::Instant::now() };
-        }
-    }
-
     /// Which of SAM 3 and BiRefNet are in memory (issue #407).
     pub fn loaded_models(&self) -> crate::segment::MaskModels {
         let on = |f: &AtomicBool| !self.dead() && f.load(Ordering::SeqCst);
@@ -343,9 +324,7 @@ impl Worker {
             // a thread that ended took its counters' meaning with it
             self.tx = None;
             self.thread = None;
-            let hold = self.shared.hold();
             self.shared = Arc::new(Shared::default());
-            self.hold(hold.models);
         }
         // (a release is no request: nothing shows as working for it)
         if !matches!(job.kind, Kind::Release(_)) {
@@ -444,8 +423,8 @@ fn run(rx: &mpsc::Receiver<Job>, shared: &Shared, idle: Duration, mut placement:
     let mut last = web_time::Instant::now();
     loop {
         if queue.is_empty() {
-            // (held while the Masking panel is open: looked at again after `idle`, fork issue #353)
-            let due = keep::unload_at(last, shared.hold(), idle, keep::loaded(&state));
+            // (the models go `idle` after the last request, whatever panel is open: fork issue #452)
+            let due = keep::unload_at(last, idle, keep::loaded(&state));
             let left = due.map_or(idle, |d| d.saturating_duration_since(web_time::Instant::now()));
             let warming = state.warm.as_ref().is_some_and(|(s, _)| !s.done());
             // (with nothing loaded and nothing warming there is no deadline: it sleeps until a request comes)
@@ -456,17 +435,13 @@ fn run(rx: &mpsc::Receiver<Job>, shared: &Shared, idle: Duration, mut placement:
             };
             match got {
                 Ok(j) => queue.push_back(j),
-                Err(RecvTimeoutError::Timeout)
-                    if keep::unload_at(last, shared.hold(), idle, keep::loaded(&state)).is_none_or(|d| web_time::Instant::now() < d) =>
-                {
+                Err(RecvTimeoutError::Timeout) if keep::unload_at(last, idle, keep::loaded(&state)).is_none_or(|d| web_time::Instant::now() < d) => {
                     warm_if_idle(&mut state, shared);
                     continue;
                 }
                 Err(RecvTimeoutError::Timeout) => {
                     last = web_time::Instant::now();
-                    // (only the models the open photo's AI masks don't use: issue #407)
-                    let held = shared.hold().models;
-                    keep::let_go(&mut state, shared, crate::segment::MaskModels { sam3: !held.sam3, birefnet: !held.birefnet, matting: false });
+                    keep::let_go(&mut state, shared, crate::segment::MaskModels { sam3: true, birefnet: true, matting: false });
                     continue;
                 }
                 Err(RecvTimeoutError::Disconnected) => return,

@@ -6,8 +6,7 @@
 //!
 //! `LIGHTCRAFT_CONFIG_DIR=<scratch> cargo run --release -p lightcraft-engine --features sam --example mask_timing -- sam3+birefnet 0,0,75 PHOTO1 PHOTO2 PHOTO3`
 //!
-//! `LIGHTCRAFT_CONFIG_DIR` keeps the model choice out of the user's settings. `MASKING_PANEL=1` keeps the models
-//! loaded as the app does while the Masking panel is open (`Session::keep_mask_models`). `MASK_KIND=sky` (or
+//! `LIGHTCRAFT_CONFIG_DIR` keeps the model choice out of the user's settings. `MASK_KIND=sky` (or
 //! `background`) makes that kind of mask instead of Subject; `/usr/bin/time -l` before the command gives the peak
 //! memory (issue #437).
 use std::sync::OnceLock;
@@ -65,9 +64,6 @@ fn main() -> Result<(), String> {
     let gaps: Vec<u64> = gaps.split(',').map(|g| g.trim().parse().map_err(|_| "GAPS is whole seconds, comma-separated")).collect::<Result<_, _>>()?;
     let mut s = Session::new().with_fs().with_default_sam3_model().with_default_parsing_models();
     s.segmenter.background = false;
-    if std::env::var_os("MASKING_PANEL").is_some() {
-        s.keep_mask_models(lightcraft_engine::segment::MaskModels { sam3: true, birefnet: true, matting: true });
-    }
     s.execute("segment.selectionModel", &json!({"model": model})).map_err(|e| e.to_string())?;
     let paths: Vec<String> = photos.iter().filter_map(|p| std::fs::canonicalize(p).ok()).map(|p| p.to_string_lossy().to_string()).collect();
     let r = s.execute("library.import", &json!({"paths": paths})).map_err(|e| e.to_string())?;
