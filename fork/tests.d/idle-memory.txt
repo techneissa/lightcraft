@@ -1,3 +1,3 @@
 # Idle memory and CPU (issue #304)
 cargo test -p lightcraft-engine --features sam --lib -- idle:: relight:: people_parsing
-cargo test -p lightcraft-ui-egui --lib -- fs_cached screen_profile faces::
+cargo test -p lightcraft-ui-egui --lib -- fs_cached screen_profile faces:: a_rest_at_fit

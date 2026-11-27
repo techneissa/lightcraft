@@ -139,6 +139,9 @@ pub struct Store {
     last_view: Option<(u8, [f32; 4])>,
     /// The loupe's last frame was drawn from the picture.
     pub on_screen: bool,
+    /// The picture was let go at rest ([`Self::free_at_rest`]): it is not read back until the next zoom past Fit or
+    /// another photo.
+    rested: bool,
     /// Its builds running at once (never more than one).
     pub at_once: Arc<AtOnce>,
     /// Bytes of its pictures still being written to disk ([`Plan::writing`]).
@@ -204,6 +207,18 @@ impl Store {
     /// same look is built again when it is back (a 1:1 view returns at 1:1, not at view resolution).
     pub fn free_for_background(&mut self) {
         self.picture = None;
+    }
+
+    /// Let go of the picture (its disk copy stays) because the loupe has rested at Fit (issue #436): only a zoom draws
+    /// from it, so it is read back from disk at the next zoom past Fit, not at once.
+    pub fn free_at_rest(&mut self) {
+        self.picture = None;
+        self.rested = true;
+    }
+
+    /// Whether the picture was let go at rest and is waiting for the next zoom.
+    pub fn rested(&self) -> bool {
+        self.rested
     }
 
     /// The photo and key of the picture held, if one is.
@@ -409,7 +424,14 @@ pub fn update(app: &mut LightcraftApp, ctx: &egui::Context, a: &Ask) -> Option<u
             // (compared frame to frame: Z to Fit and Z back to the same zoom and pan is a zoom too)
             (o.zoom, o.pan) = (zoom, pan);
         }
-        _ => store.opened = Some(Opened { photo: a.id, zoom, pan, zoomed: false }),
+        _ => {
+            store.opened = Some(Opened { photo: a.id, zoom, pan, zoomed: false });
+            store.rested = false;
+        }
+    }
+    // (let go at rest: back with the next zoom past Fit)
+    if a.zoomed {
+        store.rested = false;
     }
     if !a.eligible {
         app.renderer.full.rest = None;
@@ -448,7 +470,7 @@ fn ask(app: &mut LightcraftApp, ctx: &egui::Context, a: &Ask, job: RenderJob, dr
         return;
     }
     // (one build at a time: a stopped one is waited for)
-    if drawn || store.held().is_some() || store.running.is_some() || store.refused == Some(key) {
+    if drawn || store.held().is_some() || store.running.is_some() || store.refused == Some(key) || store.rested {
         return;
     }
     let since = match store.rest {

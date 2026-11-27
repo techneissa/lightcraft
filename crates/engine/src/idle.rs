@@ -300,6 +300,12 @@ impl crate::Session {
     pub fn release_for_background(&mut self) {
         self.media.release_originals();
     }
+
+    /// The view in front has rested with nothing on screen drawn from a full-size original (issue #436): let go of the
+    /// originals; the next zoom past Fit decodes the one it needs again.
+    pub fn release_at_rest(&mut self) {
+        self.media.release_originals();
+    }
 }
 
 #[cfg(test)]
