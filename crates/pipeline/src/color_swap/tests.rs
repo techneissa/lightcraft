@@ -61,20 +61,6 @@ fn without_keep_lightness_the_to_colour_sets_the_light_and_folds_stay_in_proport
     assert!(out[2] > 0.8, "the From colour's own lightness reaches the To colour's: {out:?}");
 }
 
-/// Colours well outside the range come back exactly as they went in, bit for bit.
-#[test]
-fn colours_outside_the_range_are_unchanged() {
-    let s = stage(vec![swap(BLUE, RED)]);
-    for c in [GREEN, [0.9, 0.55, 0.1], [0.5, 0.5, 0.5], [0.05, 0.05, 0.05], [0.95, 0.9, 0.85], [0.85, 0.6, 0.5]] {
-        let d =
-            lightcraft_color::SRGB.to_space(&lightcraft_color::REC2020).apply_f32(c.map(|v| lightcraft_color::transfer::srgb_to_linear(v as f32)));
-        assert_eq!(s.apply(d), d, "{c:?}");
-    }
-    let near =
-        lightcraft_color::SRGB.to_space(&lightcraft_color::REC2020).apply_f32(BLUE.map(|v| lightcraft_color::transfer::srgb_to_linear(v as f32)));
-    assert_ne!(s.apply(near), near);
-}
-
 /// Entries run in order, each on what the one before made.
 #[test]
 fn entries_combine_in_order() {
@@ -158,4 +144,15 @@ fn a_weak_mix_at_an_edge_takes_the_new_hue_but_not_new_chroma() {
     let out = lch_of(s.apply(px(mix)));
     assert!(wrap(out[2] - red_h).abs() < wrap(mix[2] - red_h).abs() * 0.7, "hue {} → {} (red {red_h})", mix[2], out[2]);
     assert!(out[1] < 0.05 && (out[0] - mix[0]).abs() < 0.01, "chroma and lightness stay: {out:?}");
+}
+
+/// To white (or any neutral), a weakly coloured edge pixel loses its chroma instead of keeping it under white's residue
+/// hue (the violet or blue line along an edge).
+#[test]
+fn a_neutral_to_colour_takes_the_chroma_of_an_edge_pixel_away() {
+    let (_, _, h) = blue();
+    let s = stage(vec![swap(BLUE, [0.95, 0.95, 0.95])]);
+    let edge = [0.42, 0.025, h + 0.5];
+    let out = lch_of(s.apply(px(edge)));
+    assert!(out[1] < edge[1] * 0.7, "chroma {} → {}", edge[1], out[1]);
 }

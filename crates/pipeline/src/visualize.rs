@@ -35,11 +35,11 @@ pub enum Overlay {
     None,
     /// Point Color sample `i`: its range in colour, everything else grey.
     PointColorRange(u8),
-    /// Color Swap entry `i`'s range, drawn instead of its change (fork, issue #460): the photo as the entry sees it
+    /// Recolor entry `i`'s range, drawn instead of its change (fork, issue #460): the photo as the entry sees it
     /// (after the entries before it), dimmed and drained of colour where the entry does not reach, with a glow on
     /// the fade at the range's edge. Drawn by the finish stage itself ([`lightcraft_develop::ColorSwap::view`]).
     ColorSwapRange(u8),
-    /// The photo without Color Swap entry `i`'s change, the others as they are: its before (fork, issue #460).
+    /// The photo without Recolor entry `i`'s change, the others as they are: its before (fork, issue #460).
     ColorSwapBefore(u8),
     /// Visualize Spots with a threshold 0..100 (higher = more sensitive).
     Spots(u8),
@@ -285,7 +285,7 @@ impl Overlay {
 /// Settings changes an overlay needs before rendering (e.g. the visualized sample's adjustment
 /// is left out, so the range is shown on the colours it selects).
 pub fn adjust_settings(o: Overlay, s: &mut Cow<'_, DevelopSettings>) {
-    // (Color Swap, fork issue #460: the entry draws its range, or is left out)
+    // (Recolor, fork issue #460: the entry draws its range, or is left out)
     match o {
         Overlay::ColorSwapRange(i) if s.color_swaps.len() > i as usize => s.to_mut().color_swaps[i as usize].view = true,
         Overlay::ColorSwapBefore(i) if s.color_swaps.len() > i as usize => s.to_mut().color_swaps[i as usize].on = false,

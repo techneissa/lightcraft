@@ -54,7 +54,7 @@ fn a_damaged_or_missing_arrangement_is_made_whole() {
 fn moving_steps_over_hidden_sections_and_stops_at_the_ends() {
     let mut layout = EditSectionLayout::default();
     layout.set_hidden(Effects, true);
-    assert!(layout.move_by(Detail, true), "Detail goes above Color Swap, past the hidden Effects");
+    assert!(layout.move_by(Detail, true), "Detail goes above Recolor, past the hidden Effects");
     assert_eq!(layout.shown(), [Light, Color, Detail, ColorSwap, Optics, LensBlur, Relight, Calibration]);
     assert!(!layout.can_move(Light, true) && !layout.can_move(Calibration, false));
     assert!(!layout.move_by(Light, true) && !layout.move_by(Effects, true), "the first and a hidden section stay");

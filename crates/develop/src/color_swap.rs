@@ -1,4 +1,4 @@
-//! Fork (issue #460, `fork/color-swap.md`): Color Swap, which replaces one colour with another across the whole photo,
+//! Fork (issue #460, `fork/color-swap.md`): Recolor, which replaces one colour with another across the whole photo,
 //! several at once. The settings are one list of entries, each with a From colour, a To colour, how far from the From
 //! colour still counts (Range, with a width of its own for hue, saturation and lightness), how softly that range
 //! fades out, how much of the change is applied (Intensity), whether the pixel keeps its own lightness, and an on/off
@@ -29,7 +29,7 @@ pub const MAX_NAME: usize = 60;
 /// One colour swap.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct ColorSwap {
-    /// The name the user gave it (empty: the panel shows "Color Swap 1", "Color Swap 2", …).
+    /// The name the user gave it (empty: the panel shows "Recolor 1", "Recolor 2", … in the user's language).
     #[serde(skip_serializing_if = "String::is_empty")]
     pub name: String,
     /// Switched on. Off keeps every value and changes nothing.
@@ -83,12 +83,7 @@ impl ColorSwap {
         self.on && self.from.is_some() && self.to.is_some() && self.intensity.is_finite() && self.intensity > 0.0
     }
 
-    /// The entry's name as the panel shows it: its own, or "Color Swap n" for place `index` (0-based).
-    pub fn display_name(&self, index: usize) -> String {
-        if self.name.trim().is_empty() { format!("Color Swap {}", index + 1) } else { self.name.clone() }
-    }
-
-    /// The entry with every number in its range (a NaN or a value from a file by hand reads as the default) and the
+    /// The entry with every number in its range (a number out of range is clamped, a NaN reads as the default; a colour channel the same, a NaN as 0) and the
     /// name cut to [`MAX_NAME`] characters.
     pub fn sanitized(&self) -> ColorSwap {
         let d = ColorSwap::default();
@@ -194,5 +189,13 @@ mod tests {
         assert!(!v[1].on);
         let none: Vec<ColorSwap> = deserialize_list(serde_json::json!("x")).unwrap_or_default();
         assert!(none.is_empty());
+    }
+
+    #[test]
+    fn an_empty_copy_removes_the_entries_it_is_pasted_onto() {
+        let mut photo = crate::DevelopSettings::default();
+        photo.color_swaps.push(ColorSwap::default());
+        let clip = crate::extract_groups(&crate::DevelopSettings::default(), &[crate::SettingsGroup::ColorSwap]);
+        assert!(photo.merged(&clip).map(|s| s.color_swaps.is_empty()).unwrap_or(false));
     }
 }

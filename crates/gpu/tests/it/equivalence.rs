@@ -469,6 +469,8 @@ fn cases() -> Vec<(&'static str, Edit)> {
                     intensity: 80.0,
                     ..Default::default()
                 },
+                // to a neutral colour: the edge pixels take its chroma too (`SwapK::neutral`)
+                ColorSwap { from: Some([0.85, 0.2, 0.25]), to: Some([0.93, 0.93, 0.93]), range: 70.0, ..Default::default() },
             ];
         }),
         ("masks (recolor)", |s| {
@@ -1080,7 +1082,7 @@ fn overlays_match() {
     };
     let req = RenderRequest { overlay: lightcraft_pipeline::Overlay::PointColorRange(0), ..RenderRequest::fit(640, 640) };
     check("point color range overlay", &src, &raw, &s, &req);
-    // Color Swap's range view and its before are drawn by the finish stage itself, on both renderers
+    // Recolor's range view and its before are drawn by the finish stage itself, on both renderers
     let s = DevelopSettings {
         color_swaps: vec![lightcraft_develop::ColorSwap {
             from: Some([0.45, 0.5, 0.35]),

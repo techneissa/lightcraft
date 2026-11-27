@@ -308,9 +308,9 @@ fn show_sections(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             ui.add_space(8.0);
         })
     };
-    // fork (issue #460): Color Swap, after Color
+    // fork (issue #460): Recolor, after Color
     let color_swap_section = |app: &mut LightcraftApp, ui: &mut egui::Ui| {
-        section(app, ui, &d, lightcraft_develop::color_swap::SECTION, "Color Swap", |app, ui, d| {
+        section(app, ui, &d, lightcraft_develop::color_swap::SECTION, "Recolor", |app, ui, d| {
             color_swap::color_swap(app, ui, d);
             ui.add_space(8.0);
         })

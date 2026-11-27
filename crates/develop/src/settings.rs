@@ -194,7 +194,7 @@ pub struct DevelopSettings {
     /// Relight (fork feature, issue #288, `fork/relight.md`), in its own namespace like `fork_retouch`.
     #[serde(rename = "fork_relight", skip_serializing_if = "crate::relight::Relight::is_default")]
     pub relight: crate::relight::Relight,
-    /// Color Swap (fork feature, issue #460, `fork/color-swap.md`): colours replaced by others across the whole photo,
+    /// Recolor (fork feature, issue #460, `fork/color-swap.md`): colours replaced by others across the whole photo,
     /// in their own namespace; not written while empty, read leniently.
     #[serde(rename = "fork_color_swaps", default, skip_serializing_if = "Vec::is_empty", deserialize_with = "crate::color_swap::deserialize_list")]
     pub color_swaps: Vec<crate::color_swap::ColorSwap>,

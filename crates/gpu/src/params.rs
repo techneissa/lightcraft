@@ -129,7 +129,7 @@ const FIELDS: &[(&str, usize)] = &[
     // and 0 for a whole render; a band's in a render that keeps nothing, `masks::bands`)
     ("MASK_N", 1),
     ("MASK_Y0", 1),
-    // fork (issue #460, `fork/color-swap.md`): Color Swap's entries in order (`SwapK::words` each), and the entry whose
+    // fork (issue #460, `fork/color-swap.md`): Recolor's entries in order (`SwapK::words` each), and the entry whose
     // range is drawn instead of its change (`ColorSwaps::view`)
     ("NSW", 1),
     ("SW", 8 * SWAP_WORDS),

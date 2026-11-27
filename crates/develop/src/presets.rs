@@ -46,7 +46,7 @@ pub enum SettingsGroup {
     Portrait,
     /// Relight (fork, issue #288): the light and its sliders.
     Relight,
-    /// Color Swap (fork, issue #460): the colours replaced by others, with their ranges.
+    /// Recolor (fork, issue #460): the colours replaced by others, with their ranges.
     ColorSwap,
 }
 
@@ -121,7 +121,7 @@ impl SettingsGroup {
             SettingsGroup::Calibration => "Calibration",
             SettingsGroup::Portrait => "Portrait",
             SettingsGroup::Relight => "Relight",
-            SettingsGroup::ColorSwap => "Color Swap",
+            SettingsGroup::ColorSwap => "Recolor",
         }
     }
 

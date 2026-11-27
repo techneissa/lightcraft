@@ -1,4 +1,4 @@
-//! Color Swap through the whole render (issue #460): only the colours an entry reaches change, an entry that is off
+//! Recolor through the whole render (issue #460): only the colours an entry reaches change, an entry that is off
 //! changes nothing, and the range view and the before show what they say.
 
 use lightcraft_color::perceptual::{lab_to_lch, oklab_from_2020};

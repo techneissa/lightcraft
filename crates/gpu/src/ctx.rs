@@ -14,7 +14,7 @@ struct Module {
 const MODULES: &[Module] = &[
     Module {
         // (fork, `fork/perf-decontam-gpu.md`: `decontam::with_main_dc` adds the decontaminated edge's entry point)
-        // (fork, issue #460: Color Swap's functions come first; `main` stays last)
+        // (fork, issue #460: Recolor's functions come first; `main` stays last)
         src: concat!(include_str!("wgsl/color_swap.wgsl"), include_str!("wgsl/finish.wgsl")),
         bindings: &[
             ("img", false, "f32"),
