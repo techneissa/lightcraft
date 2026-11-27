@@ -27,7 +27,7 @@ pub(crate) fn handles(id: &str) -> bool {
 /// The photos the command would remove.
 fn targets(app: &LightcraftApp, id: &str, params: &Value) -> Vec<PhotoId> {
     if id == EMPTY {
-        return app.session.catalog.photos().filter(|p| p.deleted).map(|p| p.id).collect();
+        return app.session.catalog.photos().filter(|p| p.in_recently_deleted()).map(|p| p.id).collect();
     }
     match params.get("ids").and_then(Value::as_array) {
         Some(ids) => ids.iter().filter_map(Value::as_u64).map(PhotoId).collect(),

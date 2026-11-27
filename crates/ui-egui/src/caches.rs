@@ -211,7 +211,7 @@ impl Caches {
                 if p.flag == lightcraft_catalog::Flag::Pick {
                     c.picks += 1;
                 }
-            } else if p.deleted && !p.local {
+            } else if p.in_recently_deleted() {
                 c.deleted += 1;
             }
         }

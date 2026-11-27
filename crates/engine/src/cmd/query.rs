@@ -104,7 +104,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 "edited": all.iter().filter(|p| p.is_edited()).count(),
                 "picks": all.iter().filter(|p| p.flag == lightcraft_catalog::Flag::Pick).count(),
                 "rejects": all.iter().filter(|p| p.flag == lightcraft_catalog::Flag::Reject).count(),
-                "deleted": s.catalog.photos().filter(|p| p.deleted).count(),
+                "deleted": s.catalog.photos().filter(|p| p.in_recently_deleted()).count(),
                 "albums": s.catalog.albums().filter(|a| !a.folder).count(),
                 "byDate": s.catalog.date_groups(),
                 "keywords": s.catalog.keywords(),
