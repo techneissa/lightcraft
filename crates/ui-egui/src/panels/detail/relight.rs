@@ -13,6 +13,7 @@ use super::{DevelopSettings, LightcraftApp, Rect, register, vec2};
 use crate::panels::edit::{light_tint, topmost};
 
 mod kinds;
+mod outline;
 
 /// How near a press must be to a handle to take it (points).
 const HIT: f32 = 16.0;
@@ -220,17 +221,23 @@ pub(super) fn overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::R
     let on_ring = |q: Pos2| ring_on && at.get(sel).is_some_and(|c| (q.distance(*c) - ring).abs() <= RING_HIT && q.distance(*c) > HIT);
     let hover = resp.hover_pos();
     let clip = app.canvas_rect.unwrap_or(map.rect);
-    {
-        let p = ui.painter_at(clip);
-        for (i, (l, c)) in d.relight.lights.iter().zip(&at).enumerate() {
-            if i == sel || !clip.contains(*c) {
-                continue;
-            }
-            crate::panels::edit::paint_light(&p, *c, 5.5, l.warmth, hover.is_some_and(|q| topmost(&at, sel, q, HIT) == Some(i)));
-            register(ui, format!("relight:onPhoto:{i}"), Rect::from_center_size(*c, vec2(20.0, 20.0)));
+    // (issue #466: drawn only while the pointer is on the photo or a shaping slider moves, and a moment after)
+    let mut p = ui.painter_at(clip);
+    p.set_opacity(outline::now(app, ui, hover.is_some() || grab.is_some()));
+    // (the handles take presses, and are registered for the automation, whether or not they are drawn)
+    let drawn = p.opacity() > 0.0;
+    for (i, (l, c)) in d.relight.lights.iter().zip(&at).enumerate() {
+        if i == sel || !clip.contains(*c) {
+            continue;
         }
-        if let Some(c) = at.get(sel) {
-            if clip.contains(*c) {
+        if drawn {
+            crate::panels::edit::paint_light(&p, *c, 5.5, l.warmth, hover.is_some_and(|q| topmost(&at, sel, q, HIT) == Some(i)));
+        }
+        register(ui, format!("relight:onPhoto:{i}"), Rect::from_center_size(*c, vec2(20.0, 20.0)));
+    }
+    if let Some(c) = at.get(sel) {
+        if clip.contains(*c) {
+            if drawn {
                 if ring_on {
                     paint_ring(&p, *c, ring, chosen.warmth, grab == Some(Grab::Size) || hover.is_some_and(on_ring));
                 }
@@ -241,17 +248,17 @@ pub(super) fn overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::R
                     chosen.warmth,
                     grab == Some(Grab::Move) || hover.is_some_and(|q| topmost(&at, sel, q, HIT) == Some(sel)),
                 );
-                register(ui, "relight:onPhoto", Rect::from_center_size(*c, vec2(20.0, 20.0)));
-                register(ui, format!("relight:onPhoto:{sel}"), Rect::from_center_size(*c, vec2(20.0, 20.0)));
             }
-            if ring_on {
-                register(ui, "relight:ring", Rect::from_center_size(*c + vec2(ring, 0.0), vec2(14.0, 14.0)));
-            }
+            register(ui, "relight:onPhoto", Rect::from_center_size(*c, vec2(20.0, 20.0)));
+            register(ui, format!("relight:onPhoto:{sel}"), Rect::from_center_size(*c, vec2(20.0, 20.0)));
+        }
+        if ring_on {
+            register(ui, "relight:ring", Rect::from_center_size(*c + vec2(ring, 0.0), vec2(14.0, 14.0)));
         }
     }
     // the handles of the light's type (a spot's aim and cone, a sun's arrow, a softbox's corner and knob)
     if let Some(c) = at.get(sel)
-        && kinds::overlay(app, ui, resp, &map, chosen, *c, clip)
+        && kinds::overlay(app, ui, resp, &map, chosen, *c, &p)
     {
         return true;
     }

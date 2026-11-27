@@ -391,8 +391,9 @@ pub(super) fn overlay(
     map: &CanvasMap,
     l: &LightSettings,
     c: Pos2,
-    clip: Rect,
+    painter: &egui::Painter,
 ) -> bool {
+    let clip = painter.clip_rect();
     // (the web build has no Relight)
     if cfg!(target_arch = "wasm32") {
         return false;
@@ -412,11 +413,14 @@ pub(super) fn overlay(
             .min_by(|a, b| a.1.distance(q).total_cmp(&b.1.distance(q)))
             .map(|(h, _)| *h)
     };
-    let cone = (l.kind.index() == 1)
-        .then(|| app.session.active().and_then(|photo| app.session.relight_made(photo)))
-        .flatten()
-        .and_then(|made| lightcraft_pipeline::relight::spot_cone(&made.input.field, l));
-    paint(&ui.painter_at(clip), map, l, c, grab.or_else(|| hover.and_then(near)), auto, cone.as_ref());
+    // (issue #466: nothing is drawn while the outline is hidden; the handles still take presses)
+    if painter.opacity() > 0.0 {
+        let cone = (l.kind.index() == 1)
+            .then(|| app.session.active().and_then(|photo| app.session.relight_made(photo)))
+            .flatten()
+            .and_then(|made| lightcraft_pipeline::relight::spot_cone(&made.input.field, l));
+        paint(painter, map, l, c, grab.or_else(|| hover.and_then(near)), auto, cone.as_ref());
+    }
     for (h, at) in &found {
         register(ui, format!("relight:kind:{}", control_of(*h).trim_start_matches("relight.")), Rect::from_center_size(*at, vec2(16.0, 16.0)));
     }
