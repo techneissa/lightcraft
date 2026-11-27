@@ -235,3 +235,29 @@ fn a_read_ahead_that_died_does_not_hold_up_the_zoom() {
     assert_eq!(decodes.full(), 2, "the window decoded it");
     assert!(row(&h).is_none());
 }
+
+// Given a photo open in the Edit view with its original read ahead, when the view rests at Fit, then the original is
+// let go and not read again while the view stays at Fit; the next zoom to 100 % decodes it again (#436)
+#[test]
+fn a_rest_at_fit_lets_the_original_go_until_the_next_zoom() {
+    let fixture = RenderFixture::new("full-decode", 2);
+    let (mut h, decodes) = editing(&fixture);
+    let id = h.app.session.active().expect("a photo is open");
+    open_in_edit(&mut h);
+    assert!(h.step_until(SETTLE, |h| h.app.full_decode.started() == 1 && !h.app.full_decode.busy()), "the read-ahead ran");
+    assert!(h.settle(crate::headless::HANG));
+    assert!(h.app.session.media.has_source(id, SourceLevel::Full), "the original is held");
+
+    // (the rest's start moved back instead of waiting it out)
+    h.app.background.rest = Some((h.app.tick_now() - crate::background::REST_AFTER - 1.0, false));
+    h.step();
+    assert!(!h.app.session.media.has_source(id, SourceLevel::Full), "let go at rest");
+    assert!(h.settle(crate::headless::HANG));
+    assert!(!h.app.session.media.has_source(id, SourceLevel::Full), "not read again at Fit");
+    assert_eq!(decodes.full(), 1);
+
+    h.request("engine.execute", json!({"command": "view.zoom100"}), T);
+    assert!(h.settle(crate::headless::HANG));
+    assert!(h.app.region_view.is_some_and(|v| v.photo == id), "the window at 100 % arrived");
+    assert_eq!(decodes.full(), 2, "the zoom decoded it again");
+}

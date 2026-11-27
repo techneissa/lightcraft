@@ -1,4 +1,5 @@
-//! What the renderer lets go when the window has been in the background a while (issue #304, `fork/idle-memory.md`).
+//! What the renderer lets go when the window has been in the background a while (issue #304, `fork/idle-memory.md`),
+//! and when the loupe has rested at Fit in front (issue #436).
 
 use super::Renderer;
 
@@ -13,5 +14,17 @@ impl Renderer {
         }
         self.full.free_for_background();
         lightcraft_engine::gpu::trim_pool(0);
+    }
+
+    /// Whether the view is at rest with nothing on screen drawn from the full-size original: no render pending, and
+    /// neither a zoom window nor the full-size picture drawn (what shows comes from the preview level).
+    pub fn rests_without_original(&self) -> bool {
+        self.pending.is_empty() && !self.window_on_screen && !self.full.on_screen
+    }
+
+    /// The loupe has rested at Fit (issue #436): let go of the full-size picture until the next zoom (its disk copy
+    /// stays). The stage caches stay: they make the next slider tick redo only what changed.
+    pub fn release_at_rest(&mut self) {
+        self.full.free_at_rest();
     }
 }

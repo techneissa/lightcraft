@@ -252,6 +252,29 @@ fn the_picture_let_go_in_the_background_is_built_again_for_the_same_look() {
     assert_eq!(h.app.renderer.full.held(), key, "the same look is back");
 }
 
+// Given the finished picture, when the loupe rests at Fit, then the picture is let go and not made again at Fit; the
+// next zoom past Fit brings it back (#436)
+#[test]
+fn a_rest_at_fit_lets_the_picture_go_until_the_next_zoom() {
+    let fixture = RenderFixture::new("full-picture-rest", 1);
+    let mut h = loupe(&fixture, None);
+    assert!(h.settle(SETTLE), "100 % settles");
+    until_ready(&mut h);
+    view(&mut h, json!("fit"), [0.5, 0.5]);
+    assert!(h.app.renderer.full.held().is_some());
+    // (the rest's start moved back instead of waiting it out)
+    h.app.background.rest = Some((h.app.tick_now() - crate::background::REST_AFTER - 1.0, false));
+    h.step();
+    assert_eq!(h.app.renderer.full.held(), None, "let go at rest");
+    // (past the picture's settle time at Fit: a photo zoomed into renders it again then, unless it rested)
+    let until = h.app.tick_now() + 2.0 * super::SETTLE_SECS;
+    assert!(h.step_until(SETTLE, |h| h.app.tick_now() > until));
+    assert!(h.settle(SETTLE));
+    assert!(!h.app.renderer.full.holds_anything(), "nothing made again at Fit: {}", h.app.renderer.full.to_json());
+    look_closer(&mut h, [0.5, 0.5]);
+    until_ready(&mut h);
+}
+
 // Given a photo open in the Edit view whose original is being read ahead (#182), when its finished picture is due,
 // then the build waits for the read-ahead and renders from the original it decoded: the file is decoded once
 #[test]

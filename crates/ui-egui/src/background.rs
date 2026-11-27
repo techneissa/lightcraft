@@ -5,11 +5,18 @@
 //! caches use the shorter [`lightcraft_engine::idle::BACKGROUND_IDLE`] then; once it has stayed there for
 //! [`RELEASE_AFTER`] seconds the full-size originals, the renderer's stage caches and GPU buffers, and the allocator's
 //! free pages are released, once. Coming back lets the next frame take what it needs again.
+//!
+//! In front, a view that has rested [`REST_AFTER`] seconds with nothing rendering and nothing on screen drawn from the
+//! full-size original (Fit, or any view the preview level covers) lets go of the originals and the full-size picture,
+//! once per rest (issue #436): about 400 MB for a 33 MP raw. The next zoom past Fit decodes the original again and
+//! reads the picture back from disk; slider ticks at Fit never use either.
 
 use crate::LightcraftApp;
 
 /// Seconds in the background before the caches are released.
 pub const RELEASE_AFTER: f64 = 20.0;
+/// Seconds a view in front rests without the full-size original before the original and the picture go.
+pub const REST_AFTER: f64 = 30.0;
 
 /// Where the window is in its time in the background.
 #[derive(Default)]
@@ -18,6 +25,9 @@ pub struct Background {
     since: Option<f64>,
     /// The caches were released for this stay.
     released: bool,
+    /// Since when the view in front has rested without the original (egui time, s), and whether that rest released
+    /// it ([`REST_AFTER`]).
+    pub(crate) rest: Option<(f64, bool)>,
     /// The AI mask models kept loaded (fork, issues #353 and #407): while the Masking panel is open in the front window,
     /// the ones the open photo's AI masks use.
     mask_models: lightcraft_engine::segment::MaskModels,
@@ -43,8 +53,10 @@ pub fn tick(app: &mut LightcraftApp, ctx: &egui::Context, now: f64) {
     }
     if !background {
         (app.background.since, app.background.released) = (None, false);
+        rest(app, ctx, now);
         return;
     }
+    app.background.rest = None;
     let since = *app.background.since.get_or_insert(now);
     if app.background.released {
         return;
@@ -58,5 +70,28 @@ pub fn tick(app: &mut LightcraftApp, ctx: &egui::Context, now: f64) {
     app.background.released = true;
     app.session.release_for_background();
     app.renderer.release_for_background();
+    lightcraft_engine::memory::release();
+}
+
+/// In front: once the view has rested [`REST_AFTER`] seconds without the full-size original, let go of the originals
+/// and the full-size picture (see the module docs).
+fn rest(app: &mut LightcraftApp, ctx: &egui::Context, now: f64) {
+    // (a read-ahead of the original under way brings it back when it ends: the rest starts after it)
+    if !app.renderer.rests_without_original() || app.full_decode.busy() {
+        app.background.rest = None;
+        return;
+    }
+    let (since, done) = *app.background.rest.get_or_insert((now, false));
+    if done {
+        return;
+    }
+    let left = REST_AFTER - (now - since);
+    if left > 0.0 {
+        ctx.request_repaint_after(std::time::Duration::from_secs_f64(left + 0.05));
+        return;
+    }
+    app.background.rest = Some((since, true));
+    app.session.release_at_rest();
+    app.renderer.release_at_rest();
     lightcraft_engine::memory::release();
 }
