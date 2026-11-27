@@ -215,6 +215,7 @@ fn upload(
 use lightcraft_engine::media::dirty::{clock, ms};
 
 pub(crate) mod prefetch;
+mod readback;
 
 /// The rectangle `[x0, y0, x1, y1)` of `img`, as an image (a partial texture upload).
 pub(crate) fn sub_image(img: &egui::ColorImage, r: &[usize; 4]) -> egui::ColorImage {
@@ -472,6 +473,9 @@ pub struct Renderer {
     /// screenshot reads it back ([`Self::cpu_textures`]) instead of finding no pixels (a white
     /// photo, review of PR #1065).
     native_frames: HashMap<Slot, lightcraft_engine::media::ScreenFrame>,
+    /// Counts the GPU-resident renders the loupe ([`Slot::Main`]) has shown; with the loupe's pixels read back from the
+    /// one it counted ([`Self::main_pixels`]).
+    main_native: (u64, Option<(u64, Arc<egui::ColorImage>)>),
     /// Which render each slot's texture shows, and the texture (issue #111): a later render that changed only some
     /// rectangles of that one uploads just those.
     shown_frames: HashMap<Slot, (u64, egui::TextureId)>,
@@ -600,6 +604,7 @@ impl Renderer {
             screen: None,
             natives: HashMap::new(),
             native_frames: HashMap::new(),
+            main_native: (0, None),
             shown_frames: HashMap::new(),
         }
     }
@@ -1702,8 +1707,12 @@ impl Renderer {
         self.natives.insert(slot, id);
         // (the texture shows no picture a later job patches)
         self.shown_frames.remove(&slot);
-        if self.keep_pixels {
+        // (the loupe's too: an eyedropper reads its pixels back, [`Self::main_pixels`])
+        if self.keep_pixels || slot == Slot::Main {
             self.native_frames.insert(slot, frame.clone());
+        }
+        if slot == Slot::Main {
+            self.main_native = (self.main_native.0 + 1, None);
         }
         let (size, histogram) = ([frame.width, frame.height], rendered.histogram.clone());
         match self.textures.get_mut(&slot) {

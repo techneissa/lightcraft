@@ -7,7 +7,6 @@ use lightcraft_catalog::PhotoId;
 
 use super::fit_texture_rect;
 use crate::LightcraftApp;
-use crate::render::Slot;
 use crate::widgets::magnifier::{self, Patch};
 
 /// The magnifier's reading this frame: the patch of pixels and where the pointer is.
@@ -33,15 +32,19 @@ pub(super) fn read(app: &mut LightcraftApp, resp: &Response, id: PhotoId, views:
     }
     let Some(q) = resp.hover_pos().or(resp.interact_pointer_pos()) else { return };
     let Some(&(img, _)) = views.iter().find(|(img, pane)| pane.contains(q) && img.contains(q)) else { return };
-    // the render on screen (never a stand-in for another look, which would give the wrong colour)
-    let Some(tex) = app.renderer.textures.get(&Slot::Main).filter(|t| t.photo == id && t.quick.is_none()) else { return };
-    let Some(pixels) = tex.pixels.as_ref() else { return };
-    let shown = fit_texture_rect(img, tex.size);
+    // the render on screen, read back from the GPU when it is drawn from there
+    let Some(main) = app.renderer.main_pixels(id) else { return };
+    let shown = fit_texture_rect(img, main.size);
     if !shown.contains(q) {
         return;
     }
-    let Some(mut patch) = magnifier::sample(pixels, vec2((q.x - shown.min.x) / shown.width(), (q.y - shown.min.y) / shown.height())) else { return };
-    if let Some(display) = app.renderer.display() {
+    let Some(mut patch) = magnifier::sample(&main.pixels, vec2((q.x - shown.min.x) / shown.width(), (q.y - shown.min.y) / shown.height())) else {
+        return;
+    };
+    if !main.current {
+        // a stand-in for another look (still loading): the magnifier shows it, but its value would be the wrong colour
+        patch.set_srgb(None);
+    } else if let Some(display) = app.renderer.display() {
         // a monitor profile: what is on screen is the display's device values, turned back into sRGB for the value
         patch.set_srgb(patch.shown_rgb().and_then(|rgb| display.profile.device_pixel_to_srgb(rgb)));
     }

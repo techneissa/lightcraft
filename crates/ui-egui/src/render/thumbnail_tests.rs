@@ -555,6 +555,28 @@ fn a_headless_screenshot_reads_back_a_view_drawn_from_the_gpu() {
     assert_eq!(shot.image.pixels[4], egui::Color32::from_rgb(40, 100, 200));
 }
 
+/// An eyedropper's magnifier has the loupe's pixels when the loupe is drawn straight from the GPU (no CPU copy, not
+/// driven headless). Before, the magnifier stayed away until some other render brought pixels.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn the_magnifier_reads_a_loupe_drawn_from_the_gpu() {
+    let Some((mut app, work, ctx, frame)) = gpu_drawn_fixture(Default::default()) else {
+        lightcraft_testkit::skip!(Gpu, "no GPU adapter");
+        return;
+    };
+    app.renderer.keep_pixels = false;
+    let job = app.session.render_job(PhotoId(1), 64, 64, false, true).unwrap().draft();
+    app.renderer.request(Slot::Main, job, 100);
+    let (slot, job) = take_job(&work);
+    let mut result = job.run();
+    result.frame = Some(frame);
+    finish(&mut app, &work, &ctx, slot, result);
+    assert!(app.renderer.textures.get(&Slot::Main).is_some_and(|t| t.native.is_some() && t.pixels.is_none()), "drawn from the GPU");
+    let main = app.renderer.main_pixels(PhotoId(1)).expect("the magnifier has the loupe's pixels");
+    assert_eq!(main.pixels.pixels[4], egui::Color32::from_rgb(40, 100, 200));
+    assert!(app.renderer.main_pixels(PhotoId(2)).is_none(), "not another photo's");
+}
+
 /// Releasing a slot (a zoomed loupe leaving its window, a Compare region) lets go of its
 /// GPU-resident texture too, which can be window-sized (review of PR #1065: it was kept until
 /// the slot was drawn from the GPU again).
