@@ -383,6 +383,8 @@ pub struct Session {
     pub clipboard: Option<Value>,
     /// One mask's effect copied by `mask.copyEffect`, for `mask.pasteEffect` (kept while the app runs, across photos).
     pub mask_effect_clipboard: Option<cmd::mask_effects::MaskEffect>,
+    /// The copied mask's Refine Edges and Decontaminate, pasted with its effect (fork, issue #400).
+    pub mask_effect_edges: Option<cmd::mask_effects::MaskEdges>,
     /// A photo's masks copied by `mask.copyAll` (partial JSON), for `mask.pasteAll`; apart from [`Session::clipboard`].
     pub mask_clipboard: Option<Value>,
     /// The folder on disk the [`LibrarySource::Folder`] view browses.
@@ -669,6 +671,7 @@ impl Session {
             match_look: Default::default(),
             clipboard: None,
             mask_effect_clipboard: None,
+            mask_effect_edges: None,
             mask_clipboard: None,
             meta_clipboard: None,
             browse: None,

@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
 use super::mask_effect_files as files;
-use super::{CommandSpec, always, bad, cmd, has_active, str_param};
+use super::{CommandSpec, always, bad, bool_or, cmd, has_active, str_param};
 use crate::{Result, Session};
 
 /// The local sliders an effect can set (`LocalAdjustments` field names; Amount aside).
@@ -424,27 +424,43 @@ fn apply_effect(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"name": effect.name, "masks": ids, "photos": photos, "brush": effect.brush}))
 }
 
+/// A mask's edge settings, copied with its effect (fork, issue #400): Refine Edges and Decontaminate live on the mask,
+/// beside its sliders.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct MaskEdges {
+    pub refine: f64,
+    pub decontaminate: f64,
+}
+
 /// Keep the selected mask's sliders and Amount in the session (what a preset saved with All sliders and Amount
-/// holds), for [`paste_mask_effect`], on this photo or another: the pasted mask then looks as strong as the copied one.
+/// holds), and its edges, for [`paste_mask_effect`], on this photo or another: the pasted mask then looks as strong
+/// as the copied one.
 fn copy_mask_effect(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "mask.copyEffect";
-    let adjust = selected_mask(s, p, C)?.adjust;
-    s.mask_effect_clipboard = Some(MaskEffect { adjust, with_amount: true, ..Default::default() }.normalized());
+    let m = selected_mask(s, p, C)?;
+    s.mask_effect_clipboard = Some(MaskEffect { adjust: m.adjust, with_amount: true, ..Default::default() }.normalized());
+    s.mask_effect_edges = Some(MaskEdges { refine: m.refine, decontaminate: m.decontaminate });
     Ok(json!({"copied": true}))
 }
 
-/// Set a mask's sliders to the copied ones, as `mask.applyEffect` does: one undo step.
+/// Set a mask's sliders to the copied ones, as `mask.applyEffect` does, and its edges to the copied mask's unless
+/// `edges: false`: one undo step.
 fn paste_mask_effect(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "mask.pasteEffect";
     let effect = s.mask_effect_clipboard.clone().ok_or_else(|| bad(C, "no mask effect copied (use mask.copyEffect first)"))?;
+    let edges = s.mask_effect_edges.filter(|_| bool_or(p, "edges", true));
     let photo = s.active().ok_or_else(|| bad(C, "no active photo"))?;
     let d = s.develop_of(photo).unwrap_or_default();
     let mid = super::masks::mask_id(p, s.active_mask, C)?;
     if !d.masks.iter().any(|m| m.id == mid) {
         return Err(bad(C, format!("no mask {mid}")));
     }
-    s.set_develop(photo, with_effect(&d, &[mid], &effect), "Paste Mask Effect")?;
-    Ok(json!({"id": mid}))
+    let mut d = with_effect(&d, &[mid], &effect);
+    if let (Some(e), Some(m)) = (edges, d.masks.iter_mut().find(|m| m.id == mid)) {
+        (m.refine, m.decontaminate) = (e.refine, e.decontaminate);
+    }
+    s.set_develop(photo, d, "Paste Mask Effect")?;
+    Ok(json!({"id": mid, "edges": edges.is_some()}))
 }
 
 /// Paste is available once a mask effect is copied.
@@ -687,7 +703,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Copy Mask Effect",
             [],
             None,
-            "{id?} — keep the mask's sliders and Amount (not its shape) in the session, to paste into a mask of this or another photo",
+            "{id?} — keep the mask's sliders and Amount, and its Refine Edges and Decontaminate (not its shape), in the session, to paste into a mask of this or another photo",
             has_active,
             copy_mask_effect
         ),
@@ -696,7 +712,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Paste Mask Effect",
             [],
             None,
-            "{id?} — set the mask's sliders and Amount to the copied ones (as mask.applyEffect; shape, name, visibility and invert stay), one undo step → {id}; an error when nothing is copied",
+            "{id?, edges?: bool (default true)} — set the mask's sliders and Amount to the copied ones (as mask.applyEffect; shape, name, visibility and invert stay), and with `edges` its Refine Edges and Decontaminate to the copied mask's, one undo step → {id, edges}; an error when nothing is copied",
             has_mask_effect,
             paste_mask_effect
         ),
