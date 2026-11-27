@@ -177,6 +177,8 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "develop.pastePrevious",
             "mask.copyAll",
             "mask.pasteAll",
+            "portrait.copy",
+            "portrait.paste",
             "develop.sync",
             "develop.autoSync",
             "---",

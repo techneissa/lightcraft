@@ -81,6 +81,7 @@ mod organize;
 mod parse_ahead;
 mod parse_ahead_peek;
 mod persist;
+mod portrait_clipboard;
 mod portrait_presets;
 mod prefs;
 mod presets_scale;

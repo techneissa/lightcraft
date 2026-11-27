@@ -387,6 +387,8 @@ pub struct Session {
     pub mask_effect_edges: Option<cmd::mask_effects::MaskEdges>,
     /// A photo's masks copied by `mask.copyAll` (partial JSON), for `mask.pasteAll`; apart from [`Session::clipboard`].
     pub mask_clipboard: Option<Value>,
+    /// The Portrait settings copied by `portrait.copy` (partial JSON), for `portrait.paste`; apart from [`Session::clipboard`].
+    pub portrait_clipboard: Option<Value>,
     /// The folder on disk the [`LibrarySource::Folder`] view browses.
     pub browse: Option<Browse>,
     /// The folder the [`LibrarySource::LibraryFolder`] view shows: the library's photos imported
@@ -673,6 +675,7 @@ impl Session {
             mask_effect_clipboard: None,
             mask_effect_edges: None,
             mask_clipboard: None,
+            portrait_clipboard: None,
             meta_clipboard: None,
             browse: None,
             library_folder: None,

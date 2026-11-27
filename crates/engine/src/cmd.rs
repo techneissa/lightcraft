@@ -65,6 +65,7 @@ mod model_runtime;
 mod organize;
 mod parse_ahead;
 pub(crate) mod parsing;
+pub mod portrait_clipboard;
 mod portrait_presets;
 mod prefs;
 mod preset_files;
@@ -219,6 +220,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(dcp_profiles::specs());
         v.extend(mask_effects::specs());
         v.extend(mask_clipboard::specs());
+        v.extend(portrait_clipboard::specs());
         v.extend(mask_multi::specs());
         v.extend(mask_recolor::specs());
         v.extend(mask_stop_ai::specs());
