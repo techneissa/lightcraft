@@ -364,3 +364,18 @@ fn given_straightened_photo_when_a_free_corner_moves_inside_then_it_follows_and_
         crossed.rect
     );
 }
+
+//   Scenario: a frame held in a corner of a slightly straightened photo still grows from the opposite corner
+#[test]
+fn given_a_frame_in_a_corner_of_a_straightened_photo_when_the_opposite_corner_is_dragged_out_then_it_grows() {
+    for aspect in [None, Some(W / H)] {
+        for angle in [-0.3, 0.3] {
+            let small = CropGeometry { rect: Rect::new(0.35, 0.35, 0.65, 0.65), angle };
+            let pinned = drag(small, TopRight, p(0.65, 0.35), p(2.0, -1.0), aspect);
+            let bl = p(pinned.rect.x0, pinned.rect.y1);
+            let g = drag(pinned, BottomLeft, bl, p(bl.x - 0.2, bl.y + 0.2), aspect);
+            assert!(g.is_within_image(W, H), "{aspect:?} {angle}: {:?}", g.rect);
+            assert!(g.rect.x0 < pinned.rect.x0 - 0.1, "{aspect:?} {angle}: stuck: {:?} -> {:?}", pinned.rect, g.rect);
+        }
+    }
+}

@@ -69,7 +69,8 @@ impl CropHandle {
 ///
 /// Guarantees (for any input, including hostile numbers):
 /// - the result lies inside the rotated image;
-/// - the edges opposite the handle stay where they were (a move keeps the size);
+/// - the edges opposite the handle stay where they were (a move keeps the size), except that on a straightened photo a
+///   corner's held edge flush with the photo gives way inward as far as the tilt needs, so the frame still grows;
 /// - with `aspect`, the frame keeps that shape on every handle (when `start` had it);
 /// - the drag stops at the image edge instead of pushing the frame around, and slides along it.
 pub fn drag_crop(start: CropGeometry, handle: CropHandle, grab: Point, pointer: Point, w: f64, h: f64, aspect: Option<f64>) -> CropGeometry {
@@ -105,6 +106,17 @@ pub fn drag_crop(start: CropGeometry, handle: CropHandle, grab: Point, pointer: 
         }
     };
     let min_side = MIN_CROP_FRACTION * w.min(h);
+    // Straightened, a corner handle's held edges that are flush with the photo (they cannot go further out): those may
+    // give way inward so the frame still grows along a tilted edge, (held top or bottom, held left or right).
+    let pinned = {
+        let (mx0, mx1, my0, my1) = sides(handle);
+        let e = (1e-4 * w, 1e-4 * h);
+        let out = |dx0: f64, dy0: f64, dx1: f64, dy1: f64| !feasible(Rect::new(sr.x0 - dx0, sr.y0 - dy0, sr.x1 + dx1, sr.y1 + dy1));
+        let corner = (mx0 || mx1) && (my0 || my1);
+        let y = corner && base.angle != 0.0 && if my0 { out(0.0, 0.0, 0.0, e.1) } else { out(0.0, e.1, 0.0, 0.0) };
+        let x = corner && base.angle != 0.0 && if mx0 { out(0.0, 0.0, e.0, 0.0) } else { out(e.0, 0.0, 0.0, 0.0) };
+        (y, x)
+    };
 
     let out = match (handle, aspect) {
         (CropHandle::Move, _) => {
@@ -143,8 +155,11 @@ pub fn drag_crop(start: CropGeometry, handle: CropHandle, grab: Point, pointer: 
             };
             // straightened, a free corner goes to the nearest place that fits, growing both sides (#2308)
             let corner = (mx0 || mx1) && (my0 || my1);
-            let nearest =
-                if base.angle != 0.0 && corner { nearest_corner(sr, mx0, my0, base.angle, (w, h), min_side, Vec2::new(dx, dy)) } else { None };
+            let nearest = if base.angle != 0.0 && corner {
+                nearest_corner_giving_way(sr, (mx0, my0), (base.angle, (w, h), min_side), Vec2::new(dx, dy), pinned, &feasible)
+            } else {
+                None
+            };
             match nearest.filter(|r| feasible(*r)) {
                 Some(r) => r,
                 None => grow(grow(sr, dx, 0.0), 0.0, dy),
@@ -172,12 +187,19 @@ pub fn drag_crop(start: CropGeometry, handle: CropHandle, grab: Point, pointer: 
                     let (ay, sy, ey) = if my0 { (sr.y1, -1.0, sr.y0) } else { (sr.y0, 1.0, sr.y1) };
                     let (wx, wy) = (sx * (ex + dx - ax), sy * (ey + dy - ay));
                     let nw = ((wx + wy * a) / 2.0).max(min_w);
-                    (nw, Box::new(move |nw, _| corner_rect(ax, sx, ay, sy, nw, a)))
+                    // `o`: the anchored corner gives way inward (o ≥ 0 down/up, o < 0 sideways), so a frame pinned in
+                    // a corner of a straightened photo can still grow along the tilted edge
+                    (nw, Box::new(move |nw, o| corner_rect(ax + sx * (-o).max(0.0), sx, ay + sy * o.max(0.0), sy, nw, a)))
                 }
             };
             let target_w = target_w.min(2.0 * w.max(h * a));
-            let slides = matches!(hd, CropHandle::Top | CropHandle::Bottom | CropHandle::Left | CropHandle::Right);
-            let extent = if matches!(hd, CropHandle::Top | CropHandle::Bottom) { w } else { h };
+            let edge = matches!(hd, CropHandle::Top | CropHandle::Bottom | CropHandle::Left | CropHandle::Right);
+            let slides = edge || pinned.0 || pinned.1;
+            let extent = match hd {
+                CropHandle::Top | CropHandle::Bottom => w,
+                CropHandle::Left | CropHandle::Right => h,
+                _ => give_way(base.angle, w, h),
+            };
             // Frame of width `n`, centred on the anchored edge if it fits, else slid the least distance.
             let place = |n: f64| -> Option<Rect> {
                 let at = |o: f64| build(n, o);
@@ -191,6 +213,10 @@ pub fn drag_crop(start: CropGeometry, handle: CropHandle, grab: Point, pointer: 
                 let step = extent / STEPS as f64;
                 for k in 1..=STEPS {
                     for sign in [1.0, -1.0] {
+                        // a corner's held edge gives way only where it is flush with the photo
+                        if !edge && !(if sign > 0.0 { pinned.0 } else { pinned.1 }) {
+                            continue;
+                        }
                         let hi = sign * k as f64 * step;
                         if feasible(at(hi)) {
                             // closest feasible offset: bisect between the last infeasible and this one
@@ -290,6 +316,70 @@ fn nearest_corner(r: Rect, left: bool, top: bool, angle: f64, (w, h): (f64, f64)
     ];
     let v = nearest_offset(&points, &extra, angle, w, h, want)?;
     Some(Rect::from_points(anchor, corner + v))
+}
+
+/// How far an anchored edge may give way on a photo straightened by `angle` degrees: the tilt across the whole photo.
+fn give_way(angle: f64, w: f64, h: f64) -> f64 {
+    angle.to_radians().tan().abs() * (w + h)
+}
+
+/// [`nearest_corner`], and where a held edge flush with the photo (`pinned_y`: the held top or bottom, `pinned_x`: the
+/// held left or right) keeps the dragged corner short of the pointer along the other axis, that edge gives way inward
+/// (at most [`give_way`]), by as little as lets the dragged corner get as far as it can.
+fn nearest_corner_giving_way(
+    r: Rect,
+    (left, top): (bool, bool),
+    (angle, (w, h), min_side): (f64, (f64, f64), f64),
+    want: Vec2,
+    (pinned_y, pinned_x): (bool, bool),
+    feasible: &dyn Fn(Rect) -> bool,
+) -> Option<Rect> {
+    let (sx, sy) = (if left { -1.0 } else { 1.0 }, if top { -1.0 } else { 1.0 });
+    let corner = Point::new(if left { r.x0 } else { r.x1 }, if top { r.y0 } else { r.y1 });
+    let goal = corner + want;
+    // how far the dragged corner gets along x / y (larger is further out)
+    let reach = |q: &Rect, x: bool| if x { sx * if left { q.x0 } else { q.x1 } } else { sy * if top { q.y0 } else { q.y1 } };
+    let base = nearest_corner(r, left, top, angle, (w, h), min_side, want).filter(|q| feasible(*q))?;
+    let cap = give_way(angle, w, h);
+    let tol = 1e-6 * w.max(h);
+    let mut best = base;
+    let dist = |q: &Rect| {
+        let c = Point::new(if left { q.x0 } else { q.x1 }, if top { q.y0 } else { q.y1 });
+        (c - goal).len()
+    };
+    for x in [true, false] {
+        let want_reach = if x { sx * goal.x } else { sy * goal.y };
+        if !(if x { pinned_y } else { pinned_x }) || reach(&base, x) >= want_reach - tol {
+            continue;
+        }
+        // the held corner's other edge moves inward by `t`
+        let shifted = |t: f64| {
+            let mut q = r;
+            match (x, left, top) {
+                (true, _, true) => q.y1 -= t,
+                (true, _, false) => q.y0 += t,
+                (false, true, _) => q.x1 -= t,
+                (false, false, _) => q.x0 += t,
+            }
+            let room = if x { q.height() } else { q.width() };
+            (room >= min_side).then(|| nearest_corner(q, left, top, angle, (w, h), min_side, want).filter(|q| feasible(*q))).flatten()
+        };
+        let got = |t: f64| shifted(t).map_or(f64::NEG_INFINITY, |q| reach(&q, x));
+        let target = want_reach.min(got(cap));
+        if target <= reach(&base, x) + tol {
+            continue;
+        }
+        let mut lo_bad = 0.0;
+        let mut hi_good = cap;
+        for _ in 0..48 {
+            let mid = (lo_bad + hi_good) / 2.0;
+            if got(mid) >= target - tol { hi_good = mid } else { lo_bad = mid }
+        }
+        if let Some(q) = shifted(hi_good).filter(|q| dist(q) < dist(&best)) {
+            best = q;
+        }
+    }
+    Some(best)
 }
 
 /// The part of the convex polygon `poly` where `n · v <= b`.
