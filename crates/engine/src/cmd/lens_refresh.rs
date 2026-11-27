@@ -4,7 +4,8 @@
 //! and when "Enable Lens Corrections" is ticked on a photo without a profile, every library raw that has no profile
 //! but whose lens the database knows by name is probed again and gets what Reload from Disk would give it: the
 //! profile, and the correction switched on where its settings are still what import gave it (an edited photo keeps
-//! its settings).
+//! its settings). A stored database profile whose lens names a maker the database has no such lens of (it was matched
+//! to another maker's lens) is looked up again at any time, which drops it.
 //!
 //! Split like [`super::recheck`] so the app probes on a worker thread: [`missing`] lists what to probe (no
 //! file-system calls), [`probe`] reads the files without the session, [`apply`] applies the results as LightCraft's
@@ -29,11 +30,17 @@ pub struct Missing {
 /// copies follow the photo they were copied from). With `again` (the database's files were replaced, or an agent
 /// asked for every photo), also the raws whose profile came from the database (the new data may give another one, or
 /// none) and the raws whose file named no lens when they were imported (a newer LightCraft may read their lens).
-/// No file-system calls.
+/// Without it, a database profile is listed only when the lens names a maker and the database no longer matches it
+/// (another maker's profile, given by an older LightCraft). No file-system calls.
 pub fn missing(cat: &Catalog, db: &lightcraft_lensdb::LensDb, ids: Option<&[PhotoId]>, again: bool) -> Vec<Missing> {
     // a photo and its virtual copies list the photo once, in library order
     let mut seen = std::collections::HashSet::new();
     let from_database = |p: &Photo| p.embedded_lens.is_some_and(|l| l.source == LensSource::Database);
+    // one database search per camera and lens: a library has few of them, and each search scores every profile
+    let mut searched = std::collections::HashMap::new();
+    let mut knows = |camera: &str, lens: &str| {
+        *searched.entry((camera.to_string(), lens.to_string())).or_insert_with(|| crate::lens_profiles::profile_name(db, camera, lens).is_some())
+    };
     cat.photos()
         .filter(|p| ids.is_none_or(|ids| ids.contains(&p.id) || p.copy_of.is_some_and(|c| ids.contains(&c))))
         .map(|p| p.copy_of.and_then(|c| cat.photo(c)).map_or(&**p, |orig| &**orig))
@@ -42,8 +49,8 @@ pub fn missing(cat: &Catalog, db: &lightcraft_lensdb::LensDb, ids: Option<&[Phot
             let lens = p.meta.lens.trim();
             match &p.embedded_lens {
                 None if lens.is_empty() => again,
-                None => crate::lens_profiles::profile_name(db, &p.meta.camera, lens).is_some(),
-                Some(_) => again && from_database(p),
+                None => knows(&p.meta.camera, lens),
+                Some(_) => from_database(p) && (again || (!knows(&p.meta.camera, lens) && db.names_a_maker(lens))),
             }
         })
         .filter_map(|p| crate::cmd::missing::checked_path(p).map(|path| Missing { id: p.id, path: path.to_string() }))
@@ -186,7 +193,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Look Up Lens Profiles Again",
             [],
             None,
-            "{ids?: [photo ids], all?: bool} — library raws without a lens profile whose lens the lens database knows are read again and get their profile (the correction is switched on where the photo's settings are still as imported); with all, also raws whose profile came from the database (it may give another, or none) and raws whose file named no lens at import; the app does this by itself when the database arrives (all: when its files were replaced) and when Enable Lens Corrections is ticked; not an undo step → {checked, found: [ids], database: bool}",
+            "{ids?: [photo ids], all?: bool} — library raws without a lens profile whose lens the lens database knows are read again and get their profile (the correction is switched on where the photo's settings are still as imported); with all, also raws whose profile came from the database (it may give another, or none) and raws whose file named no lens at import; the app does this by itself when the database arrives (all: when its files were replaced) and when Enable Lens Corrections is ticked; a database profile of another maker than the lens names is dropped even without all; not an undo step → {checked, found: [ids], database: bool}",
             always,
             refresh
         ),

@@ -122,6 +122,37 @@ fn finds_lenses_by_exif_model_with_or_without_the_maker() {
     assert!(db.find_lens(None, "", cam).is_none());
 }
 
+/// A Sirui 85 mm on a Sony body got the Sony FE 85mm F1.4 GM's correction (fork issue #474): a maker named in the
+/// EXIF lens model, or a lens known by name only, never gets another maker's profile.
+#[test]
+fn a_named_maker_never_gets_another_makers_profile() {
+    let lens = |maker: &str, model: &str| {
+        format!(
+            r#"<lens><maker>{maker}</maker><model>{model}</model><mount>Sony E</mount><cropfactor>1</cropfactor>
+              <calibration><distortion model="poly3" focal="85" k1="0.01"/></calibration></lens>"#
+        )
+    };
+    let sony = ["FE 85mm F1.4 GM", "FE 15mm F1.6 G", "FE 24mm F1.4 GM", "FE 20mm F2.4 G", "FE 40mm F2.2 G"];
+    let mut xml: String = sony.iter().map(|m| lens("Sony", m)).collect();
+    xml.push_str(&lens("Panasonic", "Leica DG Summilux 25mm f/1.4"));
+    let db = LensDb::parse(&format!("<lensdatabase>{xml}</lensdatabase>")).unwrap();
+    for name in [
+        "SIRUI Swift 20mm F2.4 FE",
+        "SIRUI Swift 40mm F2.2 FE",
+        "SIRUI Aurora 15mm F1.6 FE",
+        "SIRUI Aurora 24mm F1.4 FE",
+        "SIRUI Aurora 85mm F1.4 FE",
+        "SIRUI 85mm F1.4",
+        // no maker in the name, but a lens the name list knows
+        "Aurora 85mm F1.4 FE",
+    ] {
+        assert_eq!(db.find_lens(None, name, None), None, "{name}");
+    }
+    assert_eq!(db.find_lens(None, "FE 85mm F1.4 GM", None).map(|l| l.maker.as_str()), Some("Sony"));
+    // another maker's word that is part of the profile's own name keeps it
+    assert!(db.find_lens(None, "LEICA DG SUMMILUX 25mm F1.4", None).is_some());
+}
+
 #[test]
 fn distortion_matches_the_model_within_half_a_pixel_on_a_grid() {
     let db = db();
