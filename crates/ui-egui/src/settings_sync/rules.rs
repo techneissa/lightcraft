@@ -36,6 +36,7 @@ pub const LEFT_OUT: &[(&str, &str)] = &[
     ("proof", "printer and paper profiles of this Mac"),
     ("proofPaperInk", "printer and paper profiles of this Mac"),
     ("search", "the text in the search field"),
+    ("paletteHistory", "what was run from the Command Palette here: a history that changes with each use, not a setting"),
     ("curveChannel", "the tab in use"),
     ("mixerMode", "the tab in use"),
     ("gradingMode", "the tab in use"),

@@ -28,7 +28,7 @@ pub fn monotonic_ms() -> f64 {
 }
 
 /// Wall-clock milliseconds since the Unix epoch, only for names that must be unique in the world
-/// (`library-restored-<ms>`), never for timing or deadlines.
+/// (`library-restored-<ms>`) and dates kept across restarts, never for timing or deadlines.
 pub fn now_ms() -> f64 {
     use web_time::{SystemTime, UNIX_EPOCH};
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs_f64() * 1000.0).unwrap_or(0.0)

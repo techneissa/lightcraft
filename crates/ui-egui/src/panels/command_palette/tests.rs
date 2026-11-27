@@ -70,16 +70,57 @@ fn words_match_labels_and_menu_paths_best_first() {
         entry("Reset Sidebar Sections", "View"),
         entry("Show in Finder", "Photo"),
     ];
-    assert_eq!(labels(&filter(&all, "")), labels(&all), "no query keeps the menu order");
-    assert_eq!(labels(&filter(&all, "print")), ["Print…"]);
+    assert_eq!(labels(&filter(&all, "", &History::default(), 0)), labels(&all), "no query keeps the menu order");
+    assert_eq!(labels(&filter(&all, "print", &History::default(), 0)), ["Print…"]);
     // every word must match: a word prefix of the label, or of the menu path
-    assert_eq!(labels(&filter(&all, "exp prev")), ["Export with Previous"]);
-    assert_eq!(labels(&filter(&all, "photo rot")), ["Rotate Left"]);
+    assert_eq!(labels(&filter(&all, "exp prev", &History::default(), 0)), ["Export with Previous"]);
+    assert_eq!(labels(&filter(&all, "photo rot", &History::default(), 0)), ["Rotate Left"]);
     // a label word beats a menu word, and the shorter label wins a tie
-    assert_eq!(labels(&filter(&all, "ex")), ["Export…", "Export with Previous"]);
+    assert_eq!(labels(&filter(&all, "ex", &History::default(), 0)), ["Export…", "Export with Previous"]);
     // loose letters still find it, in order
-    assert_eq!(labels(&filter(&all, "rsts")), ["Reset Sidebar Sections"]);
-    assert!(filter(&all, "zzzz").is_empty());
+    assert_eq!(labels(&filter(&all, "rsts", &History::default(), 0)), ["Reset Sidebar Sections"]);
+    assert!(filter(&all, "zzzz", &History::default(), 0).is_empty());
+}
+
+const DAY: u64 = 24 * 3600;
+
+/// Issue #449: past use ranks a command above an equally good match, and first with nothing typed.
+#[test]
+fn a_used_command_rises() {
+    let all = [entry("Print…", "File"), entry("Export with Previous", "File"), entry("Export…", "File")];
+    let mut history = History::default();
+    let now = 100 * DAY;
+    for _ in 0..3 {
+        history.record("", "Print…", 0);
+    }
+    history.record("", "Export with Previous", now);
+    // the one use today outweighs the three long ago
+    assert_eq!(labels(&filter(&all, "", &history, now)), ["Export with Previous", "Print…", "Export…"]);
+    assert_eq!(labels(&filter(&all, "exp", &history, now)), ["Export with Previous", "Export…"]);
+}
+
+#[test]
+fn a_better_text_match_still_wins_over_use() {
+    let all = [entry("Show in Finder", "File › Export"), entry("Export…", "File")];
+    let mut history = History::default();
+    for _ in 0..50 {
+        history.record("export", "Show in Finder", DAY);
+    }
+    assert_eq!(labels(&filter(&all, "export", &history, DAY)), ["Export…", "Show in Finder"]);
+}
+
+#[test]
+fn the_command_picked_for_a_text_comes_first_for_it_and_its_start() {
+    let all = [entry("Export…", "File"), entry("Video Export", "File"), entry("Export with Previous", "File")];
+    let mut history = History::default();
+    history.record("expo", "Video Export", DAY);
+    for _ in 0..5 {
+        history.record("", "Export…", DAY);
+    }
+    for typed in ["expo", "Exp"] {
+        assert_eq!(filter(&all, typed, &history, DAY)[0].label, "Video Export", "{typed}");
+    }
+    assert_eq!(filter(&all, "export", &history, DAY)[0].label, "Export…", "a longer text was never picked for");
 }
 
 #[test]
@@ -119,7 +160,7 @@ fn typing_filters_and_return_runs_the_top_row() {
     type_text(&mut h, "square grid");
     let state = h.app.ui.palette.clone().unwrap();
     assert_eq!(state.query, "square grid");
-    let shown = filter(&entries(&h.app, false), &state.query);
+    let shown = filter(&entries(&h.app, false), &state.query, &History::default(), 0);
     assert_eq!(shown.first().map(|e| e.id.as_str()), Some("view.squareGrid"), "{:?}", labels(&shown));
     assert_ne!(h.app.ui.view, ViewMode::SquareGrid);
     key(&mut h, "Enter", false);
@@ -132,7 +173,7 @@ fn arrow_keys_move_the_highlight_and_return_runs_that_row() {
     let mut h = demo();
     open(&mut h);
     type_text(&mut h, "grid");
-    let shown = filter(&entries(&h.app, false), "grid");
+    let shown = filter(&entries(&h.app, false), "grid", &History::default(), 0);
     assert!(shown.len() >= 2);
     key(&mut h, "ArrowDown", false);
     assert_eq!(h.app.ui.palette.as_ref().map(|s| s.selected), Some(1));
@@ -151,7 +192,7 @@ fn a_disabled_command_is_listed_but_does_not_run() {
     assert!(on > 0);
     open(&mut h);
     type_text(&mut h, &off.label);
-    let shown = filter(&entries(&h.app, false), &off.label);
+    let shown = filter(&entries(&h.app, false), &off.label, &History::default(), 0);
     assert_eq!(shown.first().map(|e| (e.key(), e.enabled)), Some((off.key(), false)));
     let (undo, redo, view) = (h.app.session.undo.len(), h.app.session.redo.len(), h.app.ui.view);
     key(&mut h, "Enter", false);
@@ -207,14 +248,14 @@ fn the_list_grows_back_after_a_query_that_left_few_rows() {
     assert!(all > full_list());
     let narrow = "smart album from filter";
     type_text(&mut h, narrow);
-    let few = filter(&entries(&h.app, false), narrow).len();
+    let few = filter(&entries(&h.app, false), narrow, &History::default(), 0).len();
     assert!((1..=2).contains(&few), "{few}");
     assert_eq!(rows(&h).len(), few);
     for typed in (0..narrow.len()).rev() {
         key(&mut h, "Backspace", false);
         let query = &narrow[..typed];
         assert_eq!(h.app.ui.palette.as_ref().map(|s| s.query.as_str()), Some(query));
-        let want = filter(&entries(&h.app, false), query).len().min(full_list());
+        let want = filter(&entries(&h.app, false), query, &History::default(), 0).len().min(full_list());
         assert!(rows(&h).len() >= want, "{query:?}: {} rows shown, {want} expected", rows(&h).len());
     }
     let shown = rows(&h);
@@ -233,7 +274,7 @@ fn the_arrow_keys_scroll_the_highlight_into_view() {
         key(&mut h, "Backspace", false);
     }
     type_text(&mut h, "e");
-    let shown = filter(&entries(&h.app, false), "e");
+    let shown = filter(&entries(&h.app, false), "e", &History::default(), 0);
     assert!(shown.len() > full_list() + 2, "{}", shown.len());
     for _ in 0..full_list() + 2 {
         key(&mut h, "ArrowDown", false);
