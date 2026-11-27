@@ -21,6 +21,7 @@ pub(crate) mod brush_preview;
 pub(crate) mod brush_resize;
 mod crop;
 pub(crate) mod describe_area;
+pub(crate) mod eyedropper;
 mod film_bar;
 mod filmstrip;
 mod find_overlay;
@@ -521,10 +522,14 @@ fn loupe_paint_and_finish(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egu
     if !matches!(right, RightPanel::Crop | RightPanel::Masking | RightPanel::Remove | RightPanel::RedEye) {
         general_cursor(app, ui, resp, img_rect, main_area);
     }
+    // the eyedropper magnifier's reading, before the tools use it (Recolor's pick takes its pixel); drawn after them
+    let panes = if split { vec![(before_img, areas[0]), (img_rect, main_area)] } else { vec![(img_rect, canvas)] };
+    eyedropper::read(app, resp, id, &panes);
     if !navigating {
         let tv = ToolView { right, map: &map, frame, d, id, split, native, aspect };
         tool_interaction(app, ui, resp, &tv, &Views { img_rect, target_rect, before_img, before_target, areas, main_area, canvas });
     }
+    eyedropper::paint(app, ui.ctx());
     // Space held over a tool: the view's hand takes the pointer from it (#1895)
     crate::space_hand::interact(app, ui, canvas, (main_area, img_rect), split.then(|| (areas[0], before_img)));
     // drawn and hit-tested above the loupe and its tools: clicks on it pan
@@ -951,7 +956,15 @@ fn tool_interaction(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Res
         {
             let n = map.norm(q);
             let (x, y) = (n.x.clamp(0.0, 1.0), n.y.clamp(0.0, 1.0));
-            if let Err(e) = app.run("mask.recolorPick", json!({"x": x, "y": y, "target": target})) {
+            // the pixel the magnifier outlined, exactly; without one (no pixels on screen yet) the engine reads the point
+            let run = match app.eyedropper.as_ref().and_then(|m| m.patch.hex()) {
+                Some(hex) => {
+                    let key = if target == "from" { "from" } else { "color" };
+                    app.run("mask.recolor", json!({ key: hex }))
+                }
+                None => app.run("mask.recolorPick", json!({"x": x, "y": y, "target": target})),
+            };
+            if let Err(e) = run {
                 app.toast(ui.ctx(), e);
             }
             app.ui.tool.clear();
@@ -1631,9 +1644,7 @@ fn general_cursor(app: &LightcraftApp, ui: &egui::Ui, resp: &egui::Response, img
         return;
     }
     let cursor = match app.ui.tool.as_str() {
-        "wbPicker" | "colorRange" | "pointColor" | super::mask_recolor::PICK_TOOL | super::mask_recolor::PICK_FROM_TOOL => {
-            egui::CursorIcon::Crosshair
-        }
+        tool if eyedropper::armed(tool) => egui::CursorIcon::Crosshair,
         tool if tool.starts_with("tat:") => egui::CursorIcon::ResizeVertical,
         _ if img.width() > canvas.width() + 1.0 || img.height() > canvas.height() + 1.0 => {
             if resp.dragged() {

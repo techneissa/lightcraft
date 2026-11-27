@@ -1674,6 +1674,7 @@ pub mod button;
 pub mod date_picker;
 pub mod dropdown_search;
 pub(crate) mod label_column;
+pub mod magnifier;
 #[cfg(test)]
 #[path = "widgets/tests_numeric_entry.rs"]
 mod numeric_entry_tests;

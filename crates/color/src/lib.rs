@@ -5,6 +5,7 @@
 //!   temperature/tint white-balance model ([`cct`]).
 //! - Transfer functions (sRGB, gamma, PQ, HLG) in [`transfer`].
 //! - Perceptual spaces: OkLab / OkLCh, HSL/HSV in [`perceptual`].
+//! - Colour names (the nearest CSS named colour) in [`names`].
 //! - Tone-curve splines in [`spline`].
 //!
 //! The pipeline's working space is **linear Rec.2020, D65** ([`WORKING`]).
@@ -12,6 +13,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod cct;
+pub mod names;
 pub mod perceptual;
 pub mod spline;
 pub mod transfer;
