@@ -59,3 +59,24 @@ fn paste_masks_replaces_a_photos_masks_with_the_copied_ones() {
     s.execute("edit.undo", &json!({})).unwrap();
     assert_eq!(masks_of(&s, b).iter().map(|m| m.name.as_str()).collect::<Vec<_>>(), ["Own"]);
 }
+
+/// Issue #399: a photo's rough Subject, or its Background that found nothing, is not a selection of its own to keep:
+/// a paste looks for the part on that photo.
+#[test]
+fn a_paste_finds_the_parts_the_photo_never_found() {
+    let mut s = Session::with_demo();
+    s.adaptive.set_finder(Some(Arc::new(|id, _| Ok(Some(subject_of(id.0))))));
+    let ids: Vec<u64> = s.catalog.photos().take(2).map(|p| p.id.0).collect();
+    let (a, b) = (ids[0], ids[1]);
+    let subject = |seg| MaskShape::Subject { seg, detail: vec![], edge: 0.0 };
+    let background = |seg| MaskShape::Background { seg, detail: vec![], edge: 0.0 };
+    set_masks(&mut s, b, vec![mask(1, "Rough", subject(None)), mask(2, "Empty", background(Some(SegMask::nothing())))]);
+    set_masks(&mut s, a, vec![mask(1, "Person", subject(Some(subject_of(a)))), mask(2, "Behind", background(subject_of(a).invert()))]);
+    s.execute("library.select", &json!({"ids": [a], "active": a})).unwrap();
+    s.execute("mask.copyAll", &json!({})).unwrap();
+    s.execute("library.select", &json!({"ids": [b], "active": b})).unwrap();
+    s.execute("mask.pasteAll", &json!({})).unwrap();
+    let got = masks_of(&s, b);
+    assert_eq!(got[0].components[0].shape.seg(), Some(&subject_of(b)), "B's subject, not the rough one");
+    assert_eq!(got[1].components[0].shape.seg(), subject_of(b).invert().as_ref(), "B's background, not nothing");
+}

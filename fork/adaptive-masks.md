@@ -18,9 +18,11 @@ List: Presets, Paste, Sync and Auto Sync carry what an AI mask selects (Subject,
   its mask shows nothing (neither the part nor its inverse), never the first photo's selection. The models' caches
   are used: the SAM 3 worker's encoded photo, the people parse and its disk cache (which parse-ahead fills). The CLI,
   MCP and tests wait for the parts instead.
+- **The panel says** when a part is still being found, or was not found on the photo (issue #399).
 - **A photo keeps its own.** A photo that has the same part found already (the same mask, place and recipe, turned
   the same way) keeps its own selection, so pasting a look again, or moving a mask slider with Auto Sync on, finds
-  nothing again.
+  nothing again. A paste or Sync that brings masks does not count a rough part, or one that found nothing, as found
+  (issue #399): it is looked for again.
 - **Undo.** The paste, sync or preset is one undo step, also when the parts are found later: what is found goes into
   the photo's settings without an undo step of its own, and the step's redo brings back the found parts. A part that
   no longer waits is left alone. A part that changed while its photo was being found (another paste, a new

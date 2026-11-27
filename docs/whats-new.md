@@ -7,6 +7,11 @@
 - While typing, a command you ran before comes above others that match as well, and the one you picked for a text
   comes first the next time you type it or its start. A clearly better match for what you type still wins.
 
+### Pasted AI masks are found on photos that had a rough one
+- Pasting or syncing masks now looks for Subject, Background and the other AI parts again on a photo whose own copy
+  was a rough mask or had found nothing. It used to keep that one. The Masking panel says when a part is still being
+  found, or was not found.
+
 ### Describe says what to try when it finds nothing
 - When Describe finds nothing for your words, it now says what to try: other or fewer words, zooming in on something
   small, or clicking it with Object. When it can't run, it says what went wrong instead of only that it failed.
