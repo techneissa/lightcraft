@@ -259,6 +259,31 @@ fn title_row(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings) {
     {
         app.toast(ui.ctx(), e);
     }
+    // ⋯ left of the ↺: Copy and Paste Portrait Settings (`portrait.copy`, `portrait.paste`; their own clipboard)
+    let more = egui::Rect::from_center_size(pos2(reset.left() - 18.0, reset.center().y), vec2(26.0, 26.0));
+    let resp = ui.interact(more, egui::Id::unique("portrait-more"), Sense::click());
+    register(ui, "portrait:more", more);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, crate::i18n::tr("Portrait Settings Menu")));
+    if resp.hovered() {
+        ui.painter().rect_filled(more, 4.0, t.chrome.gamma_multiply(1.3));
+    }
+    paint(ui.painter(), more.shrink(4.0), Icon::More, t.text_label);
+    let resp = resp.on_hover_text(crate::i18n::tr("Portrait Settings Menu"));
+    egui::Popup::menu(&resp).show(|ui| {
+        for (id, label, enabled) in [
+            ("portrait.copy", "Copy Portrait Settings", app.session.active().is_some()),
+            ("portrait.paste", "Paste Portrait Settings", app.session.active().is_some()),
+        ] {
+            let b = ui.add_enabled(enabled, egui::Button::new(crate::i18n::tr(label)));
+            register(ui, format!("portraitMenu:{id}"), b.rect);
+            if b.clicked() {
+                if let Err(e) = app.run(id, json!({})) {
+                    app.toast(ui.ctx(), e);
+                }
+                ui.close();
+            }
+        }
+    });
 }
 
 /// "Editing: All Faces" or the picked face, and why there are no faces when there are none.

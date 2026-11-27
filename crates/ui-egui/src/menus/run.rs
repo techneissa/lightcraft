@@ -165,7 +165,8 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
     {
         return Some(r);
     }
-    if id.starts_with("portrait.") {
+    // (`portrait.copy` and `portrait.paste` are engine commands)
+    if id.starts_with("portrait.") && !matches!(id, "portrait.copy" | "portrait.paste") {
         return Some(crate::panels::portrait::command(app, id, p));
     }
     if id.starts_with("topBar.") {
