@@ -394,7 +394,7 @@ impl Filter {
     /// [`Filter::matches`] with what [`Filter::prepare`] works out done already, so a query over a
     /// big library does that once, not once per photo.
     pub(crate) fn matches_in(&self, p: &Photo, cat: &Catalog, prepared: &Prepared) -> bool {
-        if p.deleted != self.deleted {
+        if p.in_recently_deleted() != self.deleted {
             return false;
         }
         match &self.folder {

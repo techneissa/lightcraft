@@ -147,3 +147,34 @@ fn a_rating_or_a_slider_keeps_every_tally_and_a_keyword_keeps_the_folders_and_da
     let after = look(&mut a);
     assert!(!Arc::ptr_eq(&before.0, &after.0));
 }
+
+/// Issue #475: a photo only browsed (Local) shows in Recently Deleted once deleted, so the sidebar counts it.
+#[test]
+fn the_recently_deleted_count_is_what_the_folder_shows() {
+    use lightcraft_catalog::{Op, Photo, Source};
+    let mut a = app();
+    let shown = a.session.visible_cloned();
+    let (library, other) = (shown[0].0, shown[1].0);
+    let id = a.session.catalog.alloc_photo_id();
+    // (no file behind it: emptying has nothing to move to the system Trash)
+    let mut p = Photo::new(id, Source::Demo { scene: 0 }, "browsed.jpg", "JPEG", 60, 40, "2026-01-01T10:00:00");
+    p.local = true;
+    a.session.commit("Add", Op::AddPhoto { photo: Box::new(p) }).unwrap();
+
+    let both = json!({"ids": [library, id.0]});
+    for (command, params, left) in [
+        ("photo.delete", both.clone(), 2),
+        ("photo.restore", json!({"ids": [library]}), 1),
+        ("photo.delete", json!({"ids": [library]}), 2),
+        ("library.emptyRecentlyDeleted", json!({}), 0),
+    ] {
+        // (delete and restore need something selected)
+        a.session.execute("library.source", &json!({"kind": "all"})).unwrap();
+        a.session.execute("library.select", &json!({"ids": [other]})).unwrap();
+        a.session.execute(command, &params).unwrap();
+        a.session.execute("library.source", &json!({"kind": "recentlyDeleted"})).unwrap();
+        let shown = a.session.visible_cloned().len();
+        assert_eq!(shown, left, "the folder after {command}");
+        assert_eq!(a.caches.counts(&a.session.catalog).deleted, shown, "the sidebar after {command}");
+    }
+}

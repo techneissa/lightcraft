@@ -631,6 +631,11 @@ impl Photo {
     pub fn in_library(&self) -> bool {
         !self.deleted && !self.local
     }
+    /// In Recently Deleted: every deleted photo, also one that was only browsed (Local, #1430). The one rule for
+    /// the view, its count in the sidebar and emptying it.
+    pub fn in_recently_deleted(&self) -> bool {
+        self.deleted
+    }
     /// Edited by the user: settings differ from what import gave the photo.
     pub fn is_edited(&self) -> bool {
         let mut defaults = self.import_defaults();

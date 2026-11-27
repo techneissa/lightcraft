@@ -677,7 +677,7 @@ pub fn specs() -> Vec<CommandSpec> {
             always,
             |s, p| {
                 let files = crate::file_trash::FilesChoice::from_params(p, "library.emptyRecentlyDeleted")?;
-                let ids: Vec<PhotoId> = s.catalog.photos().filter(|p| p.deleted).map(|p| p.id).collect();
+                let ids: Vec<PhotoId> = s.catalog.photos().filter(|p| p.in_recently_deleted()).map(|p| p.id).collect();
                 if ids.is_empty() {
                     return Ok(json!({"deleted": 0, "trashed": [], "failed": []}));
                 }
