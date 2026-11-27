@@ -1,6 +1,8 @@
-# AI mask models stay loaded while masking
+# AI mask models and the Masking panel
 
-List: while the Masking panel is open in the front window, an AI mask model (SAM 3, BiRefNet, BiRefNet Matting) stays loaded while the open photo has an AI mask that uses it, so a mask made after a pause takes about 4 s instead of 17 s; brush, gradient and range work holds none, and each AI mask's Stop AI button lets its models go at once (issues #353, #407). The panel says "Loading the AI models…" while a mask waits for them. Branches `perf/353-ai-mask-speed`, `perf/407-mask-model-loads`.
+List: the AI mask models (SAM 3, BiRefNet, BiRefNet Matting) go a minute after the last AI request, also while the Masking panel is open; each AI mask has a Stop AI button that lets its models go at once; the panel says "Loading the AI models…" while a mask waits for them (issues #353, #407, #452). Branches `perf/353-ai-mask-speed`, `perf/407-mask-model-loads`, `feat/release-kept-mask-models`.
+
+**Issue #452 (current rule).** Issues #353 and #407 kept the models loaded for as long as the Masking panel was open in the front window and the photo had an AI mask that used them. On Core ML that held 5.6 GB at rest (7.28 GB with a Subject mask made, 1.57 GB after Stop AI), however long the app sat idle. The hold is gone: the worker lets SAM 3 and BiRefNet go `idle` (`MODEL_IDLE`, 60 s) after its last request and BiRefNet Matting goes on the idle rule (`crate::idle`) the same, panel open or not. The next AI mask loads them again (about 17 s instead of 4 s on a test Mac, #407). The sections below say "kept" and "held" for how it worked before; only what they say about Stop AI, the loading message and `Session::mask_models_by_mask` still holds.
 
 ## What it does
 

@@ -92,16 +92,7 @@ impl HairEdges {
         out
     }
 
-    /// Keep the model loaded while `on` (the Masking panel is open in the front window, fork issue #353): it is not let
-    /// go until this is turned off, and its idle time counts from then.
-    pub fn keep_loaded(&self, on: bool) {
-        let mut held = lock(&self.inner.held);
-        if on != held.is_some() {
-            *held = on.then(|| self.idle().using());
-        }
-    }
-
-    /// Let the model go now, held or not (fork, issue #407: an AI mask's stop button); a run going lets it go when it
+    /// Let the model go now (fork, issue #407: an AI mask's stop button); a run going lets it go when it
     /// ends.
     pub fn release(&self) {
         // (taken out under the lock, dropped after it: freeing the model takes a while)
@@ -117,12 +108,6 @@ impl HairEdges {
             drop(old);
             log::info!("BiRefNet Matting unloaded");
         }
-    }
-
-    /// Whether the Masking panel's hold keeps the model (tests).
-    #[cfg(test)]
-    pub(crate) fn is_held(&self) -> bool {
-        lock(&self.inner.held).is_some()
     }
 
     /// Whether the model is in memory (a run holding it counts as loaded).

@@ -28,9 +28,6 @@ pub struct Background {
     /// Since when the view in front has rested without the original (egui time, s), and whether that rest released
     /// it ([`REST_AFTER`]).
     pub(crate) rest: Option<(f64, bool)>,
-    /// The AI mask models kept loaded (fork, issues #353 and #407): while the Masking panel is open in the front window,
-    /// the ones the open photo's AI masks use.
-    mask_models: lightcraft_engine::segment::MaskModels,
     /// What each mask of the open photo uses (fork, issue #407).
     pub ai: crate::panels::mask_stop_ai::Uses,
 }
@@ -40,17 +37,6 @@ pub fn tick(app: &mut LightcraftApp, ctx: &egui::Context, now: f64) {
     let (focused, minimized, visible) = ctx.input(|i| (i.raw.focused, i.viewport().minimized == Some(true), i.viewport().visible()));
     let background = !focused || minimized || visible == Some(false);
     lightcraft_engine::idle::set_background(background);
-    // (fork, issue #353: a mask made after a pause in the Masking panel does not load and plan the models again; #407:
-    // only the models the open photo's AI masks use, so brush, gradient and range work holds none)
-    let masking = !background
-        && app.ui.right == crate::state::RightPanel::Masking
-        && !app.ui.fullscreen
-        && crate::docking::exposed(app, crate::docking::Panel::Tools);
-    let models = if masking { crate::panels::mask_stop_ai::photo_models(app, now) } else { lightcraft_engine::segment::MaskModels::NONE };
-    if models != app.background.mask_models {
-        app.background.mask_models = models;
-        app.session.keep_mask_models(models);
-    }
     if !background {
         (app.background.since, app.background.released) = (None, false);
         rest(app, ctx, now);

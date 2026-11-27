@@ -184,9 +184,6 @@ struct Inner {
     /// Lets the model go after a while without use.
     #[cfg(feature = "sam")]
     idle: std::sync::OnceLock<crate::idle::Tracker>,
-    /// Keeps the model while the Masking panel is open (fork, issue #353).
-    #[cfg(feature = "sam")]
-    held: Mutex<Option<crate::idle::Use>>,
     /// A mask's stop button asked for the model to go while a run held it (fork, issue #407): it goes after that run.
     #[cfg(feature = "sam")]
     release: AtomicBool,
@@ -231,8 +228,6 @@ impl HairEdges {
                 loaded: Mutex::new(None),
                 #[cfg(feature = "sam")]
                 idle: std::sync::OnceLock::new(),
-                #[cfg(feature = "sam")]
-                held: Mutex::new(None),
                 #[cfg(feature = "sam")]
                 release: AtomicBool::new(false),
                 #[cfg(feature = "sam")]

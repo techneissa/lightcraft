@@ -1,5 +1,5 @@
-//! Fork (issue #407, `fork/mask-models-kept.md`): which AI mask models the open photo's masks use, for the Masking
-//! panel's hold (`background::tick`), and each AI mask's Stop AI button in its row of the Masks list.
+//! Fork (issues #407 and #452, `fork/mask-models-kept.md`): which AI mask models the open photo's masks use, and each AI
+//! mask's Stop AI button in its row of the Masks list.
 //!
 //! What a mask uses is the session's (`Session::mask_models_by_mask`, the same the tests check); it depends on the
 //! chosen selection model and hair edges, which read a few files, so it is worked out again when the photo or its
@@ -41,12 +41,6 @@ fn refresh(app: &mut LightcraftApp, now: f64) {
     let per_mask = app.session.mask_models_by_mask(id);
     let ai = &mut app.background.ai;
     (ai.key, ai.at, ai.per_mask) = (key, now, per_mask);
-}
-
-/// The models the open photo's masks use (what the Masking panel holds).
-pub fn photo_models(app: &mut LightcraftApp, now: f64) -> MaskModels {
-    refresh(app, now);
-    MaskModels::union(app.background.ai.per_mask.iter().map(|(_, m)| *m))
 }
 
 /// The models mask `mask` of the open photo uses.

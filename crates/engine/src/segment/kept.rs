@@ -1,11 +1,11 @@
-//! Fork (issues #353 and #407, `fork/mask-models-kept.md`): while the Masking panel is open in the front window, an AI
-//! mask model stays loaded while the open photo has an AI mask that uses it; brush, gradient and range masks hold none.
-//! Each AI mask can let its models go at once (`mask.stopAi`). The panel says when a mask waits for a model to load.
+//! Fork (issues #353, #407 and #452, `fork/mask-models-kept.md`): which AI mask models a mask uses (brush, gradient and
+//! range masks use none) and which are in memory. The models go a minute after the last AI request (`idle`); each AI mask
+//! can let its models go at once (`mask.stopAi`). The panel says when a mask waits for a model to load.
 
 use lightcraft_catalog::PhotoId;
 use lightcraft_develop::{Mask, MaskShape};
 
-/// The AI mask models, each on or off: the ones a mask uses, the ones held, the ones loaded.
+/// The AI mask models, each on or off: the ones a mask uses, the ones loaded.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct MaskModels {
     pub sam3: bool,
@@ -56,25 +56,9 @@ impl super::Segmenter {
         #[cfg(not(feature = "sam"))]
         false
     }
-
-    /// Keep `models`' SAM 3 and BiRefNet loaded; the others go after the worker's idle time.
-    pub fn keep_models(&self, models: MaskModels) {
-        #[cfg(feature = "sam")]
-        self.worker.hold(models);
-        #[cfg(not(feature = "sam"))]
-        let _ = models;
-    }
 }
 
 impl crate::Session {
-    /// Keep `models` loaded (the others go after the idle time): the app keeps the models the open photo's AI masks use
-    /// while the Masking panel is open in the front window, so a mask made after a pause does not load them again.
-    pub fn keep_mask_models(&self, models: MaskModels) {
-        self.segmenter.keep_models(models);
-        #[cfg(feature = "sam")]
-        self.hair_edges.keep_loaded(models.matting);
-    }
-
     /// The models an AI part `shape` on photo `photo` is made with (brush, gradient and range parts: none). A Subject,
     /// Background or Sky part on a photo with its own matte for it, or with no model for it on this computer, uses none
     /// (as `concepts::wanted` decides when it is made). Reads a few files (the installed selection models).
@@ -113,11 +97,6 @@ impl crate::Session {
         d.masks.iter().map(|m| (m.id, self.mask_models_of_mask(photo, m))).collect()
     }
 
-    /// The models photo `photo`'s masks are made with: what the Masking panel holds for it.
-    pub fn mask_models_on(&self, photo: PhotoId) -> MaskModels {
-        MaskModels::union(self.mask_models_by_mask(photo).into_iter().map(|(_, m)| m))
-    }
-
     /// The models in memory now.
     pub fn mask_models_loaded(&self) -> MaskModels {
         #[cfg(feature = "sam")]
@@ -135,7 +114,7 @@ impl crate::Session {
     }
 
     /// Stop the AI of mask `mask` on the open photo (`mask.stopAi`): this mask's requests are cancelled (on the AI mask
-    /// worker and Update AI Masks'), and the models it uses are let go once the step under way ends, held or not. The
+    /// worker and Update AI Masks'), and the models it uses are let go once the step under way ends. The
     /// mask keeps its stored selection. Returns the models it uses.
     pub fn stop_mask_ai(&mut self, mask: u32) -> Result<MaskModels, String> {
         let id = self.active().ok_or("no photo is open")?;
@@ -176,8 +155,8 @@ mod tests {
         }
     }
 
-    /// Issue #407: masks no AI model makes (brush, gradients, ranges), with the Masking panel's hold on, send no request to
-    /// the AI mask worker and make no matte, so no model loads.
+    /// Issue #407: masks no AI model makes (brush, gradients, ranges) send no request to the AI mask worker and make no
+    /// matte, so no model loads.
     #[test]
     fn brush_gradient_and_range_masks_ask_no_model() {
         let mut s = crate::Session::with_demo();
@@ -202,10 +181,7 @@ mod tests {
             s.execute("mask.adjust", &json!({"values": {"exposure": 0.5}})).unwrap();
         }
         s.execute("crop.set", &json!({"rect": [0.1, 0.1, 0.9, 0.9]})).unwrap();
-        // (what the Masking panel holds for this photo: nothing)
-        assert_eq!(s.mask_models_on(id), MaskModels::NONE, "brush, gradient and range masks hold no model");
-        s.keep_mask_models(s.mask_models_on(id));
-        assert!(!s.hair_edges.is_held());
+        assert!(s.mask_models_by_mask(id).iter().all(|(_, m)| *m == MaskModels::NONE), "brush, gradient and range masks use no model");
         assert_eq!(s.segmenter.next_job_id, jobs, "no request to the AI mask worker");
         assert_eq!((s.hair_edges.runs(), s.parsing.runs()), (mattes, parses), "no matte, no people parse");
     }
@@ -226,21 +202,18 @@ mod tests {
         Some((id, person, seg))
     }
 
-    /// Issue #407: a Person mask on the open photo holds BiRefNet Matting (its hair edge) while masking; the review found
-    /// that a rule keyed on Subject mattes alone would let it go.
+    /// Issue #407: a Person mask on the open photo uses BiRefNet Matting (its hair edge); the review found that a rule
+    /// keyed on Subject mattes alone would miss it.
     #[test]
-    fn a_person_mask_holds_birefnet_matting() {
+    fn a_person_mask_uses_birefnet_matting() {
         let mut s = crate::Session::with_demo();
-        let (id, ..) = with_a_person_mask(&mut s).unwrap();
-        let models = s.mask_models_on(id);
+        let (id, person, _) = with_a_person_mask(&mut s).unwrap();
+        let uses = s.mask_models_by_mask(id);
+        let models = uses.iter().find(|(m, _)| *m == person).map(|(_, m)| *m).unwrap();
         assert!(models.matting && !models.sam3, "{models:?}");
-        s.keep_mask_models(models);
-        assert!(s.hair_edges.is_held());
-        s.keep_mask_models(MaskModels::NONE);
-        assert!(!s.hair_edges.is_held());
     }
 
-    /// Issue #407: Stop AI lets the mask's model go now, though the Masking panel holds it, and the mask keeps its stored
+    /// Issue #407: Stop AI lets the mask's model go now, and the mask keeps its stored
     /// selection. Runs BiRefNet Matting from the shared ArtCraft models folder.
     #[test]
     fn stop_ai_lets_the_model_go_and_keeps_the_selection() {
@@ -251,14 +224,13 @@ mod tests {
         let mut s = crate::Session::with_demo();
         s.hair_edges.set_paths(Some(models), None);
         let (id, person, seg) = with_a_person_mask(&mut s).unwrap();
-        s.keep_mask_models(s.mask_models_on(id));
         let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         s.hair_edges.matte(&[128; 64 * 64 * 3], 64, 64, &cancel).unwrap();
         assert!(s.hair_edges.model_loaded());
         assert_eq!(s.execute("mask.aiModels", &json!({})).unwrap()["canStop"], true);
         let r = s.execute("mask.stopAi", &json!({})).unwrap();
         assert_eq!(r["stopped"], json!(["matting"]));
-        assert!(!s.hair_edges.model_loaded(), "let go while held");
+        assert!(!s.hair_edges.model_loaded());
         assert_eq!(s.execute("mask.aiModels", &json!({})).unwrap()["canStop"], false);
         let d = s.develop_of(id).unwrap();
         let m = d.masks.iter().find(|m| m.id == person).unwrap();
@@ -266,7 +238,6 @@ mod tests {
         // (a brush mask has nothing to stop)
         let brush = d.masks.iter().find(|m| m.id != person).unwrap().id;
         assert!(s.execute("mask.stopAi", &json!({"id": brush})).is_err());
-        s.keep_mask_models(MaskModels::NONE);
     }
 
     /// Issue #407 (review): Stop AI on one mask cancels that mask's requests only; another AI mask's request goes on.
