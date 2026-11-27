@@ -186,9 +186,10 @@ impl LensDb {
     }
 
     /// The best profile for an EXIF lens model (and lens make, when the file has one), preferring lenses for the
-    /// camera's mount. `None` when no name is a convincing match.
+    /// camera's mount. `None` when no name is a convincing match. A maker named by the lens make or the lens model
+    /// rules out other makers' profiles.
     pub fn find_lens(&self, lens_make: Option<&str>, lens_model: &str, camera: Option<&Camera>) -> Option<&Profile> {
-        self.best_lens(lens_make, lens_model, camera, |_| true).or_else(|| self.find_fixed_lens(&tokens(lens_model), camera?))
+        self.best_lens(lens_make, lens_model, camera, |_| true).or_else(|| self.find_fixed_lens(lens_model, camera?))
     }
 
     /// [`find_lens`](Self::find_lens) among the profiles one of whose names is exactly `name`
@@ -204,10 +205,14 @@ impl LensDb {
             return None;
         }
         let make = lens_make.map(tokens).unwrap_or_default();
+        let named = self.named_makers(lens_model);
         let mut best: Option<(f64, &Profile)> = None;
         for lens in self.lenses.iter().filter(|l| eligible(l)) {
             let maker = tokens(&lens.maker);
             if !make.is_empty() && !maker.is_empty() && !maker_matches(&maker, &make) {
+                continue;
+            }
+            if !lens.may_be(lens_model, &named) {
                 continue;
             }
             let mut score = lens.models.iter().map(|m| name_score(&tokens(m), &exif, &maker)).fold(0.0, f64::max);
@@ -224,24 +229,40 @@ impl LensDb {
         best.map(|(_, l)| l)
     }
 
+    /// Whether an EXIF lens model speaks for a maker, so that only that maker's profiles can be its lens.
+    pub fn names_a_maker(&self, lens_model: &str) -> bool {
+        !self.named_makers(lens_model).is_empty()
+    }
+
+    /// The makers an EXIF lens model speaks for: its words that are a maker's first word, in this database or the
+    /// name lists ("SIRUI Aurora 85mm F1.4"); without one, the maker of the name-only lens it is
+    /// ([`names::name_only_makers`]).
+    fn named_makers(&self, lens_model: &str) -> Vec<String> {
+        let known = |w: &String| names::is_maker_word(w) || self.lenses.iter().any(|l| words(&l.maker).next().as_ref() == Some(w));
+        let named: Vec<String> = words(lens_model).filter(known).collect();
+        if named.is_empty() { names::name_only_makers(lens_model) } else { named }
+    }
+
     /// Compact cameras with a built-in lens: lensfun names the lens after the camera and gives it the camera's own
     /// mount, while EXIF reports only a focal / aperture range ("6.0-72.0 mm f/2.7-3.5"). Match by mount, then by
     /// how much of the calibrated focal range lies inside the EXIF focal range.
-    fn find_fixed_lens(&self, exif: &[String], cam: &Camera) -> Option<&Profile> {
+    fn find_fixed_lens(&self, lens_model: &str, cam: &Camera) -> Option<&Profile> {
         if cam.mount.is_empty() {
             return None;
         }
+        let named = self.named_makers(lens_model);
         let cands: Vec<&Profile> = self
             .lenses
             .iter()
             .filter(|l| l.mounts.iter().any(|m| m.eq_ignore_ascii_case(&cam.mount)))
             .filter(|l| !l.models.iter().any(|m| tokens(m).iter().any(|t| t == "mm")))
+            .filter(|l| l.may_be(lens_model, &named))
             .collect();
         // an interchangeable mount has many lenses; a built-in lens has one or a few profiles
         if cands.is_empty() || cands.len() > MAX_FIXED_CANDIDATES {
             return None;
         }
-        let Some((lo, hi)) = exif_focal_range(exif) else {
+        let Some((lo, hi)) = exif_focal_range(&tokens(lens_model)) else {
             return (cands.len() == 1).then(|| cands[0]);
         };
         let (lo, hi) = (lo * 0.9, hi * 1.1);
@@ -305,6 +326,11 @@ fn read_capped(path: &Path) -> Result<String, Error> {
         return Err(Error::TooLarge);
     }
     Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// The lower-cased words of a name, split at spaces and punctuation only: "7Artisans" stays one word.
+fn words(s: &str) -> impl Iterator<Item = String> + '_ {
+    s.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).map(str::to_lowercase)
 }
 
 /// Lower-case word tokens; letters and digits are split ("24-105mm" → 24, 105, mm), decimals kept ("2.8").
@@ -546,6 +572,14 @@ impl Profile {
     pub fn names_exactly(&self, name: &str) -> bool {
         let want = tokens(name);
         !want.is_empty() && self.models.iter().any(|m| tokens(m) == want)
+    }
+
+    /// Whether this profile can be of a lens whose EXIF model speaks for the makers `named`
+    /// ([`LensDb::named_makers`]): it speaks for none, one of them is in the profile's maker or one of its names
+    /// (Panasonic's "Leica DG" lenses), or the profile is named exactly so (a user's alias).
+    fn may_be(&self, lens_model: &str, named: &[String]) -> bool {
+        let goes_by = |word: &String| std::iter::once(&self.maker).chain(&self.models).any(|s| words(s).any(|w| w == *word));
+        named.is_empty() || named.iter().any(goes_by) || self.names_exactly(lens_model)
     }
 
     /// Distortion ratio `r_d / r_u` at lensfun radius `r` for `focal` (1 when the profile has none).

@@ -7,7 +7,11 @@
 //! from manufacturers' public product pages, original work) for lenses lensfun lacks (Sirui, some
 //! Laowa); [`NameList::merge`] adds it to the generated list.
 
+use std::collections::HashSet;
 use std::sync::OnceLock;
+
+/// The hand-curated names: lenses known by name only, without a calibration.
+const EXTRA: &str = include_str!("../data/lens-names-extra.tsv");
 
 /// One picker row.
 #[derive(Debug, Clone, PartialEq)]
@@ -166,9 +170,36 @@ pub fn lenses() -> &'static NameList {
     static LIST: OnceLock<NameList> = OnceLock::new();
     LIST.get_or_init(|| {
         let mut list = NameList::parse(include_str!("../data/lens-names.tsv"));
-        list.merge(include_str!("../data/lens-names-extra.tsv"));
+        list.merge(EXTRA);
         list
     })
+}
+
+/// Whether `word` (lower-cased) is the first word of a maker in the lens lists ("sirui", "brightin").
+pub(crate) fn is_maker_word(word: &str) -> bool {
+    static WORDS: OnceLock<HashSet<String>> = OnceLock::new();
+    WORDS.get_or_init(|| lenses().entries().iter().filter_map(|e| crate::words(&e.maker).next()).collect()).contains(word)
+}
+
+/// The makers of the name-only lenses that `lens_model` is, written without the maker ("Aurora 85mm F1.4"; Sony's
+/// "FE" mount mark aside). Only a name with a series word (4 letters or more) says which lens it is: "AF 135mm F1.8"
+/// fits many makers.
+pub(crate) fn name_only_makers(lens_model: &str) -> Vec<String> {
+    static LIST: OnceLock<Vec<(Vec<String>, String)>> = OnceLock::new();
+    let key = |name: &str, maker: &[String]| -> Vec<String> { crate::tokens(name).into_iter().filter(|t| t != "fe" && !maker.contains(t)).collect() };
+    let list = LIST.get_or_init(|| {
+        NameList::parse(EXTRA)
+            .entries
+            .iter()
+            .filter_map(|e| {
+                let name = key(&e.name, &crate::tokens(&e.maker));
+                let series = name.iter().any(|t| t.chars().count() >= 4 && t.chars().all(char::is_alphabetic));
+                crate::words(&e.maker).next().filter(|_| series).map(|maker| (name, maker))
+            })
+            .collect()
+    });
+    let want = key(lens_model, &[]);
+    list.iter().filter(|(name, _)| *name == want).map(|(_, maker)| maker.clone()).collect()
 }
 
 #[cfg(test)]

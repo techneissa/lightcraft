@@ -156,6 +156,20 @@ fn photos_get_their_profile_when_the_database_arrives() {
     assert!(s.execute("library.refreshLensProfiles", &json!({"ids": "x"})).is_err());
 }
 
+/// A photo imported with another maker's profile (a Sirui given the Sony GM's, fork issue #474) loses it at an
+/// ordinary start.
+#[test]
+fn another_makers_stored_profile_is_dropped() {
+    let mut s = Session::new();
+    s.catalog.apply(Op::AddPhoto { photo: Box::new(with_lens(raw(1, "SIRUI 50mm F1.8", false), Some(lens(-0.01)), true)) }).unwrap();
+    let db = lightcraft_lensdb::LensDb::parse(DB).unwrap();
+    let listed = crate::cmd::lens_refresh::missing(&s.catalog, &db, None, false);
+    assert_eq!(listed.len(), 1, "read again");
+    let results = listed.into_iter().map(|m| (m, Ok(crate::media::ProbeInfo::default()))).collect();
+    crate::cmd::lens_refresh::apply(&mut s, results).unwrap();
+    assert_eq!(lens_of(&s, PhotoId(1)), None);
+}
+
 fn with_lens(mut p: Photo, l: Option<EmbeddedLens>, on: bool) -> Photo {
     p.embedded_lens = l;
     let mut d = (*p.develop).clone();

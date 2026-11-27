@@ -36,7 +36,8 @@ background and gets its profile; a photo still as imported gets the correction s
 edited one keeps its settings. When a download replaced the database's files, the raws whose profile came from the
 old database are read again too (they get the new profile, or lose one it no longer gives), and so are raws whose
 file named no lens at import. Ticking **Enable Lens Corrections** on a photo without a profile looks it up again
-too. `library.refreshLensProfiles` (`all: true` for the wider pass), `lens.downloadDatabase` (which also selects the
+too. A stored database profile whose lens names a maker the database has no such lens of (another maker's profile,
+given by an older LightCraft) is looked up again at any start, which drops it. `library.refreshLensProfiles` (`all: true` for the wider pass), `lens.downloadDatabase` (which also selects the
 downloaded folder) and `lens.databaseStatus` do the same for agents.
 
 A database profile is pinned to the photo: every render (fresh decode, cached preview, thumbnail, export) uses the
@@ -62,6 +63,13 @@ number (focal lengths, apertures) in the database name must appear in the EXIF n
 when the file names one. A generation marker (`II`, `III`, `IV`) must also agree: a profile for the first generation is
 not used for the second, which is another optical design (the FE 70-200mm F4 G OSS profile put 0.7 EV of corner gain on
 photos from the F4 Macro G OSS II, whose camera JPEG shows 0.15 EV; mean render 4–5 L* lighter than the JPEG).
+
+A maker named in the lens model itself (`SIRUI Aurora 85mm F1.4 FE`) rules out other makers' profiles, as the lens
+make field does; the makers known are the database's and those of the embedded lens name lists. A profile whose own
+names carry that word still counts (Panasonic's `Leica DG` lenses). A lens known by name only
+(`crates/lensdb/data/lens-names-extra.tsv`) and written without its maker (`Aurora 85mm F1.4`) is held to that maker
+too, when its name has a series word. A lens with no profile of its own gets no correction, and the Optics panel says
+none was found.
 
 Some cameras record no lens model at all, only the lens specification: Nikon DSLRs write the lens's focal range and
 maximum apertures in their maker note (tag `0x0084`) and no Exif `LensModel`, whatever lens is mounted. For such a
