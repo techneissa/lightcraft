@@ -125,7 +125,7 @@ pub(crate) fn color_at(s: &mut Session, id: PhotoId, x: f64, y: f64, c: &str) ->
     color_at_with(s, id, x, y, c, |_| {})
 }
 
-/// [`color_at`] with the photo's settings changed by `neutral` first (Color Swap picks a From colour from the photo
+/// [`color_at`] with the photo's settings changed by `neutral` first (Recolor picks a From colour from the photo
 /// without its swaps).
 pub(crate) fn color_at_with(
     s: &mut Session,

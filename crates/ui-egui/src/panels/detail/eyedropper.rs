@@ -1,5 +1,5 @@
 //! The eyedropper magnifier on the photo (issue #459): every on-canvas eyedropper (white balance, Color Range, Point
-//! Color, Recolor's two, Color Swap's) shows [`crate::widgets::magnifier`] while the pointer is over the photo. It reads the pixels of
+//! Color, Recolor's two, Recolor's) shows [`crate::widgets::magnifier`] while the pointer is over the photo. It reads the pixels of
 //! the loupe's own render, the ones drawn on screen, at the pointer.
 
 use egui::{Pos2, Rect, Response, vec2};

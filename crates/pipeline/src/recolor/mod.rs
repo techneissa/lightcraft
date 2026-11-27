@@ -209,15 +209,29 @@ pub fn apply(lab: [f32; 3], target: [f32; 3], r: &Reference, w: &Window, k: f32)
     }
     let lch = lab_to_lch(lab);
     let [full, hue_w] = membership(lch[0], lch[1], lch[2], r, w);
-    shade(lab, lch, target, r, [full, hue_w], k, false)
+    shade(lab, lch, target, r, [full, hue_w], k, Style::MASK)
+}
+
+/// How [`shade`] treats the pixel: whether it keeps its own lightness (Recolor of the whole photo) or follows the
+/// target's (a mask's Recolor), and how neutral the target is (0..1: white and grey are 1).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Style {
+    pub keep_lightness: bool,
+    pub neutral: f32,
+}
+
+impl Style {
+    /// A mask's Recolor.
+    pub const MASK: Style = Style { keep_lightness: false, neutral: 0.0 };
 }
 
 /// The change of pixel `lab` (OkLab, `lch` its lightness, chroma and hue) that takes the colour of reference `r` to
 /// `target` (OkLab), for a pixel that belongs to it by `member` (`[full, hue]`, [`membership`]) at strength `k`
-/// (0..1). `keep_lightness`: the pixel keeps its own lightness (Color Swap), else it follows the target's (a mask's
-/// Recolor). The part of [`apply`] that keeps the shading; Color Swap (`crate::color_swap`) makes its own
+/// (0..1). [`Style`]: whether the pixel keeps its own lightness (Recolor of the whole photo) or follows the target's (a mask's
+/// Recolor). The part of [`apply`] that keeps the shading; Recolor (`crate::color_swap`) makes its own
 /// membership and shares this.
-pub(crate) fn shade(lab: [f32; 3], lch: [f32; 3], target: [f32; 3], r: &Reference, member: [f32; 2], k: f32, keep_lightness: bool) -> [f32; 3] {
+pub(crate) fn shade(lab: [f32; 3], lch: [f32; 3], target: [f32; 3], r: &Reference, member: [f32; 2], k: f32, style: Style) -> [f32; 3] {
+    let Style { keep_lightness, neutral } = style;
     let [l, c, h] = lch;
     let [full, hue_w] = member;
     let k0 = k.min(1.0);
@@ -238,7 +252,10 @@ pub(crate) fn shade(lab: [f32; 3], lch: [f32; 3], target: [f32; 3], r: &Referenc
     let h1 = ht + (wrap(h - hue(r.h[0], r.h[1])) * keep).clamp(-MAX_HUE_OFFSET, MAX_HUE_OFFSET);
     let (s, co) = h1.sin_cos();
     let new = [l1, c1 * co, c1 * s];
-    let turned = [l1, c * co, c * s];
+    // a hue-only change keeps the pixel's own chroma; to a neutral target (`neutral` 1: white, grey) that chroma would show
+    // the residue hue of the target, so it takes the new chroma instead (a mask's Recolor passes 0: as it was)
+    let own = [l1, c * co, c * s];
+    let turned: [f32; 3] = std::array::from_fn(|i| own[i] + (new[i] - own[i]) * neutral);
     let out: [f32; 3] = std::array::from_fn(|i| lab[i] + (new[i] - lab[i]) * k + (turned[i] - lab[i]) * k_hue);
     if out.iter().all(|v| v.is_finite()) { out } else { lab }
 }

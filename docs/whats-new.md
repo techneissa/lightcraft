@@ -12,9 +12,9 @@
   was a rough mask or had found nothing. It used to keep that one. The Masking panel says when a part is still being
   found, or was not found.
 
-### Color Swap
-- A new Color Swap section in the Edit panel replaces one colour with another across the whole photo, as many as eight at once. Choose the colour to replace and the colour it becomes (swatch, eyedropper or `#rrggbb`), then set Range and Intensity. The new colour keeps the old one's light and shade, in shadow and in highlight, with a smooth edge.
-- Hold ⌥ over a swap's colour or Range, or over the photo, to see exactly what it reaches. More has separate Hue, Saturation and Lightness Range, Edge Softness and Keep Lightness; the eyedropper by Add Color Swap makes a swap from a click on the photo; Before shows the photo without that swap. Saved with the edit, undoable, and carried by Copy / Paste, Sync and presets.
+### Recolor
+- A new Recolor section in the Edit panel replaces one colour with another across the whole photo, as many as eight at once. Choose the colour to replace and the colour it becomes (swatch, eyedropper or `#rrggbb`), then set Range and Intensity. The new colour keeps the old one's light and shade, in shadow and in highlight, with a smooth edge.
+- Hold ⌥ over a swap's colour or Range, or over the photo, to see exactly what it reaches. More has separate Hue, Saturation and Lightness Range, Edge Softness and Keep Lightness; the eyedropper by Add Recolor makes a swap from a click on the photo; Before shows the photo without that swap. Saved with the edit, undoable, and carried by Copy / Paste, Sync and presets.
 
 ### Describe says what to try when it finds nothing
 - When Describe finds nothing for your words, it now says what to try: other or fewer words, zooming in on something

@@ -1,4 +1,4 @@
-//! Fork (issue #460, `fork/color-swap.md`): Color Swap, which replaces one colour with another across the whole photo.
+//! Fork (issue #460, `fork/color-swap.md`): Recolor, which replaces one colour with another across the whole photo.
 //!
 //! It works on display-linear colour in OkLab, after the colour stage and the masks' Recolor and before the vignette
 //! (the stage `crate::finish` runs a pixel through), and the GPU kernel (`color_swap.wgsl`) repeats it step by step.
@@ -10,9 +10,9 @@
 //! chroma over lightness, and the lightness. Chroma over lightness stays the same when light falls on a surface more
 //! or less strongly (OkLab scales with the cube root of light), so a shirt's shadows and highlights are as much "the
 //! shirt" as its middle, which is what lets a swap work in light and shadow. The three terms join as one distance, and
-//! the weight falls from 1 to 0 over the last [`SwapK::edge`] share of it with a smoothstep: no step anywhere in the
-//! colour space, so no banding in a gradient and no halo at an edge. Range scales all three half-widths, the
-//! per-term ranges scale one each, and Edge Softness is the share that fades.
+//! the weight is 1 up to [`SwapK::edge`] (a share of the distance) and falls to 0 at the distance 1 with a smoothstep:
+//! no step anywhere in the colour space, so no banding in a gradient and no halo at an edge. Range scales all three
+//! half-widths, the per-term ranges scale one each, and Edge Softness moves where the fade starts.
 //!
 //! **What changes**: [`crate::recolor::shade`], the part of mask Recolor that keeps shading: the pixel's chroma
 //! relative to the From colour's becomes relative to the To colour's, its hue offset from the From hue (a little)
@@ -24,7 +24,7 @@
 use lightcraft_color::perceptual::{lab_to_lch, oklab_from_2020, oklab_to_2020};
 use lightcraft_develop::{ColorSwap, DevelopSettings};
 
-use crate::recolor::{self, Reference, srgb_to_oklab, wrap};
+use crate::recolor::{self, Reference, Style, srgb_to_oklab, wrap};
 
 /// Words per entry in the GPU parameter block ([`SwapK::words`]).
 pub const SWAP_WORDS: usize = 16;
@@ -43,6 +43,8 @@ pub const PIXEL_COLOURED: [f32; 2] = [0.004, 0.03];
 /// The weakly coloured pixels that take the new hue alone (see [`SwapK::membership`]): from none at the first chroma to
 /// all at the second, and fading out again between the last two (a clearly coloured pixel either belongs or keeps its colour).
 pub const WEAK_CHROMA: [f32; 4] = [0.008, 0.016, 0.03, 0.05];
+/// A To colour with less chroma than the first value is neutral (white, grey); from the second it is not.
+pub const NEUTRAL_CHROMA: [f32; 2] = [0.01, 0.03];
 /// The range view dims what is outside to this share of its lightness and drops its colour.
 pub const VIEW_DIM: f32 = 0.38;
 /// The range view's edge glow: how far a pixel at the middle of the fade moves to the To colour.
@@ -68,7 +70,7 @@ pub struct SwapK {
     pub wh: f32,
     pub ws: f32,
     pub wl: f32,
-    /// Where the fade starts, as a share of the distance (the weight is 1 inside it): `1 − softness`.
+    /// Where the fade starts, as a share of the distance (the weight is 1 inside it): `1 − (0.1 + 0.9 · softness)`.
     pub edge: f32,
     /// The To colour in OkLab.
     pub target: [f32; 3],
@@ -76,6 +78,9 @@ pub struct SwapK {
     pub k: f32,
     /// The pixel keeps its own lightness.
     pub keep: bool,
+    /// How neutral the To colour is, 0..1 ([`NEUTRAL_CHROMA`]): a weakly coloured edge pixel then takes the To colour's
+    /// chroma along with its hue, instead of keeping its own under the residue hue of white.
+    pub neutral: f32,
 }
 
 impl SwapK {
@@ -87,6 +92,7 @@ impl SwapK {
         let f = |v: f64| (v / 100.0) as f32;
         let reach = (f(e.range) * 2.0).max(0.05);
         let width = |[lo, span]: [f32; 2], share: f64| (lo + span * f(share)) * reach;
+        let target = srgb_to_oklab(e.to.unwrap_or(VIEW_AMBER));
         Some(SwapK {
             l,
             c,
@@ -96,19 +102,20 @@ impl SwapK {
             ws: width(SAT_WIDTH, e.sat_range),
             wl: width(LUM_WIDTH, e.lum_range),
             edge: 1.0 - (0.1 + 0.9 * f(e.softness)),
-            target: srgb_to_oklab(e.to.unwrap_or(VIEW_AMBER)),
+            target,
             k: if e.to.is_some() { f(e.intensity) } else { 0.0 },
             keep: e.keep_lightness,
+            neutral: 1.0 - smooth(NEUTRAL_CHROMA[0], NEUTRAL_CHROMA[1], lab_to_lch(target)[1]),
         })
     }
 
     /// The GPU parameter words: from L, C, hue cosine, hue sine, saturation; the three half-widths, the fade's start;
-    /// the To colour; Intensity, Keep Lightness; two spare.
+    /// the To colour; Intensity, Keep Lightness, how neutral the To colour is; one spare.
     pub fn words(&self) -> [f32; SWAP_WORDS] {
         let (s, c) = self.h.sin_cos();
         let [tl, ta, tb] = self.target;
         let mut w = [0.0; SWAP_WORDS];
-        w[..14].copy_from_slice(&[
+        w[..15].copy_from_slice(&[
             self.l,
             self.c,
             c,
@@ -123,6 +130,7 @@ impl SwapK {
             tb,
             self.k,
             f32::from(u8::from(self.keep)),
+            self.neutral,
         ]);
         w
     }
@@ -167,7 +175,7 @@ impl SwapK {
         }
         let (s, c) = self.h.sin_cos();
         let r = Reference { l: self.l, c: self.c, h: [c, s], spread: 0.0 };
-        recolor::shade(lab, lch, self.target, &r, member, self.k, self.keep)
+        recolor::shade(lab, lch, self.target, &r, member, self.k, Style { keep_lightness: self.keep, neutral: self.neutral })
     }
 
     /// The range view of display-linear `d`: the photo dimmed and drained of colour where the entry does not reach,

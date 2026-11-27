@@ -1600,7 +1600,7 @@ pub(crate) fn view_overlay(app: &LightcraftApp, d: &DevelopSettings, frame: u64)
         return Overlay::Spots(app.ui.spots_threshold.clamp(0.0, 100.0).round() as u8);
     }
     let edit = app.ui.right == RightPanel::Edit;
-    // Color Swap (fork, issue #460): the Before button held, or ⌥ over an entry's From colour or Range or over the photo
+    // Recolor (fork, issue #460): the Before button held, or ⌥ over an entry's From colour or Range or over the photo
     if edit && let Some(o) = crate::panels::edit::color_swap_overlay(app, d, frame) {
         return o;
     }
@@ -1732,7 +1732,7 @@ fn general_interaction(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::
         }
         return;
     }
-    // ⌥ over the photo shows what the entry in use reaches (Color Swap, issue #460)
+    // ⌥ over the photo shows what the entry in use reaches (Recolor, issue #460)
     crate::panels::edit::color_swap_hover(app, ui, resp);
     click_zoom_and_pan(app, resp, img, canvas);
     let _ = (native, aspect);

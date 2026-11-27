@@ -77,7 +77,7 @@ impl EditSection {
         match self {
             EditSection::Light => "Light",
             EditSection::Color => "Color",
-            EditSection::ColorSwap => "Color Swap",
+            EditSection::ColorSwap => "Recolor",
             EditSection::Effects => "Effects",
             EditSection::Detail => "Detail",
             EditSection::Optics => "Optics",

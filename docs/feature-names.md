@@ -14,11 +14,8 @@ All 17 shipped non-English catalogs contain the new labels. The normal CI, persp
 
 The standard-library-only `display_names` integration tests scan production Rust string literals for the retired display names and preserve explicit compatibility exceptions. They also test identifier, comment and raw-string handling. These focused checks do not replace application or visual testing.
 
-## Color Swap (issue #460)
+## Recolor, the whole-photo colour replacement (issue #460)
 
-The Edit panel section that replaces one colour with another across the photo is called **Color Swap**. Its first working name, "Replace Color", is another company's feature name and is not used anywhere a user sees; the commands, settings keys and code say `colorSwap` / `color_swaps`.
+The Edit panel section that replaces one colour with another across the photo is called **Recolor** (techneissa's decision, the Decision comment on #460). It is the name the Masking panel's Recolor rows already have (issue #83): one word for changing a colour while keeping its shading. "Replace Color" is another company's feature name and is not used anywhere a user sees. The commands, settings keys and code say `colorSwap` / `color_swaps` (ids are not user-visible text, naming rule 2).
 
-Checked on 2026-11-27 against `standards/naming.md` rule 4, with a web search only (the register sites need a browser form, which an agent run could not use):
-- Descriptive use by unrelated products: Pixelmator Pro and Photomator call their feature "Replace Color"; Luminar describes a colour swap through masking; "color swap" and "swap colors" are plain words several free browser tools use for the same job; ColorSwapp is a phone app that does it.
-- A US register search by an aggregator (Justia) found no "COLOR SWAP" mark, only unrelated COLOR SWITCH (games), COLOR SPLASH (a photo app mark) and COLORSNAP marks.
-- Not done: the owner's trademark lists, USPTO, EUIPO and the WIPO Global Brand Database searched by hand. **The name is therefore not cleared.** Rule 5 says unclear means no: if a Craft owner prefers another name, the rename changes the labels only (`Color Swap` in `edit_sections.rs`, `controls.rs`, `presets.rs`, `edit.rs`, the panel and the docs), and the old label stays as an undisplayed search alias.
+Recolor is a plain descriptive word; no register search was run for it.

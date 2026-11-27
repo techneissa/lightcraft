@@ -80,6 +80,10 @@ impl DevelopSettings {
             detail.insert("nr_outliers".into(), Value::Bool(self.detail.nr_outliers));
         }
         retouch::state_for_merge(&mut v, self);
+        // (fork, issue #460: no Recolor entries stated as an empty list, so copying a photo without any takes the target's away)
+        if let Some(o) = v.as_object_mut() {
+            o.entry(color_swap::KEY).or_insert_with(|| Value::Array(Vec::new()));
+        }
         v
     }
 
@@ -204,7 +208,7 @@ impl DevelopSettings {
         if off("detail") {
             d.reset_section(Section::Detail);
         }
-        // (fork, issue #460: Color Swap's own eye)
+        // (fork, issue #460: Recolor's own eye)
         if swaps_off {
             d.color_swaps.clear();
         }

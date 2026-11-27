@@ -1,4 +1,4 @@
-//! Fork (issue #460, `fork/color-swap.md`): the Color Swap section of the Edit panel. Each entry is a card: its name, its
+//! Fork (issue #460, `fork/color-swap.md`): the Recolor section of the Edit panel. Each entry is a card: its name, its
 //! on / off switch, move and remove buttons; the colour to replace and the colour it becomes (a swatch with the
 //! colour picker, an eyedropper, a `#rrggbb` field each); Range and Intensity; and, folded under More, the range's hue,
 //! saturation and lightness widths, Edge Softness and Keep Lightness. Every change goes through a `colorSwap.*` command
@@ -44,7 +44,7 @@ pub fn pick_tool(i: usize, side: Side) -> String {
     format!("colorSwapPick:{i}:{}", side.key())
 }
 
-/// What an on-canvas tool name asks for: the entry (`None`: add one) and the side. `None` when it is not a Color Swap
+/// What an on-canvas tool name asks for: the entry (`None`: add one) and the side. `None` when it is not a Recolor
 /// eyedropper.
 pub fn pick_target(tool: &str) -> Option<(Option<usize>, Side)> {
     if tool == ADD_TOOL {
@@ -64,6 +64,11 @@ pub fn pick_target(tool: &str) -> Option<(Option<usize>, Side)> {
 const SWATCH: [f32; 2] = [46.0, 28.0];
 const DROPPER: f32 = 28.0;
 
+/// The entry's name as the panel shows it: its own, or "Recolor n" for place `i` (0-based).
+fn display_name(i: usize, e: &ColorSwap) -> String {
+    if e.name.trim().is_empty() { crate::i18n::tr_format!("Recolor {n}", n = (i + 1).to_string()) } else { e.name.clone() }
+}
+
 pub(super) fn color_swap(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings) {
     let t = Tokens::get(ui.ctx());
     let n = d.color_swaps.len();
@@ -74,7 +79,7 @@ pub(super) fn color_swap(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &Develop
     egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 8, bottom: 4 }).show(ui, |ui| {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
-            if text_button(ui, "colorSwapAdd", "Add Color Swap", false).clicked()
+            if text_button(ui, "colorSwapAdd", "Add Recolor", false).clicked()
                 && !full
                 && let Ok(r) = app.run("colorSwap.add", json!({}))
             {
@@ -119,7 +124,7 @@ pub(super) fn color_swap(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &Develop
             crate::widgets::divider(ui);
         }
     }
-    drop_line(app, ui, &prev);
+    drop_line(ui, &prev);
     ui.data_mut(|data| data.insert_temp(rects_id, rects));
 }
 
@@ -128,22 +133,36 @@ fn fold_key(i: usize) -> String {
     format!("colorSwap:{i}")
 }
 
-/// Entry `from` moved to place `to` (or removed, `to` `None`): the folded states and the entry in use follow it.
-fn remap_folded(app: &mut LightcraftApp, n: usize, from: usize, to: Option<usize>) {
-    let mut flags: Vec<bool> = (0..n).map(|i| app.ui.section_folded(&fold_key(i))).collect();
+/// Moves the keys `<prefix><i>` of a list (folded sections, open flyouts) with entry `from`: to place `to`, or dropped when
+/// it is removed (`to` `None`).
+fn remap_keys(keys: &mut Vec<String>, prefix: &str, n: usize, from: usize, to: Option<usize>) {
+    let mut flags: Vec<bool> = (0..n).map(|i| keys.iter().any(|k| *k == format!("{prefix}{i}"))).collect();
     if from < flags.len() {
         let f = flags.remove(from);
         if let Some(to) = to {
             flags.insert(to.min(flags.len()), f);
         }
     }
-    app.ui.folded_sections.retain(|k| !k.starts_with("colorSwap:"));
-    app.ui.folded_sections.extend(flags.iter().enumerate().filter(|(_, f)| **f).map(|(i, _)| fold_key(i)));
-    if let Some(to) = to
-        && app.ui.color_swap == from
-    {
-        app.ui.color_swap = to;
+    keys.retain(|k| !k.starts_with(prefix));
+    keys.extend(flags.iter().enumerate().filter(|(_, f)| **f).map(|(i, _)| format!("{prefix}{i}")));
+}
+
+/// The entry in use after entry `from` moved to place `to` (or was removed, `to` `None`): it stays the same entry.
+fn shifted_active(a: usize, from: usize, to: Option<usize>) -> usize {
+    match to {
+        Some(t) if a == from => t,
+        Some(t) if from < a && a <= t => a - 1,
+        Some(t) if t <= a && a < from => a + 1,
+        None if a > from => a - 1,
+        _ => a,
     }
+}
+
+/// Entry `from` moved to place `to` (or removed, `to` `None`): its folded state, its More state and the entry in use follow it.
+fn remap_folded(app: &mut LightcraftApp, n: usize, from: usize, to: Option<usize>) {
+    remap_keys(&mut app.ui.folded_sections, "colorSwap:", n, from, to);
+    remap_keys(&mut app.ui.open_flyouts, "colorSwapMore:", n, from, to);
+    app.ui.color_swap = shifted_active(app.ui.color_swap, from, to);
 }
 
 /// Moves entry `i` to place `to` by the registered command; true when it moved.
@@ -166,8 +185,10 @@ fn place_of(i: usize, slot: usize) -> usize {
 }
 
 /// While a header is dragged: the line where it would drop.
-fn drop_line(app: &mut LightcraftApp, ui: &mut egui::Ui, rects: &[Rect]) {
-    let Some(from) = ui.data(|d| d.get_temp::<usize>(egui::Id::unique("lc-colorswap-drag"))) else { return };
+fn drop_line(ui: &mut egui::Ui, rects: &[Rect]) {
+    if ui.data(|d| d.get_temp::<usize>(egui::Id::unique("lc-colorswap-drag"))).is_none() {
+        return;
+    }
     let Some(pointer) = ui.input(|i| i.pointer.interact_pos()) else { return };
     let (Some(first), Some(last)) = (rects.first(), rects.last()) else { return };
     let slot = slot_at(rects, pointer.y);
@@ -177,7 +198,6 @@ fn drop_line(app: &mut LightcraftApp, ui: &mut egui::Ui, rects: &[Rect]) {
     ui.painter().rect_filled(line, CornerRadius::same(1), t.pick);
     register(ui, "colorSwapDrop", line);
     ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
-    let _ = (app, from);
 }
 
 /// One entry, as wide as the panel: its header (a click folds it, a drag moves it), then its colours and sliders.
@@ -207,16 +227,22 @@ fn entry(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings, i: usi
     rect
 }
 
-/// The header row: the disclosure arrow, the name (typed over to rename), the on / off switch and Remove. A click on the
-/// row folds the entry, a drag moves it (`colorSwap.move`), and with the row focused Space or Enter folds it and ⌥↑ / ⌥↓
-/// moves it.
+/// The header row: the disclosure arrow, the name, the on / off switch and Remove. A click anywhere on the row folds the
+/// entry, a drag anywhere moves it (`colorSwap.move`), a double-click on the name renames it (F2 with the row focused
+/// too); with the row focused Space or Enter folds it and ⌥↑ / ⌥↓ moves it.
 fn header(app: &mut LightcraftApp, ui: &mut egui::Ui, i: usize, n: usize, e: &ColorSwap, folded: bool, prev: &[Rect]) {
+    use egui::{Key, Modifiers};
     let t = Tokens::get(ui.ctx());
-    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 28.0), Sense::hover());
-    // (made before the widgets on it, so the name, the switch and Remove are above it and keep their own clicks)
+    let name_w = (ui.available_width() - 20.0 - 38.0 - 24.0 - 12.0).max(60.0);
+    // (the name wraps: never cut off)
+    let shown = display_name(i, e);
+    let galley = ui.painter().layout(shown.clone(), t.semibold(13.0), t.text, name_w);
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), (galley.size().y + 12.0).max(28.0)), Sense::hover());
+    // (made before the widgets on it, so the switch and Remove are above it and keep their own clicks)
     let resp = ui.interact(rect, ui.scope_id().with("colorSwapHeader"), Sense::click_and_drag());
-    crate::widgets::announce_disclosure(&resp, true, !folded, e.display_name(i));
+    crate::widgets::announce_disclosure(&resp, true, !folded, &shown);
     register(ui, format!("colorSwapHeader:{i}"), rect);
+    let name_rect = Rect::from_min_size(pos2(rect.left() + 20.0, rect.top()), vec2(name_w, rect.height()));
     let focus_key = egui::Id::unique("lc-colorswap-focus");
     if ui.data(|d| d.get_temp::<usize>(focus_key)) == Some(i) {
         ui.data_mut(|d| d.remove::<usize>(focus_key));
@@ -224,6 +250,15 @@ fn header(app: &mut LightcraftApp, ui: &mut egui::Ui, i: usize, n: usize, e: &Co
     }
     let drag_key = egui::Id::unique("lc-colorswap-drag");
     let dragging = ui.data(|d| d.get_temp::<usize>(drag_key)) == Some(i);
+    // renaming: the frame it began in, while the name is a text field
+    let rename_key = egui::Id::unique("lc-colorswap-rename");
+    let now = ui.ctx().cumulative_frame_nr();
+    let double_on_name = resp.double_clicked() && ui.input(|inp| inp.pointer.interact_pos()).is_some_and(|q| name_rect.contains(q));
+    if double_on_name || (resp.has_focus() && ui.input(|inp| inp.key_pressed(Key::F2))) {
+        ui.data_mut(|d| d.insert_temp(rename_key, (i, now)));
+        ui.memory_mut(|m| m.request_focus(crate::text_field::id(&format!("field:colorSwapName:{i}"))));
+    }
+    let renaming = ui.data(|d| d.get_temp::<(usize, u64)>(rename_key)).filter(|(r, _)| *r == i);
     let p = ui.painter();
     if dragging || resp.hovered() {
         p.rect_filled(rect, CornerRadius::same(4), t.hover.gamma_multiply(if dragging { 0.9 } else { 0.5 }));
@@ -237,37 +272,46 @@ fn header(app: &mut LightcraftApp, ui: &mut egui::Ui, i: usize, n: usize, e: &Co
         if folded { Icon::ChevronRight } else { Icon::ChevronDown },
         t.text_label,
     );
+    if renaming.is_none() {
+        let at = pos2(name_rect.left(), name_rect.center().y - galley.size().y / 2.0);
+        ui.painter().galley(at, galley, t.text);
+    }
     if resp.has_focus() {
         crate::widgets::focus_ring(ui.painter(), rect, &t);
     }
     ui.scope_builder(UiBuilder::new().max_rect(rect).layout(Layout::left_to_right(Align::Center)), |ui| {
         ui.spacing_mut().item_spacing.x = 6.0;
         ui.add_space(20.0);
-        let draft = egui::Id::unique("lc-colorswap-name").with(i);
-        let shown = e.display_name(i);
-        let mut text = ui.data(|d| d.get_temp::<String>(draft)).unwrap_or_else(|| e.name.clone());
-        let widget = format!("field:colorSwapName:{i}");
-        let field = crate::text_field::TextField::singleline(&widget, &mut text)
-            .width((ui.available_width() - 38.0 - 24.0 - 12.0).max(60.0))
-            .hint(shown)
-            .font(t.semibold(13.0))
-            .select_on_focus(true)
-            .show(ui);
-        if field.ending.is_some() || !field.editing {
-            ui.data_mut(|d| d.remove::<String>(draft));
-            if field.committed() && text.trim() != e.name.trim() {
-                let _ = app.run("colorSwap.set", json!({"index": i, "name": text.trim()}));
+        if let Some((_, since)) = renaming {
+            let draft = egui::Id::unique("lc-colorswap-name").with(i);
+            let mut text = ui.data(|d| d.get_temp::<String>(draft)).unwrap_or_else(|| e.name.clone());
+            let widget = format!("field:colorSwapName:{i}");
+            let field = crate::text_field::TextField::singleline(&widget, &mut text)
+                .width(name_w)
+                .hint(shown.clone())
+                .font(t.semibold(13.0))
+                .select_on_focus(true)
+                .show(ui);
+            // (not over in the frame it began in: the field takes focus then)
+            if field.ending.is_some() || (!field.editing && now > since + 1) {
+                ui.data_mut(|d| {
+                    d.remove::<String>(draft);
+                    d.remove::<(usize, u64)>(rename_key);
+                });
+                if field.committed() && text.trim() != e.name.trim() {
+                    let _ = app.run("colorSwap.set", json!({"index": i, "name": text.trim()}));
+                }
+            } else {
+                ui.data_mut(|d| d.insert_temp(draft, text.clone()));
             }
-        } else {
-            ui.data_mut(|d| d.insert_temp(draft, text.clone()));
         }
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if icon_button(ui, &format!("colorSwapRemove:{i}"), Icon::Close, vec2(24.0, 24.0), false, true, "Remove Color Swap").clicked()
+            if icon_button(ui, &format!("colorSwapRemove:{i}"), Icon::Close, vec2(24.0, 24.0), false, true, "Remove Recolor").clicked()
                 && app.run("colorSwap.remove", json!({"index": i})).is_ok()
             {
                 remap_folded(app, n, i, None);
             }
-            if switch(ui, &format!("colorSwapOn:{i}"), e.on, &crate::i18n::tr_format!("{name} on", name = e.display_name(i))).clicked() {
+            if switch(ui, &format!("colorSwapOn:{i}"), e.on, &crate::i18n::tr_format!("{name} on", name = display_name(i, e))).clicked() {
                 let _ = app.run("colorSwap.set", json!({"index": i, "on": !e.on}));
             }
         });
@@ -276,7 +320,7 @@ fn header(app: &mut LightcraftApp, ui: &mut egui::Ui, i: usize, n: usize, e: &Co
     if resp.clicked() {
         app.ui.toggle_folded(&fold_key(i));
     }
-    // a drag moves: released where the line showed
+    // a drag moves: released where the line showed; the focus goes with the entry
     if resp.drag_started() {
         ui.data_mut(|d| d.insert_temp(drag_key, i));
         app.ui.color_swap = i;
@@ -287,12 +331,13 @@ fn header(app: &mut LightcraftApp, ui: &mut egui::Ui, i: usize, n: usize, e: &Co
             && let Some(pointer) = ui.input(|inp| inp.pointer.interact_pos())
         {
             let to = place_of(i, slot_at(prev, pointer.y));
-            move_entry(app, n, i, to);
+            if move_entry(app, n, i, to) {
+                ui.data_mut(|d| d.insert_temp(focus_key, to));
+            }
         }
     }
     // ⌥↑ / ⌥↓ with the row focused move it (and the focus goes with it)
     if resp.has_focus() {
-        use egui::{Key, Modifiers};
         let up = ui.input_mut(|inp| inp.consume_key(Modifiers::ALT, Key::ArrowUp));
         let down = ui.input_mut(|inp| inp.consume_key(Modifiers::ALT, Key::ArrowDown));
         let to = if up {
@@ -321,9 +366,12 @@ fn switch(ui: &mut egui::Ui, id: &str, on: bool, label: &str) -> egui::Response 
     let p = ui.painter();
     p.rect_filled(r, CornerRadius::same(11), track);
     let x = r.left() + 11.0 + t_on * (r.width() - 22.0);
-    p.circle_filled(pos2(x, r.center().y), 8.5, Color32::from_gray(if on { 245 } else { 215 }));
+    p.circle_filled(pos2(x, r.center().y), 8.5, t.thumb);
     if resp.hovered() {
         p.rect_stroke(r, CornerRadius::same(11), Stroke::new(1.0, t.text_dim), StrokeKind::Inside);
+    }
+    if resp.has_focus() {
+        crate::widgets::focus_ring(ui.painter(), r, &t);
     }
     resp.on_hover_text(tr(if on { "Turn Swap Off" } else { "Turn Swap On" }))
 }
@@ -375,11 +423,14 @@ fn swatch(app: &mut LightcraftApp, ui: &mut egui::Ui, i: usize, side: Side, colo
             p.rect_filled(r, rounding, Color32::from_rgb(r8, g8, b8));
         }
         None => {
-            p.rect_filled(r, rounding, Color32::WHITE);
-            p.line_segment([r.left_bottom() + vec2(3.0, -3.0), r.right_top() + vec2(-3.0, 3.0)], Stroke::new(1.5, Color32::from_rgb(220, 60, 50)));
+            p.rect_filled(r, rounding, t.thumb);
+            p.line_segment([r.left_bottom() + vec2(3.0, -3.0), r.right_top() + vec2(-3.0, 3.0)], Stroke::new(1.5, t.reject));
         }
     }
     p.rect_stroke(r, rounding, Stroke::new(1.0, if resp.hovered() { t.text_dim } else { t.button_border }), StrokeKind::Inside);
+    if resp.has_focus() {
+        crate::widgets::focus_ring(ui.painter(), r, &t);
+    }
     let resp = resp.on_hover_text(tr(if side == Side::From { "Color to Replace" } else { "New Color" }));
     let before = colour.map_or([255u8; 3], |c| c.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8));
     let mut picked = Color32::from_rgb(before[0], before[1], before[2]);
@@ -392,7 +443,7 @@ fn swatch(app: &mut LightcraftApp, ui: &mut egui::Ui, i: usize, side: Side, colo
     let picking = ui.data(|d| d.get_temp::<bool>(held)).unwrap_or(false);
     if changed {
         if !picking {
-            let _ = app.run("develop.beginInteraction", json!({"label": "Color Swap"}));
+            let _ = app.run("develop.beginInteraction", json!({"label": "Recolor"}));
             ui.data_mut(|d| d.insert_temp(held, true));
         }
         let hex = to_hex([picked.r(), picked.g(), picked.b()].map(|v| f64::from(v) / 255.0));
@@ -497,6 +548,9 @@ fn more(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings, i: usiz
         paint(p, Rect::from_center_size(pos2(r.left() + 8.0, r.center().y), vec2(14.0, 14.0)), chevron, t.text_label);
         let colour = if resp.hovered() { t.text } else { t.text_label };
         p.text(pos2(r.left() + 20.0, r.center().y), egui::Align2::LEFT_CENTER, tr("More"), t.font(12.0), colour);
+        if resp.has_focus() {
+            crate::widgets::focus_ring(ui.painter(), r, &t);
+        }
         if resp.clicked() {
             app.ui.toggle_flyout(&key);
         }
@@ -541,7 +595,7 @@ pub(crate) fn hover(app: &mut LightcraftApp, ui: &egui::Ui, resp: &egui::Respons
     }
 }
 
-/// The overlay Color Swap asks the loupe for: the Before button's, or the range of the entry ⌥ is over this frame (or
+/// The overlay Recolor asks the loupe for: the Before button's, or the range of the entry ⌥ is over this frame (or
 /// the last: the panel and the photo are drawn in either order). Only an entry with a From colour has a range.
 pub(crate) fn overlay(app: &LightcraftApp, d: &DevelopSettings, frame: u64) -> Option<lightcraft_pipeline::Overlay> {
     use lightcraft_pipeline::Overlay;
@@ -554,4 +608,26 @@ pub(crate) fn overlay(app: &LightcraftApp, d: &DevelopSettings, frame: u64) -> O
     let (i, at) = app.ui.color_swap_peek?;
     let fresh = app.ui.alt_held && frame.saturating_sub(at) <= 1;
     (fresh && d.color_swaps.get(i).is_some_and(|e| e.from.is_some())).then_some(Overlay::ColorSwapRange(i as u8))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Moving or removing an entry keeps the entry in use, and an entry's folded and More states, with the entry.
+    #[test]
+    fn the_entry_in_use_and_the_per_entry_states_follow_a_move_and_a_remove() {
+        // entries 0..4: the one in use before and after the move 1 → 3, and after removing 1
+        let moved: Vec<usize> = (0..4).map(|a| shifted_active(a, 1, Some(3))).collect();
+        assert_eq!(moved, [0, 3, 1, 2]);
+        let back: Vec<usize> = (0..4).map(|a| shifted_active(a, 3, Some(1))).collect();
+        assert_eq!(back, [0, 2, 3, 1]);
+        let removed: Vec<usize> = [0, 2, 3].map(|a| shifted_active(a, 1, None)).to_vec();
+        assert_eq!(removed, [0, 1, 2]);
+        let mut keys = vec!["colorSwap:1".to_string(), "other".to_string()];
+        remap_keys(&mut keys, "colorSwap:", 4, 1, Some(3));
+        assert!(keys.contains(&"colorSwap:3".to_string()) && !keys.contains(&"colorSwap:1".to_string()) && keys.contains(&"other".to_string()));
+        remap_keys(&mut keys, "colorSwap:", 4, 3, None);
+        assert!(!keys.iter().any(|k| k.starts_with("colorSwap:")));
+    }
 }

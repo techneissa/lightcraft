@@ -1,6 +1,6 @@
-// Color Swap (fork, issue #460): `lightcraft_pipeline::color_swap`, step by step. An entry's words are in the parameter
+// Recolor (fork, issue #460): `lightcraft_pipeline::color_swap`, step by step. An entry's words are in the parameter
 // block from `b` (`SwapK::words`: From L, C, hue cos, hue sin, saturation; the hue, saturation and lightness
-// half-widths; where the fade starts; the To colour in OkLab; Intensity; Keep Lightness).
+// half-widths; where the fade starts; the To colour in OkLab; Intensity; Keep Lightness; how neutral the To colour is).
 
 // `SwapK::membership` for a pixel of OkLab `lab`: the weight of the whole change and of a change of hue alone.
 fn swap_member(b: u32, lab: vec3<f32>) -> vec2<f32> {
@@ -56,7 +56,9 @@ fn swap_one(b: u32, lab: vec3<f32>) -> vec3<f32> {
     let keep = coloured * rc_smooth(RC_GREY0, RC_GREY1, c);
     let h1 = ht + clamp(wrap_angle(h - hr) * keep, -RC_MAX_HUE, RC_MAX_HUE);
     let nlab = vec3<f32>(l1, c1 * cos(h1), c1 * sin(h1));
-    let turned = vec3<f32>(l1, c * cos(h1), c * sin(h1));
+    // (to a neutral To colour a hue-only change takes the new chroma too: `SwapK::neutral`, `recolor::shade`)
+    let own = vec3<f32>(l1, c * cos(h1), c * sin(h1));
+    let turned = own + (nlab - own) * pf(b + 14u);
     return lab + (nlab - lab) * k + (turned - lab) * k_hue;
 }
 

@@ -27,7 +27,7 @@ pub enum Section {
     Profile,
     Calibration,
     PointColor,
-    /// Color Swap (fork, issue #460; its entries are in [`crate::color_swap`]).
+    /// Recolor (fork, issue #460; its entries are in [`crate::color_swap`]).
     ColorSwap,
     RedEye,
     /// Portrait retouching (fork, `fork/retouch-foundation.md`; its controls are in [`crate::retouch`]).
@@ -55,7 +55,7 @@ impl Section {
             Section::Profile => "Profile",
             Section::Calibration => "Calibration",
             Section::PointColor => "Point Color",
-            Section::ColorSwap => "Color Swap",
+            Section::ColorSwap => "Recolor",
             Section::RedEye => "Red Eye",
             Section::Portrait => "Portrait",
             Section::LensBlur => "Lens Blur",

@@ -1,4 +1,4 @@
-//! Color Swap (fork, issue #460, `fork/color-swap.md`): the entries that replace one colour with another across the
+//! Recolor (fork, issue #460, `fork/color-swap.md`): the entries that replace one colour with another across the
 //! whole photo. `colorSwap.add`, `colorSwap.set`, `colorSwap.remove` and `colorSwap.move` change the list (each one
 //! undo step), `colorSwap.pick` takes a colour from a point of a photo (and with no entry named, adds one from it:
 //! click on the photo), `colorSwap.list` reads it. The entries' sliders are indexed controls too:
@@ -18,7 +18,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(
             "colorSwap.add",
-            "Add Color Swap",
+            "Add Recolor",
             [],
             None,
             "{from?: \"#rrggbb\", to?: \"#rrggbb\", name?} — adds a colour swap (at most 8) at the end of the list; it changes nothing until both colours are set; answers `{index}`",
@@ -27,17 +27,17 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         cmd!(
             "colorSwap.set",
-            "Change Color Swap",
+            "Change Recolor",
             [],
             None,
             "{index, name?, on?, from?: \"#rrggbb\"|null, to?: \"#rrggbb\"|null, keepLightness?, range?, intensity?, hueRange?, satRange?, lumRange?, softness?: 0..100} — changes one swap, as one undo step; answers the swap (`colorSwap.list`'s entry)",
             has_active,
             set
         ),
-        cmd!("colorSwap.remove", "Remove Color Swap", [], None, "{index}", has_active, remove),
+        cmd!("colorSwap.remove", "Remove Recolor", [], None, "{index}", has_active, remove),
         cmd!(
             "colorSwap.move",
-            "Move Color Swap",
+            "Move Recolor",
             [],
             None,
             "{index, to} — moves a swap to place `to` (0 = first); swaps run in order, each on what the ones before made",
@@ -46,7 +46,7 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         cmd!(
             "colorSwap.pick",
-            "Pick Color Swap Color",
+            "Pick Photo Recolor Color",
             [],
             None,
             "{x, y, index?, target?: \"from\"|\"to\", photo?: photo id} — takes the colour at (x, y) (each 0..1 across the uncropped photo; outside is an error) of `photo` as developed (default: the active photo; a From colour is read without the photo's swaps, so it is the colour the swap will see). With `index` it sets that swap's `target` (default `from`); without, it adds a swap from this colour (at most 8); answers `{index, color}`",
@@ -55,7 +55,7 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         cmd!(
             query "colorSwap.list",
-            "List Color Swaps",
+            "List Recolors",
             [],
             None,
             "{} — the active photo's swaps in order: `{index, name, on, from, to, active, keepLightness, range, intensity, hueRange, satRange, lumRange, softness}` (colours as \"#rrggbb\" or null)",
@@ -69,7 +69,7 @@ pub fn specs() -> Vec<CommandSpec> {
 fn entry_json(i: usize, e: &ColorSwap) -> Value {
     json!({
         "index": i,
-        "name": e.display_name(i),
+        "name": e.name,
         "on": e.on,
         "from": e.from.map(to_hex),
         "to": e.to.map(to_hex),
@@ -175,7 +175,7 @@ fn add(s: &mut Session, p: &Value) -> Result<Value> {
     change(&mut e, p, c)?;
     d.color_swaps.push(e);
     let i = d.color_swaps.len() - 1;
-    s.set_develop(id, d, "Add Color Swap")?;
+    s.set_develop(id, d, "Add Recolor")?;
     Ok(json!({"index": i}))
 }
 
@@ -187,7 +187,7 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
     change(&mut d.color_swaps[i], p, c)?;
     let e = d.color_swaps[i].clone();
     if e != before {
-        s.set_develop(id, d, "Color Swap")?;
+        s.set_develop(id, d, "Recolor")?;
     }
     Ok(entry_json(i, &e))
 }
@@ -197,7 +197,7 @@ fn remove(s: &mut Session, p: &Value) -> Result<Value> {
     let (id, mut d) = photo_settings(s, c)?;
     let i = entry_at(&mut d, p, c)?;
     d.color_swaps.remove(i);
-    s.set_develop(id, d, "Remove Color Swap")?;
+    s.set_develop(id, d, "Remove Recolor")?;
     Ok(Value::Null)
 }
 
@@ -209,7 +209,7 @@ fn move_to(s: &mut Session, p: &Value) -> Result<Value> {
     if to != i {
         let e = d.color_swaps.remove(i);
         d.color_swaps.insert(to, e);
-        s.set_develop(id, d, "Move Color Swap")?;
+        s.set_develop(id, d, "Move Recolor")?;
     }
     Ok(json!({"index": to}))
 }
@@ -222,7 +222,10 @@ fn pick(s: &mut Session, p: &Value) -> Result<Value> {
         None => active,
         Some(v) => PhotoId(v.as_u64().ok_or_else(|| bad(c, "`photo` must be a photo id (a whole number)"))?),
     };
-    let target = p.get("target").and_then(Value::as_str).unwrap_or("from");
+    let target = match p.get("target").filter(|v| !v.is_null()) {
+        None => "from",
+        Some(v) => v.as_str().ok_or_else(|| bad(c, "`target` must be \"from\" or \"to\""))?,
+    };
     if !matches!(target, "from" | "to") {
         return Err(bad(c, format!("unknown target {target:?} (from|to)")));
     }
@@ -249,7 +252,7 @@ fn pick(s: &mut Session, p: &Value) -> Result<Value> {
     } else {
         e.to = Some(rgb);
     }
-    s.set_develop(active, d, "Pick Color Swap Color")?;
+    s.set_develop(active, d, "Pick Photo Recolor Color")?;
     Ok(json!({"index": i, "color": to_hex(rgb)}))
 }
 
