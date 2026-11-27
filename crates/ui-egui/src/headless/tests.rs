@@ -4711,9 +4711,11 @@ fn trackpad_navigation_keeps_the_image_cursor_between_events() {
     h.request("ui.move", json!({"x": anchor.x, "y": anchor.y}), t);
     for (tool, expected) in [
         ("", egui::CursorIcon::Grab),
-        ("wbPicker", egui::CursorIcon::Crosshair),
-        ("colorRange", egui::CursorIcon::Crosshair),
-        ("pointColor", egui::CursorIcon::Crosshair),
+        // (an eyedropper's magnifier is centred on the pointer here and hides the cursor: its outlined cell is the
+        // pointer, #464)
+        ("wbPicker", egui::CursorIcon::None),
+        ("colorRange", egui::CursorIcon::None),
+        ("pointColor", egui::CursorIcon::None),
         ("tat:curve", egui::CursorIcon::ResizeVertical),
     ] {
         h.app.ui.tool = tool.into();
