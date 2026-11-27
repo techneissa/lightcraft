@@ -6,6 +6,8 @@
 //! live shortcuts and enabled state, and a pick goes through [`crate::menus::menubar::run_item`],
 //! so undo, dialogs and disabled rows behave exactly as from the menu. A disabled command is shown
 //! greyed and does not run. Commands that are not in a menu (they need parameters) are not listed.
+//!
+//! What is picked here is remembered ([`History`]) and ranks higher the next time ([`filter`]).
 
 use egui::{Align2, Key, Modifiers, Sense, vec2};
 use serde_json::Value;
@@ -13,6 +15,9 @@ use serde_json::Value;
 use crate::LightcraftApp;
 use crate::menus::menubar::{MenuNode, display_item_label, menu_bar, run_item, shortcut_text};
 use crate::theme::Tokens;
+
+mod history;
+pub use history::History;
 
 /// The command that opens (and closes) the palette.
 pub const COMMAND: &str = "view.commandPalette";
@@ -31,6 +36,9 @@ const MAX_ROWS: usize = 12;
 const MAX_LIST_H: f32 = ROW_H * MAX_ROWS as f32;
 /// The space kept free under the list in a window too short for a full one.
 const SCREEN_GAP: f32 = 24.0;
+/// A command picked before for the typed text counts as matching this much better: it passes a match one step better
+/// (the label's first word against a later one), never a clearly better one.
+const PICKED_BONUS: i32 = 20;
 /// How far PageUp / PageDown move the highlight.
 const PAGE: usize = 8;
 
@@ -130,8 +138,12 @@ fn token_score(token: &str, label: &str, path: &str) -> Option<i32> {
 }
 
 /// The score of an entry for a query (words separated by spaces: every word must match), or
-/// `None` when it does not match. An empty query matches everything equally.
-pub fn score(query: &str, entry: &Entry) -> Option<i32> {
+/// `None` when it does not match: how well the words match, then a tie-break between equal matches
+/// that past use goes ahead of. An empty query matches everything equally.
+pub fn score(query: &str, entry: &Entry) -> Option<(i32, i32)> {
+    if query.trim().is_empty() {
+        return Some((0, 0));
+    }
     let label = entry.label.to_lowercase();
     let path = entry.path.to_lowercase();
     let mut total = 0i32;
@@ -141,17 +153,32 @@ pub fn score(query: &str, entry: &Entry) -> Option<i32> {
     // between equal matches the shorter label is the likelier target, and one that can run now
     // comes before one that cannot
     let off = if entry.enabled { 0 } else { 2 };
-    Some(total.saturating_sub(i32::try_from(label.chars().count() / 4).unwrap_or(0)).saturating_sub(off))
+    let short = i32::try_from(label.chars().count() / 4).unwrap_or(0).saturating_add(off);
+    Some((total, -short))
 }
 
-/// The entries a query leaves, best first (equal scores keep the menu order).
-pub fn filter(entries: &[Entry], query: &str) -> Vec<Entry> {
-    if query.trim().is_empty() {
-        return entries.to_vec();
-    }
-    let mut scored: Vec<(i32, &Entry)> = entries.iter().filter_map(|e| score(query, e).map(|s| (s, e))).collect();
-    scored.sort_by_key(|(s, _)| std::cmp::Reverse(*s));
-    scored.into_iter().map(|(_, e)| e.clone()).collect()
+/// The entries a query leaves, best first. In order: how well the words match; the command picked
+/// before for this text (see [`PICKED_BONUS`]); how much and how lately it was used; the shorter
+/// label; the menu order. A command that cannot run now gets nothing for its past use. `now` is in
+/// seconds since the Unix epoch.
+pub fn filter(entries: &[Entry], query: &str, history: &History, now: u64) -> Vec<Entry> {
+    let picked = history.picked_for(query);
+    let mut ranked: Vec<_> = entries
+        .iter()
+        .filter_map(|e| {
+            let (mut words, tie) = score(query, e)?;
+            let key = e.key();
+            let remembered = e.enabled && picked == Some(key.as_str());
+            if remembered {
+                words = words.saturating_add(PICKED_BONUS);
+            }
+            let used = if e.enabled { history.frecency(&key, now) } else { 0.0 };
+            Some((words, remembered, used, tie, e))
+        })
+        .collect();
+    // (stable: what ties on everything keeps the menu order)
+    ranked.sort_by(|a, b| b.0.cmp(&a.0).then(b.1.cmp(&a.1)).then(b.2.total_cmp(&a.2)).then(b.3.cmp(&a.3)));
+    ranked.into_iter().map(|r| r.4.clone()).collect()
 }
 
 /// The highlight after a key: ↑/↓ wrap around the list.
@@ -202,7 +229,9 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
     }
     let mac = ctx.os() == egui::os::OperatingSystem::Mac;
     let all = entries(app, mac);
-    let mut shown = filter(&all, &state.query);
+    // the wall clock: the history's times are kept across restarts
+    let now = (crate::now_ms() / 1000.0) as u64;
+    let mut shown = filter(&all, &state.query, &app.ui.palette_history, now);
     state.selected = state.selected.min(shown.len().saturating_sub(1));
 
     // keys first, before the text field sees them (↑/↓ would move its cursor, Esc would restore it);
@@ -277,7 +306,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                 ui.memory_mut(|m| m.request_focus(field.response.id));
             }
             if state.query != before {
-                shown = filter(&all, &state.query);
+                shown = filter(&all, &state.query, &app.ui.palette_history, now);
                 state.selected = 0;
                 state.scroll = 0.0;
             }
@@ -333,6 +362,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
     }
     if let Some(entry) = run {
         // the palette is closed (not put back) before the command runs
+        app.ui.palette_history.record(&state.query, &entry.key(), now);
         if let Err(e) = run_item(app, &entry.id, entry.params.clone()) {
             app.toast(ctx, e);
         }

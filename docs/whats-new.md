@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### The Command Palette learns what you run
+- With nothing typed, the commands you run most and most lately from the palette come first.
+- While typing, a command you ran before comes above others that match as well, and the one you picked for a text
+  comes first the next time you type it or its start. A clearly better match for what you type still wins.
+
 ### Describe says what to try when it finds nothing
 - When Describe finds nothing for your words, it now says what to try: other or fewer words, zooming in on something
   small, or clicking it with Object. When it can't run, it says what went wrong instead of only that it failed.

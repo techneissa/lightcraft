@@ -234,6 +234,9 @@ pub struct UiState {
     /// The Command Palette (⌘P) while it is open.
     #[serde(skip)]
     pub palette: Option<crate::panels::command_palette::State>,
+    /// What was run from the Command Palette, for its ranking.
+    #[serde(deserialize_with = "settings::lenient")]
+    pub palette_history: crate::panels::command_palette::History,
     /// Photo ▸ Match Look… while it is open or its match runs (fork, `fork/match-look.md`).
     #[serde(skip)]
     pub match_look: Option<crate::panels::match_look::State>,
@@ -562,6 +565,7 @@ impl Default for UiState {
             search: String::new(),
             focus_search: false,
             palette: None,
+            palette_history: Default::default(),
             match_look: None,
             focus_keywords: None,
             rename_row: None,
