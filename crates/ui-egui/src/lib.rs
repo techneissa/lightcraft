@@ -341,6 +341,8 @@ pub struct LightcraftApp {
     /// The app-wide background preparation settings were handed from the saved app settings to
     /// the session ([`Self::background_prep`]).
     prep_synced: bool,
+    /// The copy groups as last agreed between the saved settings and the session.
+    copy_groups_applied: Option<Vec<lightcraft_develop::SettingsGroup>>,
     /// The loupe's look-ahead: the photo it was made for, the direction of travel (+1 / -1), the
     /// catalog revision and the edge, so it is worked out again only when one of them changes.
     pub(crate) look_ahead: panels::detail::LookAhead,

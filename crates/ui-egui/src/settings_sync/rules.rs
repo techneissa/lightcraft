@@ -83,6 +83,7 @@ pub const SYNCED: &[&str] = &[
     "sidebar",
     "editSections",
     "toolStrip",
+    "copyGroups",
     "brushSize",
     "brushFeather",
     "brushFlow",

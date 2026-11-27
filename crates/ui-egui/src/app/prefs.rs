@@ -33,6 +33,19 @@ impl LightcraftApp {
         self.ui.was_focused = focused;
     }
 
+    /// The groups of Copy Edit Settings live with the app settings (`ui.json`), so the next start has them. Saved ones
+    /// that changed (loaded at launch, or from a settings file) go to the session; otherwise a pick made in the session
+    /// (`develop.copy`) is saved. Run at the start of every logic pass.
+    pub(super) fn sync_copy_groups(&mut self) {
+        let default = lightcraft_develop::SettingsGroup::default_copy;
+        if self.ui.copy_groups != self.copy_groups_applied {
+            self.session.copy_groups = self.ui.copy_groups.clone().unwrap_or_else(default);
+        } else if self.session.copy_groups != self.ui.copy_groups.clone().unwrap_or_else(default) {
+            self.ui.copy_groups = Some(self.session.copy_groups.clone());
+        }
+        self.copy_groups_applied.clone_from(&self.ui.copy_groups);
+    }
+
     /// Apply settings that act outside the UI state: GPU rendering and window full screen.
     pub(super) fn apply_settings(&mut self, ctx: &egui::Context) {
         if self.gpu_applied != Some(self.ui.settings.gpu) {
