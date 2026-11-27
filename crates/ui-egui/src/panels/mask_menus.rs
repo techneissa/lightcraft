@@ -96,7 +96,9 @@ pub fn mask_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, id: u32, name: &str
     ui.separator();
     let can_paste = app.session.mask_effect_clipboard.is_some();
     run(app, ui, menu_label("Copy Mask Effect"), true, "mask.copyEffect", json!({"id": id}));
-    run(app, ui, menu_label("Paste Mask Effect"), can_paste, "mask.pasteEffect", json!({"id": id}));
+    // (fork, issue #400: the copied mask's Refine Edges and Decontaminate come too, unless only the effect is asked for)
+    run(app, ui, menu_label("Paste Mask Effect and Edges"), can_paste, "mask.pasteEffect", json!({"id": id}));
+    run(app, ui, menu_label("Paste Mask Effect Only"), can_paste, "mask.pasteEffect", json!({"id": id, "edges": false}));
     // (fork, issue #365: all of the photo's masks, to other photos)
     run(app, ui, menu_label("Copy Masks"), mask_clipboard::can_copy(&app.session).is_ok(), "mask.copyAll", json!({}));
     run(app, ui, menu_label("Paste Masks"), mask_clipboard::can_paste(&app.session).is_ok(), "mask.pasteAll", json!({}));

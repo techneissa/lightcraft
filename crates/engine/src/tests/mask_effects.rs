@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use serde_json::{Value, json};
 
 use crate::Session;
+use lightcraft_catalog::PhotoId;
 
 fn temp_dir(tag: &str) -> PathBuf {
     let d = std::env::temp_dir().join(format!("lc-effects-{tag}-{}", std::process::id()));
@@ -331,4 +332,31 @@ fn copying_a_mask_effect_and_pasting_it_into_another_mask() {
     assert_eq!((c_after.adjust.exposure, c_after.adjust.shadows, c_after.adjust.amount), (1.0, 30.0, 60.0));
     assert_eq!(format!("{:?}", c_after.components), format!("{:?}", c_before.components));
     assert_eq!(c_after.name, "Other");
+}
+
+/// Paste Effect brings the copied mask's Refine Edges and Decontaminate, unless only the effect is asked for (#400).
+#[test]
+fn pasting_a_mask_effect_brings_its_edges() {
+    let mut s = Session::with_demo();
+    let id = s.catalog.photos().next().unwrap().id.0;
+    s.execute("library.select", &json!({"ids": [id], "active": id})).unwrap();
+    s.execute("mask.add", &json!({"kind": "radial", "name": "Source"})).unwrap();
+    let a = s.active_mask.unwrap();
+    s.execute("mask.refine", &json!({"id": a, "value": 80})).unwrap();
+    let mut d = (*s.develop_of(PhotoId(id)).unwrap()).clone();
+    d.masks.iter_mut().find(|m| m.id == a).unwrap().decontaminate = 40.0;
+    s.set_develop(PhotoId(id), d, "Decontaminate").unwrap();
+    s.execute("mask.add", &json!({"kind": "linear", "name": "Target"})).unwrap();
+    let b = s.active_mask.unwrap();
+    let edges = |s: &Session| {
+        let m = s.develop_of(PhotoId(id)).unwrap().masks.iter().find(|m| m.id == b).cloned().unwrap();
+        (m.refine, m.decontaminate)
+    };
+    s.execute("mask.copyEffect", &json!({"id": a})).unwrap();
+    s.execute("mask.pasteEffect", &json!({"id": b, "edges": false})).unwrap();
+    assert_eq!(edges(&s), (0.0, 0.0), "Paste Effect Only keeps the mask's own edges");
+    s.execute("mask.pasteEffect", &json!({"id": b})).unwrap();
+    assert_eq!(edges(&s), (80.0, 40.0), "the copied mask's edges come with its effect");
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(edges(&s), (0.0, 0.0), "in the paste's one undo step");
 }
