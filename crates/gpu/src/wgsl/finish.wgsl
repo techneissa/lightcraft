@@ -1074,6 +1074,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         d = oklab_inv(vec3<f32>(lab.x, lab.y + tint_dir.x * 0.08 * tint_amt, lab.z + tint_dir.y * 0.08 * tint_amt));
     }
     d = recolor_masks(d, i);
+    // --- Color Swap (fork, issue #460): after the masks' Recolor, and a decontaminated edge's two colours (`wgsl/color_swap.wgsl`)
+    d = color_swaps(d);
 
     // --- vignette (display linear, post-crop)
     if (pu(F_VIG) != 0u) {

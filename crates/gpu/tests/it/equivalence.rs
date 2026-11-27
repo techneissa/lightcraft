@@ -456,6 +456,21 @@ fn cases() -> Vec<(&'static str, Edit)> {
                 },
             ];
         }),
+        ("color swap", |s| {
+            // issue #460: a wide swap of a mid colour, then a second that takes what the first made, lightness following
+            use lightcraft_develop::ColorSwap;
+            s.color_swaps = vec![
+                ColorSwap { from: Some([0.62, 0.45, 0.32]), to: Some([0.2, 0.45, 0.85]), range: 75.0, ..Default::default() },
+                ColorSwap {
+                    from: Some([0.2, 0.45, 0.85]),
+                    to: Some([0.85, 0.2, 0.25]),
+                    keep_lightness: false,
+                    softness: 80.0,
+                    intensity: 80.0,
+                    ..Default::default()
+                },
+            ];
+        }),
         ("masks (recolor)", |s| {
             // issue #83: a coloured area to purple over a grey-ish one to white, overlapping
             let part = |shape| vec![MaskComponent { name: None, op: MaskOp::Add, invert: false, shape }];
@@ -708,6 +723,28 @@ fn cases() -> Vec<(&'static str, Edit)> {
             s.optics.defringe_purple_amount = 5.0;
         }),
     ]
+}
+
+/// Issue #460: the swaps the equivalence case uses reach a good part of the scene (else matching would prove little),
+/// and the GPU draws that change as the CPU does.
+#[test]
+fn color_swap_reaches_pixels_on_both() {
+    if !gpu() {
+        return;
+    }
+    let src = scene(0, 960, 640);
+    let raw = SourceInfo { raw: true, ..Default::default() };
+    let req = RenderRequest::fit(720, 720);
+    let mut s = DevelopSettings::default();
+    if let Some((_, edit)) = cases().into_iter().find(|(n, _)| *n == "color swap") {
+        edit(&mut s);
+    }
+    let plain = render(&src, &raw, &DevelopSettings::default(), &req).image;
+    let cpu = render(&src, &raw, &s, &req).image;
+    let changed = cpu.data.iter().zip(&plain.data).filter(|(a, b)| a != b).count() as f64 / cpu.data.len() as f64;
+    eprintln!("color swap changes {:.1}% of the pixels", changed * 100.0);
+    assert!(changed > 0.02, "the swaps reach only {changed} of the scene");
+    check("color swap (reaching)", &src, &raw, &s, &req);
 }
 
 #[test]
@@ -1043,6 +1080,20 @@ fn overlays_match() {
     };
     let req = RenderRequest { overlay: lightcraft_pipeline::Overlay::PointColorRange(0), ..RenderRequest::fit(640, 640) };
     check("point color range overlay", &src, &raw, &s, &req);
+    // Color Swap's range view and its before are drawn by the finish stage itself, on both renderers
+    let s = DevelopSettings {
+        color_swaps: vec![lightcraft_develop::ColorSwap {
+            from: Some([0.45, 0.5, 0.35]),
+            to: Some([0.85, 0.2, 0.25]),
+            range: 90.0,
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    for overlay in [lightcraft_pipeline::Overlay::ColorSwapRange(0), lightcraft_pipeline::Overlay::ColorSwapBefore(0)] {
+        let req = RenderRequest { overlay, ..RenderRequest::fit(640, 640) };
+        check("color swap overlay", &src, &raw, &s, &req);
+    }
     // Visualize Spots is a binary threshold of a high-pass: a 1-LSB difference near the threshold
     // flips a pixel, so compare the share of differing pixels instead of LSBs.
     let s = DevelopSettings::default();

@@ -207,8 +207,19 @@ pub fn apply(lab: [f32; 3], target: [f32; 3], r: &Reference, w: &Window, k: f32)
     if k.is_nan() || k <= 0.0 {
         return lab;
     }
-    let [l, c, h] = lab_to_lch(lab);
-    let [full, hue_w] = membership(l, c, h, r, w);
+    let lch = lab_to_lch(lab);
+    let [full, hue_w] = membership(lch[0], lch[1], lch[2], r, w);
+    shade(lab, lch, target, r, [full, hue_w], k, false)
+}
+
+/// The change of pixel `lab` (OkLab, `lch` its lightness, chroma and hue) that takes the colour of reference `r` to
+/// `target` (OkLab), for a pixel that belongs to it by `member` (`[full, hue]`, [`membership`]) at strength `k`
+/// (0..1). `keep_lightness`: the pixel keeps its own lightness (Color Swap), else it follows the target's (a mask's
+/// Recolor). The part of [`apply`] that keeps the shading; Color Swap (`crate::color_swap`) makes its own
+/// membership and shares this.
+pub(crate) fn shade(lab: [f32; 3], lch: [f32; 3], target: [f32; 3], r: &Reference, member: [f32; 2], k: f32, keep_lightness: bool) -> [f32; 3] {
+    let [l, c, h] = lch;
+    let [full, hue_w] = member;
     let k0 = k.min(1.0);
     let (k, k_hue) = (k0 * full, k0 * (hue_w - full).max(0.0));
     if k.is_nan() || k_hue.is_nan() || (k <= 0.0 && k_hue <= 0.0) {
@@ -216,7 +227,7 @@ pub fn apply(lab: [f32; 3], target: [f32; 3], r: &Reference, w: &Window, k: f32)
     }
     let [lt, ct, _] = lab_to_lch(target);
     let ht = hue(target[1], target[2]);
-    let l1 = lightness(l, r.l, lt);
+    let l1 = if keep_lightness { l } else { lightness(l, r.l, lt) };
     let coloured = smooth(GREY_CHROMA[0], GREY_CHROMA[1], r.c);
     // a grey area: chroma from its shading, never above the target's, fading out above its own lightness
     let grey = if lt > 1e-6 { (l1 / lt).clamp(0.0, 1.0) } else { 1.0 } * (1.0 - smooth(lt, lt.max(0.95) + 0.05, l1));

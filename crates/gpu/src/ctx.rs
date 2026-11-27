@@ -14,7 +14,8 @@ struct Module {
 const MODULES: &[Module] = &[
     Module {
         // (fork, `fork/perf-decontam-gpu.md`: `decontam::with_main_dc` adds the decontaminated edge's entry point)
-        src: include_str!("wgsl/finish.wgsl"),
+        // (fork, issue #460: Color Swap's functions come first; `main` stays last)
+        src: concat!(include_str!("wgsl/color_swap.wgsl"), include_str!("wgsl/finish.wgsl")),
         bindings: &[
             ("img", false, "f32"),
             ("log_l", false, "f32"),
@@ -478,6 +479,14 @@ fn constants() -> String {
         crate::params::CURVE_N
     );
     s += &format!("const POINT_WORDS: u32 = {}u;\n", lightcraft_pipeline::colorops::POINT_WORDS);
+    {
+        use lightcraft_pipeline::color_swap::{FROM_COLOURED, PIXEL_COLOURED, SWAP_WORDS, VIEW_DIM, VIEW_GLOW, WEAK_CHROMA};
+        s += &format!("const SWAP_WORDS: u32 = {SWAP_WORDS}u;\nconst SW_DIM: f32 = {VIEW_DIM:?};\nconst SW_GLOW: f32 = {VIEW_GLOW:?};\n");
+        s += &format!("const SW_FROM0: f32 = {:?};\nconst SW_FROM1: f32 = {:?};\n", FROM_COLOURED[0], FROM_COLOURED[1]);
+        s += &format!("const SW_PIX0: f32 = {:?};\nconst SW_PIX1: f32 = {:?};\n", PIXEL_COLOURED[0], PIXEL_COLOURED[1]);
+        let [w0, w1, w2, w3] = WEAK_CHROMA;
+        s += &format!("const SW_WEAK0: f32 = {w0:?};\nconst SW_WEAK1: f32 = {w1:?};\nconst SW_WEAK2: f32 = {w2:?};\nconst SW_WEAK3: f32 = {w3:?};\n");
+    }
     let y = lightcraft_pipeline::light_v3::PRO_Y;
     s += &format!("const PRO_Y = vec3<f32>({:?}, {:?}, {:?});\nconst LIGHT_N: u32 = {}u;\n", y[0], y[1], y[2], lightcraft_pipeline::light_v3::LUT_N);
     s += &format!("const EYE_WORDS: u32 = {}u;\n", lightcraft_pipeline::redeye::EYE_WORDS);

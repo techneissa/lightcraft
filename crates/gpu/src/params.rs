@@ -2,6 +2,7 @@
 //! `finish` kernel reads (`F_*` constants, generated from [`FIELDS`]), plus its auxiliary tables.
 
 use lightcraft_develop::VignetteStyle;
+use lightcraft_pipeline::color_swap::SWAP_WORDS;
 use lightcraft_pipeline::colorops::POINT_WORDS;
 use lightcraft_pipeline::finish::{FinishParams, GrainModel, MASK_TERMS, srgb_lut};
 
@@ -128,6 +129,12 @@ const FIELDS: &[(&str, usize)] = &[
     // and 0 for a whole render; a band's in a render that keeps nothing, `masks::bands`)
     ("MASK_N", 1),
     ("MASK_Y0", 1),
+    // fork (issue #460, `fork/color-swap.md`): Color Swap's entries in order (`SwapK::words` each), and the entry whose
+    // range is drawn instead of its change (`ColorSwaps::view`)
+    ("NSW", 1),
+    ("SW", 8 * SWAP_WORDS),
+    ("SWV", 1),
+    ("SWV_W", SWAP_WORDS),
 ];
 
 /// `(name, index)` of every field (for the WGSL constants).
@@ -312,6 +319,13 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
         p.fs("WHEELS", &w);
         p.f("BLENDING", *blending);
         p.f("BALANCE", *balance);
+    }
+    p.u("NSW", fp.swaps.entries.len().min(8) as u32);
+    let sw: Vec<f32> = fp.swaps.entries.iter().take(8).flat_map(|k| k.words()).collect();
+    p.fs("SW", &sw);
+    if let Some(v) = &fp.swaps.view {
+        p.b("SWV", true);
+        p.fs("SWV_W", &v.words());
     }
     p.f("SKIN", ops.skin);
     p.fs("BANDH", lightcraft_pipeline::colorops::band_hues());
