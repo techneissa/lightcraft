@@ -623,11 +623,13 @@ fn detail(w: usize, h: usize, lum: impl Fn(usize, usize) -> f32) -> Vec<f32> {
 }
 
 /// The integer shift (within ±`r` px) of the `p × p` patch of `a` at `(x, y)` that best matches `b`, with its
-/// normalised cross-correlation, or `None` when the patch has too little detail to tell.
+/// normalised cross-correlation, or `None` when the patch of either picture has too little detail to tell: against a
+/// featureless one (a plain sky) only noise is left to match.
 fn patch_shift(a: &[f32], b: &[f32], w: usize, (x, y): (usize, usize), p: usize, r: i64) -> Option<((i64, i64), f32)> {
     let pa: Vec<f32> = (0..p * p).map(|i| a[(y + i / p) * w + x + i % p]).collect();
     let na = pa.iter().map(|v| v * v).sum::<f32>().sqrt();
-    if na < 1e-3 * p as f32 {
+    let nb = (0..p * p).map(|i| b[(y + i / p) * w + x + i % p].powi(2)).sum::<f32>().sqrt();
+    if na.min(nb) < 1e-3 * p as f32 {
         return None;
     }
     let mut best = (f32::MIN, (0, 0));
