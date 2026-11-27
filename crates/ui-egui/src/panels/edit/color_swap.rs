@@ -109,55 +109,146 @@ pub(super) fn color_swap(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &Develop
         });
         return;
     }
+    // (the last frame's rectangles of the entries: where a dragged header may drop)
+    let rects_id = egui::Id::unique("lc-colorswap-rects");
+    let prev: Vec<Rect> = ui.data(|data| data.get_temp(rects_id)).unwrap_or_default();
+    let mut rects = Vec::with_capacity(n);
     for (i, e) in d.color_swaps.iter().enumerate() {
-        card(app, ui, d, i, e);
+        rects.push(entry(app, ui, d, i, e, &prev));
+        if i + 1 < n {
+            crate::widgets::divider(ui);
+        }
+    }
+    drop_line(app, ui, &prev);
+    ui.data_mut(|data| data.insert_temp(rects_id, rects));
+}
+
+/// The key under which entry `i`'s folded state is kept in the UI state (`foldedSections`).
+fn fold_key(i: usize) -> String {
+    format!("colorSwap:{i}")
+}
+
+/// Entry `from` moved to place `to` (or removed, `to` `None`): the folded states and the entry in use follow it.
+fn remap_folded(app: &mut LightcraftApp, n: usize, from: usize, to: Option<usize>) {
+    let mut flags: Vec<bool> = (0..n).map(|i| app.ui.section_folded(&fold_key(i))).collect();
+    if from < flags.len() {
+        let f = flags.remove(from);
+        if let Some(to) = to {
+            flags.insert(to.min(flags.len()), f);
+        }
+    }
+    app.ui.folded_sections.retain(|k| !k.starts_with("colorSwap:"));
+    app.ui.folded_sections.extend(flags.iter().enumerate().filter(|(_, f)| **f).map(|(i, _)| fold_key(i)));
+    if let Some(to) = to
+        && app.ui.color_swap == from
+    {
+        app.ui.color_swap = to;
     }
 }
 
-/// One entry's card.
-fn card(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings, i: usize, e: &ColorSwap) {
+/// Moves entry `i` to place `to` by the registered command; true when it moved.
+fn move_entry(app: &mut LightcraftApp, n: usize, i: usize, to: usize) -> bool {
+    if to == i || to >= n || app.run("colorSwap.move", json!({"index": i, "to": to})).is_err() {
+        return false;
+    }
+    remap_folded(app, n, i, Some(to));
+    true
+}
+
+/// Where a header dragged to height `y` would land: the slot (0 = above the first entry, `n` = below the last).
+fn slot_at(rects: &[Rect], y: f32) -> usize {
+    rects.iter().take_while(|r| r.center().y < y).count()
+}
+
+/// The place entry `i` takes when dropped in slot `slot`.
+fn place_of(i: usize, slot: usize) -> usize {
+    if slot > i { slot - 1 } else { slot }
+}
+
+/// While a header is dragged: the line where it would drop.
+fn drop_line(app: &mut LightcraftApp, ui: &mut egui::Ui, rects: &[Rect]) {
+    let Some(from) = ui.data(|d| d.get_temp::<usize>(egui::Id::unique("lc-colorswap-drag"))) else { return };
+    let Some(pointer) = ui.input(|i| i.pointer.interact_pos()) else { return };
+    let (Some(first), Some(last)) = (rects.first(), rects.last()) else { return };
+    let slot = slot_at(rects, pointer.y);
+    let y = if slot == 0 { first.top() } else { rects[slot - 1].bottom() };
     let t = Tokens::get(ui.ctx());
+    let line = Rect::from_min_max(pos2(first.left() + 12.0, y - 1.0), pos2(last.right() - 12.0, y + 1.0));
+    ui.painter().rect_filled(line, CornerRadius::same(1), t.pick);
+    register(ui, "colorSwapDrop", line);
+    ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+    let _ = (app, from);
+}
+
+/// One entry, as wide as the panel: its header (a click folds it, a drag moves it), then its colours and sliders.
+/// Returns its rectangle.
+fn entry(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings, i: usize, e: &ColorSwap, prev: &[Rect]) -> Rect {
     let n = d.color_swaps.len();
-    let selected = app.ui.color_swap == i;
-    let frame_id = format!("colorSwapCard:{i}");
-    let inner = egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 4, bottom: 4 }).show(ui, |ui| {
-        egui::Frame::NONE
-            .fill(t.chrome.gamma_multiply(1.12))
-            .corner_radius(CornerRadius::same(10))
-            .stroke(Stroke::new(1.0, if selected { t.pick.gamma_multiply(0.8) } else { t.divider }))
-            .inner_margin(egui::Margin { left: 12, right: 12, top: 10, bottom: 10 })
-            .show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                // (each card repeats the same sliders: its own scope, so their widget ids differ)
-                crate::widgets::in_repeated_row(ui, i, |ui| {
-                    header(app, ui, i, e);
-                    ui.add_space(8.0);
-                    colours(app, ui, i, e);
-                    ui.add_space(6.0);
-                    sliders(app, ui, d, i);
-                    more(app, ui, d, i, n, e);
-                });
-            })
+    let folded = app.ui.section_folded(&fold_key(i));
+    let inner = egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 6, bottom: 6 }).show(ui, |ui| {
+        // (each entry repeats the same sliders: its own scope, so their widget ids differ)
+        crate::widgets::in_repeated_row(ui, i, |ui| {
+            header(app, ui, i, n, e, folded, prev);
+            if !folded {
+                ui.add_space(8.0);
+                colours(app, ui, i, e);
+                ui.add_space(6.0);
+                sliders(app, ui, d, i);
+                more(app, ui, d, i, e);
+            }
+        });
     });
     let rect = inner.response.rect;
-    register(ui, frame_id, rect);
-    // a press anywhere on the card makes it the entry in use (the one ⌥ over the photo shows)
+    register(ui, format!("colorSwapEntry:{i}"), rect);
+    // a press anywhere on the entry makes it the one in use (the one ⌥ over the photo shows)
     if ui.rect_contains_pointer(rect) && ui.input(|inp| inp.pointer.any_pressed()) {
         app.ui.color_swap = i;
     }
+    rect
 }
 
-/// The name (typed over to rename) and the on / off switch.
-fn header(app: &mut LightcraftApp, ui: &mut egui::Ui, i: usize, e: &ColorSwap) {
+/// The header row: the disclosure arrow, the name (typed over to rename), the on / off switch and Remove. A click on the
+/// row folds the entry, a drag moves it (`colorSwap.move`), and with the row focused Space or Enter folds it and ⌥↑ / ⌥↓
+/// moves it.
+fn header(app: &mut LightcraftApp, ui: &mut egui::Ui, i: usize, n: usize, e: &ColorSwap, folded: bool, prev: &[Rect]) {
     let t = Tokens::get(ui.ctx());
-    ui.horizontal(|ui| {
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 28.0), Sense::hover());
+    // (made before the widgets on it, so the name, the switch and Remove are above it and keep their own clicks)
+    let resp = ui.interact(rect, ui.scope_id().with("colorSwapHeader"), Sense::click_and_drag());
+    crate::widgets::announce_disclosure(&resp, true, !folded, e.display_name(i));
+    register(ui, format!("colorSwapHeader:{i}"), rect);
+    let focus_key = egui::Id::unique("lc-colorswap-focus");
+    if ui.data(|d| d.get_temp::<usize>(focus_key)) == Some(i) {
+        ui.data_mut(|d| d.remove::<usize>(focus_key));
+        resp.request_focus();
+    }
+    let drag_key = egui::Id::unique("lc-colorswap-drag");
+    let dragging = ui.data(|d| d.get_temp::<usize>(drag_key)) == Some(i);
+    let p = ui.painter();
+    if dragging || resp.hovered() {
+        p.rect_filled(rect, CornerRadius::same(4), t.hover.gamma_multiply(if dragging { 0.9 } else { 0.5 }));
+    }
+    if app.ui.color_swap == i {
+        p.rect_filled(Rect::from_min_size(pos2(rect.left() - 12.0, rect.top() + 4.0), vec2(3.0, rect.height() - 8.0)), CornerRadius::same(1), t.pick);
+    }
+    paint(
+        p,
+        Rect::from_center_size(pos2(rect.left() + 9.0, rect.center().y), vec2(16.0, 16.0)),
+        if folded { Icon::ChevronRight } else { Icon::ChevronDown },
+        t.text_label,
+    );
+    if resp.has_focus() {
+        crate::widgets::focus_ring(ui.painter(), rect, &t);
+    }
+    ui.scope_builder(UiBuilder::new().max_rect(rect).layout(Layout::left_to_right(Align::Center)), |ui| {
         ui.spacing_mut().item_spacing.x = 6.0;
+        ui.add_space(20.0);
         let draft = egui::Id::unique("lc-colorswap-name").with(i);
         let shown = e.display_name(i);
         let mut text = ui.data(|d| d.get_temp::<String>(draft)).unwrap_or_else(|| e.name.clone());
         let widget = format!("field:colorSwapName:{i}");
         let field = crate::text_field::TextField::singleline(&widget, &mut text)
-            .width((ui.available_width() - 38.0 - 6.0).max(60.0))
+            .width((ui.available_width() - 38.0 - 24.0 - 12.0).max(60.0))
             .hint(shown)
             .font(t.semibold(13.0))
             .select_on_focus(true)
@@ -171,11 +262,52 @@ fn header(app: &mut LightcraftApp, ui: &mut egui::Ui, i: usize, e: &ColorSwap) {
             ui.data_mut(|d| d.insert_temp(draft, text.clone()));
         }
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            if icon_button(ui, &format!("colorSwapRemove:{i}"), Icon::Close, vec2(24.0, 24.0), false, true, "Remove Color Swap").clicked()
+                && app.run("colorSwap.remove", json!({"index": i})).is_ok()
+            {
+                remap_folded(app, n, i, None);
+            }
             if switch(ui, &format!("colorSwapOn:{i}"), e.on, &crate::i18n::tr_format!("{name} on", name = e.display_name(i))).clicked() {
                 let _ = app.run("colorSwap.set", json!({"index": i, "on": !e.on}));
             }
         });
     });
+    // a click (or Space / Enter with the row focused) folds or unfolds
+    if resp.clicked() {
+        app.ui.toggle_folded(&fold_key(i));
+    }
+    // a drag moves: released where the line showed
+    if resp.drag_started() {
+        ui.data_mut(|d| d.insert_temp(drag_key, i));
+        app.ui.color_swap = i;
+    }
+    if resp.drag_stopped() {
+        ui.data_mut(|d| d.remove::<usize>(drag_key));
+        if prev.len() == n
+            && let Some(pointer) = ui.input(|inp| inp.pointer.interact_pos())
+        {
+            let to = place_of(i, slot_at(prev, pointer.y));
+            move_entry(app, n, i, to);
+        }
+    }
+    // ⌥↑ / ⌥↓ with the row focused move it (and the focus goes with it)
+    if resp.has_focus() {
+        use egui::{Key, Modifiers};
+        let up = ui.input_mut(|inp| inp.consume_key(Modifiers::ALT, Key::ArrowUp));
+        let down = ui.input_mut(|inp| inp.consume_key(Modifiers::ALT, Key::ArrowDown));
+        let to = if up {
+            i.checked_sub(1)
+        } else if down {
+            Some(i + 1)
+        } else {
+            None
+        };
+        if let Some(to) = to
+            && move_entry(app, n, i, to)
+        {
+            ui.data_mut(|d| d.insert_temp(focus_key, to));
+        }
+    }
 }
 
 /// A switch, blue and to the right while on.
@@ -348,9 +480,9 @@ fn peek(app: &mut LightcraftApp, ui: &egui::Ui, i: usize) {
     }
 }
 
-/// The footer (More, Before, move earlier / later, remove) and the folded part: the range's three widths, Edge Softness
+/// The footer (More, Before) and the folded part: the range's three widths, Edge Softness
 /// and Keep Lightness.
-fn more(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings, i: usize, n: usize, e: &ColorSwap) {
+fn more(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings, i: usize, e: &ColorSwap) {
     let t = Tokens::get(ui.ctx());
     let key = format!("colorSwapMore:{i}");
     let open = app.ui.flyout_open(&key);
@@ -383,19 +515,6 @@ fn more(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings, i: usiz
         } else if app.ui.color_swap_before == Some(i) {
             app.ui.color_swap_before = None;
         }
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            ui.spacing_mut().item_spacing.x = 4.0;
-            let small = vec2(24.0, 24.0);
-            if icon_button(ui, &format!("colorSwapRemove:{i}"), Icon::Close, small, false, true, "Remove Color Swap").clicked() {
-                let _ = app.run("colorSwap.remove", json!({"index": i}));
-            }
-            if icon_button(ui, &format!("colorSwapDown:{i}"), Icon::ChevronDown, small, false, i + 1 < n, "Run Later").clicked() {
-                let _ = app.run("colorSwap.move", json!({"index": i, "to": i + 1}));
-            }
-            if icon_button(ui, &format!("colorSwapUp:{i}"), Icon::ChevronUp, small, false, i > 0, "Run Earlier").clicked() {
-                let _ = app.run("colorSwap.move", json!({"index": i, "to": i.saturating_sub(1)}));
-            }
-        });
     });
     if !open {
         return;
