@@ -1,0 +1,6 @@
+# Color Swap (issue #460)
+cargo test -p lightcraft-develop --lib -- color_swap
+cargo test -p lightcraft-pipeline --lib -- color_swap
+cargo test -p lightcraft-gpu --test it -- gpu_matches_cpu overlays_match
+cargo test -p lightcraft-engine --lib -- color_swap
+cargo test -p lightcraft-ui-egui --lib -- edit_sections settings_sync color_swap

@@ -1600,6 +1600,10 @@ pub(crate) fn view_overlay(app: &LightcraftApp, d: &DevelopSettings, frame: u64)
         return Overlay::Spots(app.ui.spots_threshold.clamp(0.0, 100.0).round() as u8);
     }
     let edit = app.ui.right == RightPanel::Edit;
+    // Color Swap (fork, issue #460): the Before button held, or ⌥ over an entry's From colour or Range or over the photo
+    if edit && let Some(o) = crate::panels::edit::color_swap_overlay(app, d, frame) {
+        return o;
+    }
     if edit && app.ui.point_color_visualize && app.ui.flyout_open("pointColor") && app.ui.point_color < d.point_colors.len() {
         return Overlay::PointColorRange(app.ui.point_color as u8);
     }
@@ -1701,6 +1705,35 @@ fn general_interaction(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::
         }
         return;
     }
+    if let Some((index, side)) = crate::panels::edit::color_swap_pick_target(&app.ui.tool) {
+        if resp.clicked()
+            && let Some(q) = resp.interact_pointer_pos()
+        {
+            let n = map.norm(q);
+            let to = side == crate::panels::edit::ColorSwapSide::To;
+            // the New Color is the colour the magnifier showed; the Color to Replace is read from the photo without its swaps
+            // (the colour the swap will see), at the same point
+            let shown = app.eyedropper.as_ref().and_then(|m| m.patch.hex()).filter(|_| to && index.is_some());
+            let run = match (shown, index) {
+                (Some(hex), Some(i)) => app.run("colorSwap.set", json!({"index": i, "to": hex})),
+                _ => {
+                    let mut p = json!({"x": n.x, "y": n.y, "target": if to { "to" } else { "from" }});
+                    if let Some(i) = index {
+                        p["index"] = json!(i);
+                    }
+                    app.run("colorSwap.pick", p)
+                }
+            };
+            match run {
+                Ok(r) => app.ui.color_swap = r["index"].as_u64().map_or(app.ui.color_swap, |i| i as usize),
+                Err(e) => app.toast(ui.ctx(), e),
+            }
+            app.ui.tool.clear();
+        }
+        return;
+    }
+    // ⌥ over the photo shows what the entry in use reaches (Color Swap, issue #460)
+    crate::panels::edit::color_swap_hover(app, ui, resp);
     click_zoom_and_pan(app, resp, img, canvas);
     let _ = (native, aspect);
 }

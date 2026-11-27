@@ -18,6 +18,7 @@ use crate::state::RightPanel;
 use crate::theme::Tokens;
 use crate::widgets::{BAND_COLORS, SliderOut, divider, flyout_row, hex, register, slider, text_button};
 
+mod color_swap;
 mod curve;
 mod grading;
 mod hdr_flow;
@@ -29,6 +30,7 @@ mod profile_search;
 mod relight;
 mod sliders;
 
+pub(crate) use color_swap::{Side as ColorSwapSide, hover as color_swap_hover, overlay as color_swap_overlay, pick_target as color_swap_pick_target};
 use curve::curve_editor;
 use grading::grading;
 pub(crate) use grading::wheel_pointer_frame_end;
@@ -306,6 +308,13 @@ fn show_sections(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             ui.add_space(8.0);
         })
     };
+    // fork (issue #460): Color Swap, after Color
+    let color_swap_section = |app: &mut LightcraftApp, ui: &mut egui::Ui| {
+        section(app, ui, &d, lightcraft_develop::color_swap::SECTION, "Color Swap", |app, ui, d| {
+            color_swap::color_swap(app, ui, d);
+            ui.add_space(8.0);
+        })
+    };
     let effects = |app: &mut LightcraftApp, ui: &mut egui::Ui| {
         section(app, ui, &d, "effects", "Effects", |app, ui, d| {
             for c in ["effects.texture", "effects.clarity", "effects.dehaze"] {
@@ -476,6 +485,7 @@ fn show_sections(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         match shown {
             EditSection::Light => light(app, ui),
             EditSection::Color => color(app, ui),
+            EditSection::ColorSwap => color_swap_section(app, ui),
             EditSection::Effects => effects(app, ui),
             EditSection::Detail => detail(app, ui),
             EditSection::Optics => optics(app, ui),

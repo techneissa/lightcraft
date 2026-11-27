@@ -43,6 +43,7 @@ pub const LEFT_OUT: &[(&str, &str)] = &[
     ("tool", "the tool in use"),
     ("maskOp", "the next mask part's mode"),
     ("pointColor", "the sample in use"),
+    ("colorSwap", "the entry in use"),
     ("eye", "the correction in use"),
     ("eyePhoto", "the photo that correction was picked on"),
     ("eyePet", "the correction in use"),

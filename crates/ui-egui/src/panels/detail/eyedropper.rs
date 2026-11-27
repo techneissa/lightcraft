@@ -1,5 +1,5 @@
 //! The eyedropper magnifier on the photo (issue #459): every on-canvas eyedropper (white balance, Color Range, Point
-//! Color, Recolor's two) shows [`crate::widgets::magnifier`] while the pointer is over the photo. It reads the pixels of
+//! Color, Recolor's two, Color Swap's) shows [`crate::widgets::magnifier`] while the pointer is over the photo. It reads the pixels of
 //! the loupe's own render, the ones drawn on screen, at the pointer.
 
 use egui::{Pos2, Rect, Response, vec2};
@@ -18,7 +18,9 @@ pub struct Magnified {
 
 /// An on-canvas tool that picks a colour or a neutral from the photo.
 pub(crate) fn armed(tool: &str) -> bool {
-    matches!(tool, "wbPicker" | "colorRange" | "pointColor") || crate::panels::mask_recolor::pick_target(tool).is_some()
+    matches!(tool, "wbPicker" | "colorRange" | "pointColor")
+        || crate::panels::mask_recolor::pick_target(tool).is_some()
+        || crate::panels::edit::color_swap_pick_target(tool).is_some()
 }
 
 /// Read the pixels under the pointer into `app.eyedropper` (cleared when no eyedropper is armed or the pointer is not on
