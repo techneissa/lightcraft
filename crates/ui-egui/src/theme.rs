@@ -81,6 +81,8 @@ pub struct Tokens {
     /// Cautionary notices (e.g. a raw shown from its embedded preview): a muted amber.
     pub caution: Color32,
     pub mask_overlay: Color32,
+    /// The grid between the cells of the eyedropper magnifier (a light hairline over a dark one).
+    pub magnifier_grid: Color32,
     // metrics (points)
     pub top_bar_h: f32,
     pub bottom_bar_h: f32,
@@ -89,6 +91,8 @@ pub struct Tokens {
     pub slider_row_h: f32,
     pub section_h: f32,
     pub film_h: f32,
+    /// The eyedropper magnifier's diameter (points).
+    pub magnifier_size: f32,
 }
 
 /// An interface theme. Each belongs to the dark or the light family.
@@ -164,6 +168,7 @@ impl Default for Tokens {
             reject: Color32::from_rgb(0xe0, 0x4a, 0x4a),
             caution: Color32::from_rgb(0xe3, 0xa8, 0x3c),
             mask_overlay: Color32::from_rgba_unmultiplied(0xe0, 0x20, 0x30, 110),
+            magnifier_grid: Color32::from_rgba_unmultiplied(0xff, 0xff, 0xff, 150),
             top_bar_h: 42.0,
             bottom_bar_h: 48.0,
             panel_w: 270.0,
@@ -171,6 +176,7 @@ impl Default for Tokens {
             slider_row_h: 30.0,
             section_h: 57.0,
             film_h: 142.0,
+            magnifier_size: 132.0,
         }
     }
 }

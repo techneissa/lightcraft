@@ -1,0 +1,68 @@
+//! The eyedropper magnifier on the photo (issue #459): every on-canvas eyedropper (white balance, Color Range, Point
+//! Color, Recolor's two) shows [`crate::widgets::magnifier`] while the pointer is over the photo. It reads the pixels of
+//! the loupe's own render, the ones drawn on screen, at the pointer.
+
+use egui::{Pos2, Rect, Response, vec2};
+use lightcraft_catalog::PhotoId;
+
+use super::fit_texture_rect;
+use crate::LightcraftApp;
+use crate::render::Slot;
+use crate::widgets::magnifier::{self, Patch};
+
+/// The magnifier's reading this frame: the patch of pixels and where the pointer is.
+pub struct Magnified {
+    pub patch: Patch,
+    pub at: Pos2,
+}
+
+/// An on-canvas tool that picks a colour or a neutral from the photo.
+pub(crate) fn armed(tool: &str) -> bool {
+    matches!(tool, "wbPicker" | "colorRange" | "pointColor") || crate::panels::mask_recolor::pick_target(tool).is_some()
+}
+
+/// Read the pixels under the pointer into `app.eyedropper` (cleared when no eyedropper is armed or the pointer is not on
+/// the photo). `views` are the photo's views, each as (the photo's rectangle, the pane it is shown in): one, or
+/// the two of a side by side view, which show the same frame.
+pub(super) fn read(app: &mut LightcraftApp, resp: &Response, id: PhotoId, views: &[(Rect, Rect)]) {
+    app.eyedropper = None;
+    if !armed(&app.ui.tool) || app.space_hand.is_some() || !(resp.hovered() || resp.dragged()) {
+        return;
+    }
+    let Some(q) = resp.hover_pos().or(resp.interact_pointer_pos()) else { return };
+    let Some(&(img, _)) = views.iter().find(|(img, pane)| pane.contains(q) && img.contains(q)) else { return };
+    // the render on screen (never a stand-in for another look, which would give the wrong colour)
+    let Some(tex) = app.renderer.textures.get(&Slot::Main).filter(|t| t.photo == id && t.quick.is_none()) else { return };
+    let Some(pixels) = tex.pixels.as_ref() else { return };
+    let shown = fit_texture_rect(img, tex.size);
+    if !shown.contains(q) {
+        return;
+    }
+    let Some(mut patch) = magnifier::sample(pixels, vec2((q.x - shown.min.x) / shown.width(), (q.y - shown.min.y) / shown.height())) else { return };
+    if app.renderer.display().is_some() {
+        // a monitor profile: what is on screen is the display's device values, not sRGB, so the value is not told
+        patch.set_srgb(None);
+    }
+    app.eyedropper = Some(Magnified { patch, at: q });
+}
+
+/// Draw the magnifier read by [`read`] (after the tools, so its cursor is the one that counts).
+pub(super) fn paint(app: &LightcraftApp, ctx: &egui::Context) {
+    if let Some(m) = &app.eyedropper {
+        magnifier::paint(ctx, m.at, &m.patch);
+    }
+}
+
+/// `ui.inspect` → `eyedropper`: the colour under an armed eyedropper's pointer.
+pub(crate) fn to_json(app: &LightcraftApp) -> serde_json::Value {
+    use serde_json::json;
+    app.eyedropper.as_ref().map_or(serde_json::Value::Null, |m| {
+        json!({
+            "tool": app.ui.tool,
+            "pixel": m.patch.pixel,
+            "hex": m.patch.hex(),
+            "name": m.patch.name(),
+            "rgb": m.patch.rgb(),
+        })
+    })
+}

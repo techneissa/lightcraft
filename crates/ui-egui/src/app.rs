@@ -108,6 +108,7 @@ impl LightcraftApp {
             space_hand: None,
             brush_live: None,
             loupe_shown: None,
+            eyedropper: None,
             loupe_timing: Default::default(),
             prep_synced: false,
             copy_groups_applied: None,

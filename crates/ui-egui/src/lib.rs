@@ -336,6 +336,8 @@ pub struct LightcraftApp {
     /// What the loupe drew last frame: photo and source ("render", "cached", "embedded", "small",
     /// "thumb", "none").
     pub loupe_shown: Option<(lightcraft_catalog::PhotoId, &'static str)>,
+    /// What the eyedropper magnifier reads under the pointer this frame (`ui.inspect` → `eyedropper`).
+    pub eyedropper: Option<panels::detail::eyedropper::Magnified>,
     /// When each photo stepped to in the loupe first showed (`ui.inspect` → `perf.loupeSteps`).
     pub loupe_timing: loupe_timing::LoupeTiming,
     /// The app-wide background preparation settings were handed from the saved app settings to
