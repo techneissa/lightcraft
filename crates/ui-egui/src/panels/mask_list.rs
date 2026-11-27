@@ -37,8 +37,6 @@ struct Seen {
 pub(crate) struct MaskList {
     pub(crate) thumbs: MaskThumbs,
     seen: Option<Seen>,
-    /// The panel's scroll area has the picked mask's section to bring to its top.
-    jump: bool,
     /// The rows drawn last.
     rows: Vec<egui::Id>,
 }
@@ -51,11 +49,6 @@ fn row_id(mask: u32) -> egui::Id {
 /// shortcut still.
 pub(crate) fn row_has_focus(app: &LightcraftApp, ctx: &egui::Context) -> bool {
     ctx.memory(|m| m.focused()).is_some_and(|f| app.mask_list.rows.contains(&f))
-}
-
-/// Whether the picked mask's section is to be scrolled to now (asked once).
-pub(super) fn take_jump(app: &mut LightcraftApp) -> bool {
-    std::mem::take(&mut app.mask_list.jump)
 }
 
 /// The title and the mask list.
@@ -87,16 +80,11 @@ pub(crate) fn pinned(app: &mut LightcraftApp, ui: &mut egui::Ui, photo: PhotoId)
     divider(ui);
 }
 
-/// Notice a change of the picked mask: another mask of the same set was picked (the panel then scrolls to it), and a
-/// keyboard on the list moves with it. Returns whether the list is to scroll to the picked row.
+/// Notice a change of the picked mask: a keyboard on the list moves with it. Returns whether the list is to bring the
+/// picked row into sight (it scrolls only if the row is out of it; the panel below never scrolls, fork issue #450).
 fn follow_selection(app: &mut LightcraftApp, ctx: &egui::Context, photo: PhotoId, d: &DevelopSettings) -> bool {
     let now = Seen { photo, ids: d.masks.iter().map(|m| m.id).collect(), active: app.session.active_mask };
-    let before = app.mask_list.seen.take();
-    let changed = before.as_ref() != Some(&now);
-    // (a mask added, duplicated or deleted is no pick: the panel stays where it is)
-    if before.as_ref().is_some_and(|b| b.photo == now.photo && b.ids == now.ids && b.active != now.active) && now.active.is_some() {
-        app.mask_list.jump = true;
-    }
+    let changed = app.mask_list.seen.take().as_ref() != Some(&now);
     if changed
         && let Some(active) = now.active
         && row_has_focus(app, ctx)
@@ -212,8 +200,6 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, photo: PhotoId, masks: &[Mask
     }
     if resp.clicked() {
         let _ = app.run("mask.select", json!({"id": m.id}));
-        // (the picked row again too: back to its sliders)
-        app.mask_list.jump = true;
     }
     if resp.double_clicked() {
         app.ui.renaming_mask = Some((m.id, m.name.clone()));

@@ -227,14 +227,9 @@ fn show_mask_panel(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         divider(ui);
         egui::Frame::NONE.inner_margin(egui::Margin { left: 16, right: 16, top: 8, bottom: 8 }).show(ui, |ui| overlay_options(app, ui));
     }
-    let jump = super::mask_list::take_jump(app);
     let Some(mid) = app.session.active_mask else { return };
     let Some(m) = d.masks.iter().find(|m| m.id == mid).cloned() else { return };
     divider(ui);
-    // a mask just picked: its section comes to the top of the scroll area
-    if jump {
-        ui.scroll_to_cursor_animation(Some(egui::Align::TOP), egui::style::ScrollAnimation::none());
-    }
     // the mode of the next part and a button for each kind of part (Describe… opens its field here)
     egui::Frame::NONE.inner_margin(egui::Margin { left: 16, right: 16, top: 4, bottom: 8 }).show(ui, |ui| {
         super::mask_parts::add_controls(app, ui);

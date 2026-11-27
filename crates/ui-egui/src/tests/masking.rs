@@ -262,6 +262,45 @@ fn keys_step_the_masks_from_the_panel_and_from_the_list() {
     assert_eq!(press(&mut h, "."), Some(ids[1]), "outside the Masking tool the key does nothing");
 }
 
+/// Picking another mask whose row is in sight scrolls neither the mask list nor the panel below it (fork issue #450).
+#[test]
+fn picking_another_mask_keeps_both_scroll_positions() {
+    let mut h = detail("panel.masking");
+    for i in 0..7 {
+        exec(&mut h, "mask.add", json!({"kind": "radial", "center": [0.2 + 0.1 * f64::from(i), 0.5], "rx": 0.1, "ry": 0.1}));
+    }
+    h.settle(SETTLE);
+    let ids: Vec<u32> = develop(&h).masks.iter().map(|m| m.id).collect();
+    let rect = |h: &Headless, id: &str| h.app.widgets.iter().find(|(w, _)| w == id).map(|(_, r)| *r).expect(id);
+    let panel = rect(&h, "panel:right_panel");
+    h.request("ui.move", json!({"x": panel.center().x, "y": panel.bottom() - 100.0}), T);
+    h.request("ui.scroll", json!({"dy": -400.0}), T);
+    h.settle(SETTLE);
+    // (the list scrolled itself to the last mask, so the one before it is in sight)
+    let (last, other) = (format!("mask:{}", ids[6]), ids[5]);
+    let offsets = |h: &Headless| (rect(h, &last).top(), rect(h, "maskNew:brush").top());
+    // the wheel scroll glides on for some frames: wait until it has stopped
+    let rest = |h: &mut Headless| {
+        let mut last = offsets(h);
+        for _ in 0..200 {
+            h.step();
+            h.step();
+            let now = offsets(h);
+            if now == last {
+                break;
+            }
+            last = now;
+        }
+        last
+    };
+    let before = rest(&mut h);
+    click(&mut h, &format!("mask:{other}"));
+    h.settle(SETTLE);
+    rest(&mut h);
+    assert_eq!(h.app.session.active_mask, Some(other));
+    assert_eq!(offsets(&h), before, "(list row, panel)");
+}
+
 /// A change to one mask's shape makes that mask's thumbnail anew and keeps the others' (fork issue #401).
 #[test]
 fn only_the_changed_mask_gets_a_new_thumbnail() {
