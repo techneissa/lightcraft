@@ -11,6 +11,7 @@ mod birefnet;
 mod book;
 pub(crate) mod browse;
 mod color;
+mod color_swap;
 pub(crate) mod concepts;
 pub(crate) mod convert;
 pub mod cull;
@@ -192,6 +193,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(exif_edit::specs());
         v.extend(develop::specs());
         v.extend(color::specs());
+        v.extend(color_swap::specs());
         v.extend(curves::specs());
         v.extend(masks::specs());
         v.extend(birefnet::specs());

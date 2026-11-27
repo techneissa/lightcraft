@@ -122,12 +122,26 @@ fn recolor(s: &mut Session, p: &Value) -> Result<Value> {
 /// The colour (sRGB 0..1) at normalized point `(x, y)` of photo `id` as developed: a 5 × 5 pixel average of a small
 /// uncropped render.
 pub(crate) fn color_at(s: &mut Session, id: PhotoId, x: f64, y: f64, c: &str) -> Result<[f64; 3]> {
+    color_at_with(s, id, x, y, c, |_| {})
+}
+
+/// [`color_at`] with the photo's settings changed by `neutral` first (Color Swap picks a From colour from the photo
+/// without its swaps).
+pub(crate) fn color_at_with(
+    s: &mut Session,
+    id: PhotoId,
+    x: f64,
+    y: f64,
+    c: &str,
+    neutral: impl FnOnce(&mut lightcraft_develop::DevelopSettings),
+) -> Result<[f64; 3]> {
     if !(0.0..=1.0).contains(&x) || !(0.0..=1.0).contains(&y) {
         return Err(bad(c, "`x` and `y` must be numbers 0..1 (a point on the photo)"));
     }
     let src = s.source_now(id, SourceLevel::Thumb).map_err(|e| bad(c, e))?;
     let info = s.source_info(id);
-    let d = s.develop_of(id).unwrap_or_default();
+    let mut d = (*s.develop_of(id).unwrap_or_default()).clone();
+    neutral(&mut d);
     let req = RenderRequest { apply_crop: false, ..RenderRequest::fit(PICK_EDGE, PICK_EDGE) };
     let img = render(&src, &info, &d, &req).image;
     if img.width == 0 || img.height == 0 {

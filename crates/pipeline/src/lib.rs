@@ -41,6 +41,7 @@ pub mod light_v3;
 // generated (`light_v3_params.rs`), kept in its own compact layout
 #[rustfmt::skip]
 pub mod light_v3_params;
+pub mod color_swap;
 pub mod local;
 pub mod local_tone;
 pub mod lut;
@@ -1549,6 +1550,8 @@ fn plan_preserves_matching_box_size() {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_color_swap_render;
 #[cfg(test)]
 mod tests_decontam;
 #[cfg(test)]

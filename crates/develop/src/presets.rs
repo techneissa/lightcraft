@@ -46,10 +46,12 @@ pub enum SettingsGroup {
     Portrait,
     /// Relight (fork, issue #288): the light and its sliders.
     Relight,
+    /// Color Swap (fork, issue #460): the colours replaced by others, with their ranges.
+    ColorSwap,
 }
 
 impl SettingsGroup {
-    pub const ALL: [SettingsGroup; 22] = [
+    pub const ALL: [SettingsGroup; 23] = [
         SettingsGroup::Profile,
         SettingsGroup::Treatment,
         SettingsGroup::WhiteBalance,
@@ -72,6 +74,7 @@ impl SettingsGroup {
         SettingsGroup::Calibration,
         SettingsGroup::Portrait,
         SettingsGroup::Relight,
+        SettingsGroup::ColorSwap,
     ];
 
     /// Groups included by default when copying (Lightroom excludes crop, masks and spots by default; Portrait holds
@@ -118,6 +121,7 @@ impl SettingsGroup {
             SettingsGroup::Calibration => "Calibration",
             SettingsGroup::Portrait => "Portrait",
             SettingsGroup::Relight => "Relight",
+            SettingsGroup::ColorSwap => "Color Swap",
         }
     }
 
@@ -146,6 +150,7 @@ impl SettingsGroup {
             SettingsGroup::Calibration => &["calibration"],
             SettingsGroup::Portrait => &[crate::retouch::KEY],
             SettingsGroup::Relight => &[crate::relight::KEY],
+            SettingsGroup::ColorSwap => &[crate::color_swap::KEY],
         }
     }
 }

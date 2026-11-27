@@ -1,0 +1,47 @@
+# Color Swap
+
+List: Color Swap, an Edit panel section that replaces one colour with another across the whole photo, several swaps at once, each keeping the old colour's shading (issue #460). Branch `feat/add-colour-swap-panel`.
+
+## What it does
+
+- **Entries.** The section sits after Color. Each entry is as wide as the panel, parted from the next by a thin divider. Its header row has a disclosure arrow, the name (type over it to rename), the on / off switch and Remove; a click on the row (not on the name, switch or Remove) folds the entry to just that row (kept per entry in `foldedSections`), a drag moves it and releasing it at the drop line reorders (`colorSwap.move`), and with the row focused Space / Enter folds it and ⌥↑ / ⌥↓ moves it. Below: the colour to replace and the colour it becomes (a swatch with the colour picker, an eyedropper and a `#rrggbb` field each), **Range**, **Intensity**. Up to 8 entries; they run in order and each sees what the one before made, so blue to red then red to green turns blue to green. An entry changes nothing until both colours are set, and the swatch of an unset colour is white with a red slash.
+- **Which pixels** (`crates/pipeline/src/color_swap/mod.rs`, in OkLab on display-linear colour, after the colour stage, the masks' Recolor and a decontaminated edge's two colours, before the vignette). A pixel's distance from the From colour is three terms, each over its own half-width: hue (an angle, left out when the From colour is nearly grey), saturation as chroma over lightness, and lightness. Chroma over lightness does not change when light falls on a surface more or less strongly (OkLab scales with the cube root of light), so a shirt's shadows and highlights count as much as its middle: that is what makes it work in light and shadow. The terms join as one distance and the weight falls from 1 to 0 over the last share of it with a smoothstep: no step in the colour space, so no banding in a gradient and no halo at an edge. A nearly grey pixel is not matched to a coloured From colour by hue.
+- **Edges between two colours.** The weakly coloured pixels where the From colour meets something else (the grey-purple where a purple stripe meets an olive one) take the new hue alone, at their own chroma and lightness (`SwapK::membership` returns `[full, hue]`, the same split as mask Recolor), so the line of old hue along an edge is thin and neutral. Limit, read from a render of the demo lavender field: a one-pixel line of the old colour's grey mix can still show against the new colour; a wider Range or a softer edge takes more of it, and a swap does not un-mix a pixel into its two sources.
+- **What changes.** `recolor::shade`, the part of mask Recolor that keeps shading (mask Recolor now calls the same function): the pixel's chroma relative to the From colour's becomes relative to the To colour's (softly limited, faded at the dark and light ends), a little of its own hue offset carries over, and its lightness is kept. Mixed in by weight × Intensity.
+- **The extras** (chosen for what they let one do that Range alone does not): **Hue / Saturation / Lightness Range** (under More; one width each, 50 = as Range says), **Edge Softness** (how much of the distance fades, 0 = crisp, 100 = a fade from the From colour outwards), **Keep Lightness** (on: the pixel keeps its own lightness, exactly; off: the To colour's lightness is taken, folds in proportion, so a dark shirt can become a white one), **click on the photo to add an entry** (the eyedropper by Add Color Swap: the click's colour becomes a new entry's From colour), **Before** (hold the button: the photo without this entry, the others as they are). Not built: limiting an entry to a mask (needs the mask planes in the colour stage on both renderers; the existing Recolor on a mask already covers one area).
+- **⌥ view.** Holding ⌥ while the pointer is on an entry's From colour or Range (or its hue, saturation and lightness widths, or while dragging Range), or on the photo (the entry last touched, `UiState::color_swap`), draws what that entry reaches instead of the photo (`Overlay::ColorSwapRange(i)`): the photo as the entry sees it, dimmed and drained of colour where the entry does not reach, and a faint glow in the To colour on the fade at the edge of the range, so the fade reads as a gradient (the weight drawn is the one that changes anything, hue-only pixels included). The weight is drawn by the finish stage itself (CPU and GPU, `ColorSwap::view` marks the entry; not saved), so it is the range the render uses, at any zoom and in a window.
+- **Settings.** `DevelopSettings::color_swaps`, JSON key `fork_color_swaps` (not written while empty; read leniently: a bad entry is dropped, a bad value is its default). Saved with the edit, undoable (one step per command, one per drag), carried by Copy / Paste, Sync, presets and Update (settings group **Color Swap**, ticked by default) and by Auto Sync. Section eye `colorSwap` switches the whole stage off. Fork catalog format 26.
+- **Commands** (so MCP and the control channel do everything the panel does): `colorSwap.add {from?, to?, name?}`, `colorSwap.set {index, name?, on?, from?|null, to?|null, keepLightness?, range?, intensity?, hueRange?, satRange?, lumRange?, softness?}`, `colorSwap.remove {index}`, `colorSwap.move {index, to}`, `colorSwap.pick {x, y, index?, target?, photo?}` (a From colour is read from the photo without its swaps, so it is the colour the swap sees), `colorSwap.list`, and the sliders as `develop.set {control: "colorSwap.<i>.range"}` (`range`, `intensity`, `hueRange`, `satRange`, `lumRange`, `softness`). `section.colorSwap` opens the section.
+- **Name.** "Replace Color" is another product's feature name; this one is **Color Swap**, checked as `docs/feature-names.md` records.
+
+## Branch
+
+`feat/add-colour-swap-panel`, from `custom`.
+
+## Own files
+
+`crates/develop/src/color_swap.rs`, `crates/pipeline/src/color_swap/` (`mod.rs`, `tests.rs`), `crates/pipeline/src/tests_color_swap_render.rs`, `crates/gpu/src/wgsl/color_swap.wgsl`, `crates/engine/src/cmd/color_swap.rs`, `crates/engine/src/cmd/color_swap_tests.rs`, `crates/ui-egui/src/panels/edit/color_swap.rs`, `fork/color-swap.md`, `fork/tests.d/color-swap.txt`
+
+## Hooks in official files
+
+- develop: `lib.rs` (module, `effective` clears the entries when the eye is off, `reset_section`), `settings.rs` (the field), `controls.rs` (`Section::ColorSwap`, the indexed controls), `presets.rs` (`SettingsGroup::ColorSwap`).
+- pipeline: `lib.rs` (module, test module), `finish.rs` (`FinishParams::swaps`, the call after the decontaminated edge), `recolor/mod.rs` (`apply` split: `shade`), `visualize.rs` (`Overlay::ColorSwapRange` / `ColorSwapBefore`).
+- gpu: `params.rs` (`NSW`, `SW`, `SWV`, `SWV_W`), `ctx.rs` (constants, the shader's source starts with `color_swap.wgsl`), `wgsl/finish.wgsl` (the call in `main`), `tests/it/equivalence.rs` (a case, the overlay).
+- catalog: `fork_format.rs`, `journal.rs`, `tests_format_version.rs` (format 26), `fork/catalog-format.md`.
+- engine: `cmd.rs`, `cmd/mask_recolor.rs` (`color_at_with`).
+- ui-egui: `panels/edit.rs` (the section), `panels/edit_sections.rs` and its tests (`EditSection::ColorSwap`), `panels/detail.rs` (the overlay, the eyedroppers, ⌥ over the photo), `space_hand.rs`, `state.rs` (`color_swap`, `color_swap_peek`, `color_swap_before`), `settings_sync/rules.rs` (`colorSwap` left out), `menus/ui_commands.rs` (`section.colorSwap`), `control_help.rs`.
+- `docs/feature-names.md`, `docs/parity-checklist.md`, `docs/whats-new.md`.
+
+## Tests
+
+`fork/tests.d/color-swap.txt`: shading and texture kept from deep shadow to highlight; colours outside the range unchanged bit for bit; entries in order; off, no To colour, Intensity 0 and the eye off change nothing; the weight falls without a step at three softnesses; Range widens; the range view; a whole render (the wall unchanged, the object's hue moved and its lightness kept, off and Before are the plain photo); the commands (saved, undo, indexed controls, copy and paste, pick); GPU against CPU.
+
+## What's New entry
+
+### Color Swap
+- A new Color Swap section in the Edit panel replaces one colour with another across the whole photo, as many as eight at once. Choose the colour to replace and the colour it becomes (swatch, eyedropper or `#rrggbb`), then set Range and Intensity. The new colour keeps the old one's light and shade, in shadow and in highlight, with a smooth edge.
+- Hold ⌥ over a swap's colour or Range, or over the photo, to see exactly what it reaches. More has separate Hue, Saturation and Lightness Range, Edge Softness and Keep Lightness; the eyedropper by Add Color Swap makes a swap from a click on the photo; Before shows the photo without that swap. Saved with the edit, undoable, and carried by Copy / Paste, Sync and presets.
+
+## Parity rows
+
+| LR-EDIT-COLOR-SWAP | Color Swap | P2 | ✅ | `cmd:colorSwap.add`, `cmd:colorSwap.set`, `cmd:colorSwap.remove`, `cmd:colorSwap.move`, `cmd:colorSwap.pick`, `cmd:colorSwap.list`, `crates/pipeline/src/color_swap/mod.rs`, `crates/ui-egui/src/panels/edit/color_swap.rs` | beyond Lightroom (no equivalent in its Develop panels): one colour replaced by another across the photo, several at once, keeping each pixel's lightness and shading; separate hue, saturation and lightness range, edge softness, Keep Lightness, a click on the photo to add one, Before, and an ⌥ view of what each reaches; see `fork/color-swap.md` |

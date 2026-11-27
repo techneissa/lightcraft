@@ -35,6 +35,12 @@ pub enum Overlay {
     None,
     /// Point Color sample `i`: its range in colour, everything else grey.
     PointColorRange(u8),
+    /// Color Swap entry `i`'s range, drawn instead of its change (fork, issue #460): the photo as the entry sees it
+    /// (after the entries before it), dimmed and drained of colour where the entry does not reach, with a glow on
+    /// the fade at the range's edge. Drawn by the finish stage itself ([`lightcraft_develop::ColorSwap::view`]).
+    ColorSwapRange(u8),
+    /// The photo without Color Swap entry `i`'s change, the others as they are: its before (fork, issue #460).
+    ColorSwapBefore(u8),
     /// Visualize Spots with a threshold 0..100 (higher = more sensitive).
     Spots(u8),
     /// The evaluated alpha of mask `id` (a [`lightcraft_develop::Mask`] id), drawn as `view` in
@@ -154,6 +160,8 @@ impl Overlay {
         match self {
             Overlay::None => (0, 0.0),
             Overlay::PointColorRange(i) => (1, i as f64),
+            Overlay::ColorSwapRange(i) => (13, i as f64),
+            Overlay::ColorSwapBefore(i) => (14, i as f64),
             Overlay::Spots(t) => (2, t as f64),
             Overlay::Mask { id, view, color, opacity } => (3, pack_mask(id, view, color, opacity) as f64),
             Overlay::AllMasks { view, color, opacity } => (5, pack_mask(0, view, color, opacity) as f64),
@@ -172,6 +180,8 @@ impl Overlay {
     pub fn from_parts(kind: u8, v: f64) -> Overlay {
         match kind {
             1 => Overlay::PointColorRange(v as u8),
+            13 => Overlay::ColorSwapRange(v as u8),
+            14 => Overlay::ColorSwapBefore(v as u8),
             2 => Overlay::Spots(v.clamp(0.0, 100.0) as u8),
             3 if v.is_finite() && v >= 0.0 => unpack_mask(v as u64),
             4 => Overlay::HdrRange,
@@ -202,6 +212,8 @@ impl Overlay {
         match self {
             Overlay::None => 0,
             Overlay::PointColorRange(i) => 0x1000 + i as u64,
+            Overlay::ColorSwapRange(i) => 0x1100 + i as u64,
+            Overlay::ColorSwapBefore(i) => 0x1200 + i as u64,
             Overlay::Spots(t) => 0x2000 + t as u64,
             Overlay::Mask { id, view, color, opacity } => 3 << 60 | pack_mask(id, view, color, opacity),
             Overlay::AllMasks { view, color, opacity } => 5 << 60 | pack_mask(0, view, color, opacity),
@@ -250,6 +262,8 @@ impl Overlay {
         matches!(
             self,
             Overlay::None
+                | Overlay::ColorSwapRange(_)
+                | Overlay::ColorSwapBefore(_)
                 | Overlay::Mask { .. }
                 | Overlay::ClipShadows
                 | Overlay::ClipHighlights
@@ -271,6 +285,12 @@ impl Overlay {
 /// Settings changes an overlay needs before rendering (e.g. the visualized sample's adjustment
 /// is left out, so the range is shown on the colours it selects).
 pub fn adjust_settings(o: Overlay, s: &mut Cow<'_, DevelopSettings>) {
+    // (Color Swap, fork issue #460: the entry draws its range, or is left out)
+    match o {
+        Overlay::ColorSwapRange(i) if s.color_swaps.len() > i as usize => s.to_mut().color_swaps[i as usize].view = true,
+        Overlay::ColorSwapBefore(i) if s.color_swaps.len() > i as usize => s.to_mut().color_swaps[i as usize].on = false,
+        _ => {}
+    }
     if let Overlay::PointColorRange(i) = o
         && let Some(p) = s.point_colors.get(i as usize)
         && !p.is_neutral()
@@ -325,7 +345,7 @@ const DETAIL_GAIN: f32 = 320.0;
 pub fn apply(img: &mut Rgba8, o: Overlay, plan: &Plan<'_>, plane: Option<&Plane>, masks: Option<&[Plane]>) {
     match o {
         // drawn by the renderer from the HDR rendition ([`hdr_range`])
-        Overlay::None | Overlay::HdrRange => {}
+        Overlay::None | Overlay::HdrRange | Overlay::ColorSwapRange(_) | Overlay::ColorSwapBefore(_) => {}
         Overlay::PointColorRange(i) => {
             if let Some(p) = plan.settings.point_colors.get(i as usize) {
                 point_color_range(img, &PointK::new(p));

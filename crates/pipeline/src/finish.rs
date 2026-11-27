@@ -264,6 +264,8 @@ pub struct FinishParams {
     /// the tone map (`None`: another process or path, or both at 0; see [`crate::light_v3`]).
     pub light: Option<crate::light_v3::LightOps>,
     pub ops: ColorOps,
+    /// Color Swap (fork, issue #460): the colours replaced by others, after the masks' Recolor.
+    pub swaps: crate::color_swap::ColorSwaps,
     /// Calibration: primaries matrix (row-major, linear Rec.2020) and shadows tint (−1..1).
     pub calib: Option<[[f32; 3]; 3]>,
     pub shadow_tint: f32,
@@ -356,6 +358,7 @@ impl FinishParams {
             light: crate::light_v3::LightOps::new(s, info),
             lut: crate::residual_look::finish_lut(s, crate::lut::get(&s.profile.id).map(|l| (l, (s.profile.amount / 100.0).clamp(0.0, 2.0) as f32))),
             ops: ColorOps::new(s),
+            swaps: crate::color_swap::ColorSwaps::new(s),
             curves: curve_luts(&s.curve),
             refine_sat: (s.curve.refine_saturation / 100.0).clamp(0.0, 1.0) as f32,
             vig: if effects { vignette(s) } else { None },
@@ -601,6 +604,8 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
             if !hits.is_empty() {
                 d = crate::decontam::pixel::colour(&cx, &hits, &layers, (pre, d, g), &to_display, &colour);
             }
+            // --- Color Swap (fork, issue #460), after the masks' Recolor and a decontaminated edge's two colours
+            d = fp.swaps.apply(d);
 
             // --- vignette (display linear, post-crop)
             if let Some(v) = vig {

@@ -32,6 +32,8 @@ mod tests;
 pub enum EditSection {
     Light,
     Color,
+    /// Fork (issue #460, `fork/color-swap.md`).
+    ColorSwap,
     Effects,
     Detail,
     Optics,
@@ -43,9 +45,10 @@ pub enum EditSection {
 
 impl EditSection {
     /// Every section, in the order the panel starts with.
-    pub const ALL: [EditSection; 8] = [
+    pub const ALL: [EditSection; 9] = [
         EditSection::Light,
         EditSection::Color,
+        EditSection::ColorSwap,
         EditSection::Effects,
         EditSection::Detail,
         EditSection::Optics,
@@ -59,6 +62,7 @@ impl EditSection {
         match self {
             EditSection::Light => "light",
             EditSection::Color => "color",
+            EditSection::ColorSwap => "colorSwap",
             EditSection::Effects => "effects",
             EditSection::Detail => "detail",
             EditSection::Optics => "optics",
@@ -73,6 +77,7 @@ impl EditSection {
         match self {
             EditSection::Light => "Light",
             EditSection::Color => "Color",
+            EditSection::ColorSwap => "Color Swap",
             EditSection::Effects => "Effects",
             EditSection::Detail => "Detail",
             EditSection::Optics => "Optics",

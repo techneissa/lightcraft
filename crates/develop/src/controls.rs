@@ -27,6 +27,8 @@ pub enum Section {
     Profile,
     Calibration,
     PointColor,
+    /// Color Swap (fork, issue #460; its entries are in [`crate::color_swap`]).
+    ColorSwap,
     RedEye,
     /// Portrait retouching (fork, `fork/retouch-foundation.md`; its controls are in [`crate::retouch`]).
     Portrait,
@@ -53,6 +55,7 @@ impl Section {
             Section::Profile => "Profile",
             Section::Calibration => "Calibration",
             Section::PointColor => "Point Color",
+            Section::ColorSwap => "Color Swap",
             Section::RedEye => "Red Eye",
             Section::Portrait => "Portrait",
             Section::LensBlur => "Lens Blur",
@@ -462,6 +465,7 @@ fn indexed_field<'a>(s: &'a mut DevelopSettings, id: &str) -> Option<&'a mut f64
                 _ => return None,
             })
         }
+        "colorSwap" => crate::color_swap::field_mut(s.color_swaps.get_mut(i)?, field),
         "redEye" => {
             let e = s.red_eye.get_mut(i)?;
             Some(match field {
@@ -481,6 +485,7 @@ fn indexed_get(s: &DevelopSettings, id: &str) -> Option<f64> {
     let mut c = DevelopSettings::default();
     match fam {
         "pointColor" => c.point_colors.push(*s.point_colors.get(i)?),
+        "colorSwap" => c.color_swaps.push(s.color_swaps.get(i)?.clone()),
         "redEye" => c.red_eye.push(*s.red_eye.get(i)?),
         _ => return None,
     }
@@ -507,17 +512,18 @@ pub fn find(id: &str) -> Option<&'static ControlSpec> {
         return Some(c);
     }
     let (fam, _, field) = split_indexed(id)?;
-    INDEXED.iter().find(|c| c.id.strip_prefix(fam).and_then(|r| r.strip_prefix('.')) == Some(field))
+    INDEXED.iter().chain(crate::color_swap::SPECS).find(|c| c.id.strip_prefix(fam).and_then(|r| r.strip_prefix('.')) == Some(field))
 }
 
 /// Every indexed control that exists in `s` (id, template spec), e.g. `pointColor.0.hueShift`.
 pub fn indexed_instances(s: &DevelopSettings) -> Vec<(String, &'static ControlSpec)> {
     let mut out = Vec::new();
-    for spec in INDEXED {
+    for spec in INDEXED.iter().chain(crate::color_swap::SPECS) {
         let Some((fam, field)) = spec.id.split_once('.') else { continue };
         let n = match fam {
             "pointColor" => s.point_colors.len(),
             "redEye" => s.red_eye.len(),
+            "colorSwap" => s.color_swaps.len(),
             _ => 0,
         };
         for i in 0..n {

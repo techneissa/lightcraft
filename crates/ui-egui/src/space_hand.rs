@@ -32,6 +32,7 @@ pub(crate) fn tool_owns_pointer(app: &LightcraftApp) -> bool {
     let panel = !app.ui.fullscreen && matches!(app.ui.right, RightPanel::Crop | RightPanel::Masking | RightPanel::Remove | RightPanel::RedEye);
     let picker = matches!(app.ui.tool.as_str(), "wbPicker" | "colorRange" | "pointColor")
         || crate::panels::mask_recolor::pick_target(&app.ui.tool).is_some()
+        || crate::panels::edit::color_swap_pick_target(&app.ui.tool).is_some()
         || app.ui.tool.starts_with("tat:");
     app.ui.view == ViewMode::Detail && app.ui.slideshow.is_none() && app.session.active().is_some() && (panel || picker)
 }

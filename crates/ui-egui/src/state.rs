@@ -347,6 +347,15 @@ pub struct UiState {
     /// The Learn My Edits window (`fork/learn-my-edits.md`); not saved.
     #[serde(skip)]
     pub learn_edits: crate::learn_edits::Window,
+    /// The Color Swap entry in use: its range shows while ⌥ is held over the photo (fork, issue #460).
+    pub color_swap: usize,
+    /// The Color Swap entry whose From or Range control (or the photo) the pointer is on while ⌥ is held, and the frame
+    /// it was set in: the panel and the photo set it each frame; not saved.
+    #[serde(skip)]
+    pub color_swap_peek: Option<(usize, u64)>,
+    /// The Color Swap entry whose Before button is held down, not saved.
+    #[serde(skip)]
+    pub color_swap_before: Option<usize>,
     /// Selected Point Color sample.
     pub point_color: usize,
     /// Point Color "Visualize range": the selected sample's range in colour, the rest grey.
@@ -607,6 +616,9 @@ impl Default for UiState {
             remove_expand: 0.005,
             remove_lasso: true,
             learn_edits: Default::default(),
+            color_swap: 0,
+            color_swap_peek: None,
+            color_swap_before: None,
             point_color: 0,
             point_color_visualize: false,
             hdr_visualize: false,

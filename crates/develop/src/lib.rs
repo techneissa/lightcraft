@@ -7,6 +7,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod adaptive;
+pub mod color_swap;
 pub mod controls;
 pub mod mask_presets;
 pub mod presets;
@@ -24,6 +25,7 @@ mod shared_strokes;
 pub mod spot_area;
 pub mod spot_circle;
 
+pub use color_swap::{ColorSwap, MAX_SWAPS};
 pub use controls::{CONTROLS, ControlSpec, Section, Track};
 pub use presets::{Preset, SettingsGroup, apply_partial, extract_groups};
 pub use reflection_area::{Glare, GlareStroke, ReflectionArea, ReflectionMode};
@@ -182,7 +184,8 @@ impl DevelopSettings {
     pub fn effective(&self) -> std::borrow::Cow<'_, DevelopSettings> {
         let off = |section: &str| !self.section_enabled(section);
         let hidden = self.spots.iter().any(|s| s.hidden);
-        if !(off("light") || off("color") || off("detail") || hidden) {
+        let swaps_off = off(color_swap::SECTION) && !self.color_swaps.is_empty();
+        if !(off("light") || off("color") || off("detail") || hidden || swaps_off) {
             return std::borrow::Cow::Borrowed(self);
         }
         let mut d = self.clone();
@@ -200,6 +203,10 @@ impl DevelopSettings {
         }
         if off("detail") {
             d.reset_section(Section::Detail);
+        }
+        // (fork, issue #460: Color Swap's own eye)
+        if swaps_off {
+            d.color_swaps.clear();
         }
         std::borrow::Cow::Owned(d)
     }
@@ -252,6 +259,8 @@ impl DevelopSettings {
             Section::Portrait => self.retouch = Default::default(),
             // (fork, issue #299: all the lights, not just the first)
             Section::Relight => self.relight = Default::default(),
+            // (fork, issue #460: every entry, not just their sliders)
+            Section::ColorSwap => self.color_swaps.clear(),
             _ => {}
         }
     }
